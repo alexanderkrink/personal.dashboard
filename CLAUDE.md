@@ -13,7 +13,9 @@ starting feature work — it defines every feature, the data model, and the road
     `process.env`; apps inject config.
   - `packages/ai` — ALL LLM interaction lives here: providers, prompt templates,
     Zod output schemas, model tier registry. No direct `@ai-sdk/*` or model-ID usage
-    outside this package. Never reads `process.env`.
+    outside this package (exception: UI streaming hooks like `useChat` from
+    `@ai-sdk/react` live in apps/web, against endpoints backed by this package).
+    Never reads `process.env`.
   - `packages/ui` — shared React components; only add here when something is needed
     beyond apps/web.
   - Packages never import from apps. `core` imports nothing from other workspace packages.
