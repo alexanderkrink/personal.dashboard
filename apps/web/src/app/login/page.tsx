@@ -1,5 +1,5 @@
 import { login } from "@/app/auth/actions";
-import { Button } from "@/components/ui/button";
+import { SubmitButton } from "@/components/submit-button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 const STATUS_MESSAGES: Record<string, string> = {
   sent: "Check your inbox — a sign-in link is on its way.",
   "invalid-email": "That doesn't look like a valid email address.",
+  "rate-limited": "A link was already sent recently — check your inbox, or try again in a minute.",
   error: "Something went wrong. Please try again.",
 };
 
@@ -38,7 +39,7 @@ export default async function LoginPage({
                 autoComplete="email"
               />
             </div>
-            <Button type="submit">Send magic link</Button>
+            <SubmitButton>Send magic link</SubmitButton>
             {message ? <p className="text-muted-foreground text-sm">{message}</p> : null}
           </form>
         </CardContent>

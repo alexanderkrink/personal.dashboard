@@ -26,7 +26,14 @@ export async function login(formData: FormData) {
     },
   });
 
-  redirect(error ? "/login?status=error" : "/login?status=sent");
+  if (!error) {
+    redirect("/login?status=sent");
+  }
+  redirect(
+    error.code === "over_email_send_rate_limit"
+      ? "/login?status=rate-limited"
+      : "/login?status=error",
+  );
 }
 
 export async function signOut() {
