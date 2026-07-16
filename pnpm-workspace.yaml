@@ -1,0 +1,32 @@
+packages:
+  - apps/*
+  - packages/*
+
+allowBuilds:
+  sharp: true
+
+# Single source of truth for versions shared across workspace packages.
+# Reference with "catalog:" in package.json files.
+catalog:
+  react: ^19.2.7
+  react-dom: ^19.2.7
+  "@types/react": ^19.2.17
+  "@types/react-dom": ^19.2.3
+  "@types/node": ^24.0.0
+  # TS 7 (native compiler) drops the JS compiler API that next build still
+  # requires — revisit once Next.js supports it.
+  typescript: ~5.9.3
+  zod: ^4.4.3
+  vitest: ^4.1.10
+  "@supabase/supabase-js": ^2.110.6
+  "@supabase/ssr": ^0.12.3
+
+minimumReleaseAgeExclude:
+  - '@ai-sdk/gateway@4.0.21'
+  - '@supabase/auth-js@2.110.6'
+  - '@supabase/functions-js@2.110.6'
+  - '@supabase/postgrest-js@2.110.6'
+  - '@supabase/realtime-js@2.110.6'
+  - '@supabase/storage-js@2.110.6'
+  - '@supabase/supabase-js@2.110.6'
+  - ai@7.0.29

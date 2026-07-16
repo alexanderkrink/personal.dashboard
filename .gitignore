@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+.next/
+out/
+dist/
+.turbo/
+*.tsbuildinfo
+
+# Tests
+coverage/
+playwright-report/
+test-results/
+blob-report/
+
+# Environment — never commit secrets
+.env
+.env.*
+!.env.example
+
+# Vercel
+.vercel/
+
+# Supabase local dev artifacts
+**/supabase/.branches/
+**/supabase/.temp/
+
+# OS / editor
+.DS_Store
+*.log
