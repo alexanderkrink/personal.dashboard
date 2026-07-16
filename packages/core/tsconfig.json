@@ -1,0 +1,4 @@
+{
+  "extends": "@studyos/typescript-config/base.json",
+  "include": ["src"]
+}

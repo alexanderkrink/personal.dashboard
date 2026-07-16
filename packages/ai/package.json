@@ -1,0 +1,24 @@
+{
+  "name": "@studyos/ai",
+  "version": "0.1.0",
+  "private": true,
+  "description": "All LLM interaction for StudyOS: providers, prompt templates, structured-output schemas",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.15",
+    "ai": "^7.0.29",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@studyos/typescript-config": "workspace:*",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
