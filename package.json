@@ -1,5 +1,5 @@
 {
-  "name": "studyos",
+  "name": "alex-study-dashboard",
   "version": "0.1.0",
   "private": true,
   "packageManager": "pnpm@11.13.1",
@@ -16,9 +16,9 @@
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
     "test:e2e": "pnpm --filter web test:e2e",
-    "db:types": "pnpm --filter @studyos/db db:types",
-    "db:push": "pnpm --filter @studyos/db db:push",
-    "db:migration": "pnpm --filter @studyos/db db:migration",
+    "db:types": "pnpm --filter @study/db db:types",
+    "db:push": "pnpm --filter @study/db db:push",
+    "db:migration": "pnpm --filter @study/db db:migration",
     "prepare": "husky"
   },
   "devDependencies": {

@@ -1,8 +1,8 @@
 {
-  "name": "@studyos/ai",
+  "name": "@study/ai",
   "version": "0.1.0",
   "private": true,
-  "description": "All LLM interaction for StudyOS: providers, prompt templates, structured-output schemas",
+  "description": "All LLM interaction for Alex's Study Dashboard: providers, prompt templates, structured-output schemas",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
@@ -17,7 +17,7 @@
     "zod": "catalog:"
   },
   "devDependencies": {
-    "@studyos/typescript-config": "workspace:*",
+    "@study/typescript-config": "workspace:*",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

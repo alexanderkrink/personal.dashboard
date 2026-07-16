@@ -68,16 +68,16 @@ importers:
       '@base-ui/react':
         specifier: ^1.6.0
         version: 1.6.0(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@studyos/ai':
+      '@study/ai':
         specifier: workspace:*
         version: link:../../packages/ai
-      '@studyos/core':
+      '@study/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@studyos/db':
+      '@study/db':
         specifier: workspace:*
         version: link:../../packages/db
-      '@studyos/ui':
+      '@study/ui':
         specifier: workspace:*
         version: link:../../packages/ui
       '@supabase/ssr':
@@ -132,7 +132,7 @@ importers:
       '@playwright/test':
         specifier: ^1.61.1
         version: 1.61.1
-      '@studyos/typescript-config':
+      '@study/typescript-config':
         specifier: workspace:*
         version: link:../../packages/typescript-config
       '@tailwindcss/postcss':
@@ -169,7 +169,7 @@ importers:
         specifier: 'catalog:'
         version: 4.4.3
     devDependencies:
-      '@studyos/typescript-config':
+      '@study/typescript-config':
         specifier: workspace:*
         version: link:../typescript-config
       typescript:
@@ -181,7 +181,7 @@ importers:
 
   packages/core:
     devDependencies:
-      '@studyos/typescript-config':
+      '@study/typescript-config':
         specifier: workspace:*
         version: link:../typescript-config
       typescript:
@@ -200,7 +200,7 @@ importers:
         specifier: 'catalog:'
         version: 2.110.6
     devDependencies:
-      '@studyos/typescript-config':
+      '@study/typescript-config':
         specifier: workspace:*
         version: link:../typescript-config
       typescript:
@@ -211,7 +211,7 @@ importers:
 
   packages/ui:
     devDependencies:
-      '@studyos/typescript-config':
+      '@study/typescript-config':
         specifier: workspace:*
         version: link:../typescript-config
       '@types/react':

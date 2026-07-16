@@ -23,7 +23,7 @@ export default async function LoginPage({
     <main className="flex min-h-svh items-center justify-center p-8">
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle className="text-xl">StudyOS</CardTitle>
+          <CardTitle className="text-xl">Alex&apos;s Study Dashboard</CardTitle>
           <CardDescription>Sign in with a magic link sent to your email.</CardDescription>
         </CardHeader>
         <CardContent>

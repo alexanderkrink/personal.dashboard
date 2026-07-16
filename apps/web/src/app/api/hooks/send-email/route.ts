@@ -71,7 +71,7 @@ export async function POST(request: Request) {
 
   const resend = new Resend(env.RESEND_API_KEY);
   const { error } = await resend.emails.send({
-    from: env.EMAIL_FROM ?? "StudyOS <onboarding@resend.dev>",
+    from: env.EMAIL_FROM ?? "Study Dashboard <onboarding@resend.dev>",
     to: user.email,
     subject: getAuthEmailSubject(emailData.email_action_type),
     html: renderAuthEmail(emailData.email_action_type, confirmUrl.toString()),

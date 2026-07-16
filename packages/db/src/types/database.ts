@@ -2,8 +2,8 @@
  * Database types.
  *
  * GENERATED FILE — regenerate after every migration:
- *   pnpm --filter @studyos/db db:types          (local stack)
- *   pnpm --filter @studyos/db db:types:remote   (linked project)
+ *   pnpm --filter @study/db db:types          (local stack)
+ *   pnpm --filter @study/db db:types:remote   (linked project)
  *
  * This initial version is hand-written to match supabase/migrations
  * and will be replaced by `supabase gen types` output.

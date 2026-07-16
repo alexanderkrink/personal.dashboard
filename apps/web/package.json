@@ -12,10 +12,10 @@
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
-    "@studyos/ai": "workspace:*",
-    "@studyos/core": "workspace:*",
-    "@studyos/db": "workspace:*",
-    "@studyos/ui": "workspace:*",
+    "@study/ai": "workspace:*",
+    "@study/core": "workspace:*",
+    "@study/db": "workspace:*",
+    "@study/ui": "workspace:*",
     "@supabase/ssr": "catalog:",
     "@supabase/supabase-js": "catalog:",
     "@t3-oss/env-nextjs": "^0.13.11",
@@ -35,7 +35,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",
-    "@studyos/typescript-config": "workspace:*",
+    "@study/typescript-config": "workspace:*",
     "@tailwindcss/postcss": "^4.3.2",
     "@types/node": "catalog:",
     "@types/react": "catalog:",

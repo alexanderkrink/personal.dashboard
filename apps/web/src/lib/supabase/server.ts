@@ -1,4 +1,4 @@
-import { createServerSupabaseClient } from "@studyos/db";
+import { createServerSupabaseClient } from "@study/db";
 import { cookies } from "next/headers";
 import { env } from "@/env";
 

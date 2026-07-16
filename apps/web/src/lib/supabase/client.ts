@@ -1,4 +1,4 @@
-import { createBrowserSupabaseClient } from "@studyos/db";
+import { createBrowserSupabaseClient } from "@study/db";
 import { env } from "@/env";
 
 /** Supabase client for Client Components. */

@@ -1,4 +1,4 @@
-# StudyOS
+# Alex's Study Dashboard
 
 A personal study dashboard that consolidates an entire academic life: deadlines, lecture
 notes, exam prep, and coding practice. Built solo-first, architected multi-user from day one.
@@ -90,12 +90,12 @@ All commands run from the repo root.
 
 ## Auth notes
 
-Magic-link auth is wired for the default Supabase email template via the PKCE flow
-(`/auth/callback`). For the (recommended) token-hash flow, edit the *Magic Link* email
-template in the Supabase dashboard to link to
-`{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email` — the `/auth/confirm`
-route already handles it. Session refresh happens in `apps/web/src/proxy.ts`
-(Next 16's middleware).
+Auth emails are rendered by the app and sent via Resend: Supabase's **Send Email Hook**
+POSTs to `/api/hooks/send-email`, which renders the HTML in
+`src/lib/email/auth-email.ts` and sends from `EMAIL_FROM`. Supabase's built-in email
+templates are not used. Links use the server-side `token_hash` → `/auth/confirm` flow
+(the PKCE `/auth/callback` route remains as a fallback). Session refresh happens in
+`apps/web/src/proxy.ts` (Next 16's middleware).
 
 ## Deployment (Vercel)
 

@@ -1,4 +1,4 @@
-import { createServerSupabaseClient } from "@studyos/db";
+import { createServerSupabaseClient } from "@study/db";
 import { type NextRequest, NextResponse } from "next/server";
 import { env } from "@/env";
 

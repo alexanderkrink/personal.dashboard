@@ -1,4 +1,4 @@
-# StudyOS — repo conventions
+# Alex's Study Dashboard — repo conventions
 
 Personal study dashboard. Solo project, built production-grade. Read PLAN.md before
 starting feature work — it defines every feature, the data model, and the roadmap.
@@ -6,7 +6,7 @@ starting feature work — it defines every feature, the data model, and the road
 ## Architecture rules
 
 - **Package boundaries** (enforce these when writing code):
-  - `apps/web` — all Next.js/React code. May import any `@studyos/*` package.
+  - `apps/web` — all Next.js/React code. May import any `@study/*` package.
   - `packages/core` — pure TypeScript business logic. No framework imports, no I/O,
     no `process.env`. Must stay runnable anywhere (browser, node, edge, WASM).
   - `packages/db` — Supabase clients, generated types, SQL migrations. Never reads

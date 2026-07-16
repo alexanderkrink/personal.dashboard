@@ -1,6 +1,7 @@
-# StudyOS — Product & Technical Plan
+# Alex's Study Dashboard — Product & Technical Plan
 
-> The product bible for StudyOS. Any competent engineer (or future Claude Code session)
+> The product bible for Alex's Study Dashboard ("Study Dashboard" for short throughout).
+> Any competent engineer (or future Claude Code session)
 > should be able to pick up any milestone from this document and execute it without
 > guessing. Read `CLAUDE.md` for repo conventions first; this document covers *what* to
 > build, *why*, and *how*.
@@ -23,7 +24,7 @@
 
 ## Vision & product principles
 
-StudyOS consolidates one student's entire academic life — deadlines, lecture notes, exam
+Study Dashboard consolidates one student's entire academic life — deadlines, lecture notes, exam
 prep, and coding practice — into a single dashboard that gets smarter with every upload.
 The user: a BBA + Data & Business Analytics dual-degree student at IE University (Madrid)
 who is also a startup founder. Time is the scarcest resource; the product's job is to
@@ -59,6 +60,30 @@ upload / capture  →  structured knowledge (topic pages)  →  practice artifac
 7. **Data is the user's.** Everything exports (Anki, Obsidian/Markdown, CSV/JSON), and an
    append-only event stream makes the user's own learning analyzable — fitting for an
    analytics degree.
+
+### Identity & design (decided 2026-07-16)
+
+The product was renamed from **StudyOS** to **Alex's Study Dashboard** and given a
+deliberate visual identity before M1, so nothing is retrofitted later. Decisions, all
+made explicitly by Alexander:
+
+| Decision | Choice | Rationale / notes |
+| --- | --- | --- |
+| Name | **Alex's Study Dashboard** | Personal, literal — this is a personal tool on a personal domain. Short form **"Study Dashboard"** in tight spots: tab-title template, email sender, future PWA label. |
+| Domain | Stays on `www.alexanderkrink.com` | A rename forces no domain change; no product domain planned. |
+| Package scope | `@studyos/*` → **`@study/*`** | Renamed while cheap (pre-M1); purely internal, never published. Root package: `alex-study-dashboard`. |
+| Wordmark | Mono terminal-style: `study.dashboard` (accent-colored dot) in the shell header; full name on the login page | Leans into the cockpit identity; no logo asset to maintain. |
+| Feel | **Dense data cockpit** | Compact rows, tabular numbers, high information density — fits the analytics-degree identity and the "what should I do right now?" promise. |
+| Theme default | **Dark by default** (toggle keeps light + system) | Design tuned dark-first; light fully supported. |
+| Accent | **Electric blue** — `oklch(0.62 0.21 259)` dark / `oklch(0.55 0.2 259)` light | Stays out of the red/amber/green lane, which is reserved for deadline-urgency semantics. |
+| Neutrals | Blue-tinted near-blacks (hue ≈ 258, chroma ≈ 0.01–0.02): background `oklch(0.14 0.012 258)`, card `oklch(0.17 0.014 258)` | Cool cast reads "instrument panel" instead of flat gray. |
+| Charts | blue / cyan / violet / amber / green (`--chart-1..5`) | Categorical palette clear of urgency colors. |
+| Typography | Geist + **Geist Mono for data** (dates, counts, grades, tables); global `tabular-nums` | Zero new dependencies; mono numerals carry the cockpit feel. |
+| Density & shape | Compact + sharp: `--radius: 0.375rem` (was 0.625rem) | Most info per screen; instrument-panel look. |
+
+All tokens live in `apps/web/src/app/globals.css` (Tailwind v4 `@theme` + shadcn
+variables). Auth emails send from `Study Dashboard <auth@alexanderkrink.com>`
+(`EMAIL_FROM`); email button uses the accent blue (`#2563eb` — email-safe hex).
 
 ---
 
@@ -149,7 +174,7 @@ The five pillars. Each was designed to the same contract: (a) what & why, (b) UX
 
 ## Document & Notes Pipeline
 
-The heart of StudyOS: users upload lecture slides (PDF/PPTX) and readings
+The heart of Study Dashboard: users upload lecture slides (PDF/PPTX) and readings
 per course; the pipeline extracts content, structures it into a **cumulative
 knowledge base of topic pages**, and keeps a **final-exam review** per course up to date.
 Uploading session 7's slides *expands and refines* existing topic pages — it never creates
@@ -2507,13 +2532,13 @@ desktop, a PWA share target on mobile — accepting text, links, photos, and fil
 untriaged inbox. AI classifies each item (deadline? note fragment? card idea? reading link?)
 and proposes routing into the right pillar with prefilled fields; the user confirms with one
 tap. "A prof mentions the exam format in passing, a friend sends a PDF on WhatsApp — I'm
-walking between rooms and have 20 seconds. If it doesn't land in StudyOS instantly, it's
+walking between rooms and have 20 seconds. If it doesn't land in Study Dashboard instantly, it's
 lost." Capture is the funnel every other feature depends on; without it the dashboard only
 contains what was typed during deliberate sessions.
 
 **(b) UX sketch.** The existing ⌘K palette gains a "capture" action (`c` from the palette or
 directly in-app): title + optional body/attachment + optional course chip auto-guessed from
-timetable context. Mobile: "Share to StudyOS" share target plus a one-field quick-add
+timetable context. Mobile: "Share to Study Dashboard" share target plus a one-field quick-add
 screen. Inbox view shows untriaged items as cards with an AI-suggested destination badge
 ("→ Deadline: Algorithms, guessed June 12") — accept, edit, or dismiss. The weekly ritual
 (#6) surfaces stale inbox items so nothing rots.
@@ -2596,14 +2621,14 @@ slices; L if built as one block — don't.
 
 ### 10. Interop & Automation Hub (Anki, Obsidian, dataset export, personal API + MCP)
 
-**(a) What it is & why it matters.** One-way escape hatches that keep StudyOS the source of
+**(a) What it is & why it matters.** One-way escape hatches that keep Study Dashboard the source of
 truth while meeting the user in tools he already lives in: (1) **Anki `.apkg` export** of
 any deck — offline mobile review in the best-in-class client without rebuilding one;
 (2) **Obsidian vault export** — topic pages as a zip of Markdown with YAML frontmatter and
 wikilinks derived from shared key terms; (3) **dataset export** — #9's snapshots plus JSON;
 his data is *his*; (4) a **token-authed read API + MCP server**, so Claude, Raycast, and iOS
 Shortcuts can ask "what's due this week?" — for a founder who runs his life through Claude,
-StudyOS becoming an MCP tool is the difference between "another tab" and "part of the
+Study Dashboard becoming an MCP tool is the difference between "another tab" and "part of the
 system". Explicit non-goal: no two-way sync with anything (Notion rejected: 3 req/s rate
 limit, block-model impedance, and bidirectional conflict resolution is a product in itself;
 AnkiConnect rejected: requires desktop Anki running).
@@ -2918,7 +2943,7 @@ Rules of thumb encoded in the registry doc comment: `fast` for high-volume extra
 
 ¹ Introductory pricing of $2.00/$10.00 applies through 2026-08-31; all math below uses the durable $3/$15 sticker.
 
-**Embeddings — Voyage AI `voyage-3.5-lite`**: $0.02/MTok, and the first 200M tokens per account are free — at StudyOS volumes (~1M tokens/month, see §4) embeddings are effectively free for years. Chosen because it is Anthropic's recommended embedding partner (Anthropic has no first-party embeddings), tops its price class on retrieval quality, and its 1,024-dim default (Matryoshka-truncatable to 512/256 if index size ever matters) stores directly in Supabase `pgvector`. Fallback if we ever want a single-vendor bill: OpenAI `text-embedding-3-small` at the same $0.02/MTok.
+**Embeddings — Voyage AI `voyage-3.5-lite`**: $0.02/MTok, and the first 200M tokens per account are free — at Study Dashboard volumes (~1M tokens/month, see §4) embeddings are effectively free for years. Chosen because it is Anthropic's recommended embedding partner (Anthropic has no first-party embeddings), tops its price class on retrieval quality, and its 1,024-dim default (Matryoshka-truncatable to 512/256 if index size ever matters) stores directly in Supabase `pgvector`. Fallback if we ever want a single-vendor bill: OpenAI `text-embedding-3-small` at the same $0.02/MTok.
 
 Sources: [Anthropic pricing docs](https://platform.claude.com/docs/en/about-claude/pricing), [Voyage AI pricing](https://docs.voyageai.com/docs/pricing).
 
@@ -2926,7 +2951,7 @@ Sources: [Anthropic pricing docs](https://platform.claude.com/docs/en/about-clau
 
 Convention (already in CLAUDE.md): **every LLM call that produces data (not prose) goes through a Zod schema via the AI SDK's `generateObject`**. Chat/RAG and lesson prose use `streamText`; everything else is `generateObject`.
 
-- **Schemas live in `packages/ai`** — `src/schemas.ts` today, splitting into one file per feature area (`src/schemas/flashcards.ts`, `src/schemas/documents.ts`, …) as M1 lands, re-exported from the package index. Callers import the schema *and* its inferred type from `@studyos/ai`; the schema is the single source of truth for both the model contract and the TypeScript type.
+- **Schemas live in `packages/ai`** — `src/schemas.ts` today, splitting into one file per feature area (`src/schemas/flashcards.ts`, `src/schemas/documents.ts`, …) as M1 lands, re-exported from the package index. Callers import the schema *and* its inferred type from `@study/ai`; the schema is the single source of truth for both the model contract and the TypeScript type.
 - **Schema design constraints**: keep schemas flat-ish and non-recursive; skip numeric/string min-max constraints the provider can't enforce (the AI SDK strips unsupported JSON Schema keywords and Zod still validates them client-side, so `z.string().min(1)` is fine — it just means validation, not generation-time constraint). Use `.describe()` on every field; descriptions are prompt surface.
 - **Failure handling**, in order:
   1. `generateObject` throws `NoObjectGeneratedError` when the model's output doesn't parse/validate (it carries `.text`, `.cause`, `.usage`). First response: **one corrective retry** — re-send with the validation error message appended ("Your previous output failed validation: … Return only corrected JSON."). This fixes the large majority of failures.
@@ -3033,7 +3058,7 @@ t3-env build-time env validation; Vercel-ready.
 
 ### M0.5 — Production launch ✅ (shipped 2026-07-16)
 
-Everything needed to run StudyOS for real, done the same day:
+Everything needed to run Study Dashboard for real, done the same day:
 
 - **Database live** — `profiles` migration + `handle_new_user` execute-revoke hardening
   applied to the personal Supabase project; security advisor reports zero findings;
@@ -3044,7 +3069,7 @@ Everything needed to run StudyOS for real, done the same day:
 - **Auth emails via Resend, not Supabase templates** — the Supabase **Send Email Hook**
   POSTs to `/api/hooks/send-email` (standardwebhooks signature verification), which
   renders our own HTML template and sends through Resend from
-  `StudyOS <auth@alexanderkrink.com>` (domain verified in Resend). Links use the
+  `Study Dashboard <auth@alexanderkrink.com>` (domain verified in Resend). Links use the
   server-side `token_hash` → `/auth/confirm` flow, eliminating the URL-fragment token
   loss that broke the default templates. Envs: `RESEND_API_KEY`,
   `SEND_EMAIL_HOOK_SECRET`, `EMAIL_FROM`.
@@ -3055,11 +3080,12 @@ Everything needed to run StudyOS for real, done the same day:
 
 ### M1 — "The app is useful every day": deadlines + document pipeline v1
 
-**Goal:** By the end of M1, the user checks StudyOS every morning (This Week view) and
+**Goal:** By the end of M1, the user checks Study Dashboard every morning (This Week view) and
 uploads every lecture's materials (topic pages appear minutes later).
 
 | # | Work item | Effort | Spec |
 | --- | --- | --- | --- |
+| 0 | ✅ Rename to Alex's Study Dashboard + cockpit design system (scope `@study/*`, tokens, dark default, email copy) — shipped 2026-07-16 | S | Vision § Identity & design |
 | 1 | Foundation: `semesters`/`courses`/`assessments` migrations + course CRUD UI | S–M | Data model |
 | 2 | Inngest wiring (`/api/inngest`, client, env, first no-op function) | S | Architecture |
 | 3 | Calendar hub CAL-1: provider interface, ical.js parsing + RRULE expansion w/ fixture tests, sync engine (dedup, tombstones), feed CRUD | M–L | Deadlines & calendar hub |
@@ -3086,7 +3112,7 @@ uploads every lecture's materials (topic pages appear minutes later).
 ### M2 — "The app changes grades": practice engine + exam planner
 
 **Goal:** Daily reviews and exam-driven study plans become the default way to study; the
-first real exam period runs through StudyOS.
+first real exam period runs through Study Dashboard.
 
 | # | Work item | Effort | Spec |
 | --- | --- | --- | --- |
@@ -3124,7 +3150,7 @@ shippable; item 6 builds the ⌘K palette that items 7 and 12 extend).
 
 ### M3 — "The app teaches skills": coding trainer
 
-**Goal:** Python practice for the analytics degree happens inside StudyOS, mapped to the
+**Goal:** Python practice for the analytics degree happens inside Study Dashboard, mapped to the
 real course schedule, with weak spots feeding the same daily review queue.
 
 | # | Work item | Effort | Spec |
@@ -3191,6 +3217,11 @@ real course schedule, with weak spots feeding the same daily review queue.
 - **Blackboard REST API is approval-gated and may never arrive.** Everything is designed
   manual-first + ICS-first; REST is purely additive (provider swap, `source` columns).
   This is the single highest-uncertainty integration — hence M4 and optional.
+  **Update 2026-07-16:** the student-facing **ICS share link is confirmed available** in
+  IE's Blackboard (Alexander located it in the calendar UI) — M1's calendar source
+  needs no institutional involvement. A read-only REST-access request to IE's IT/LMS
+  team has been drafted so the weeks-long approval clock for M4 starts early; approval
+  remains uncertain and nothing depends on it.
 - **Supabase auth emails — resolved in M0.5**: the built-in SMTP (and its ~2/hour
   limit) is out of the loop; the Send Email Hook delivers via Resend from a verified
   domain. Supabase's per-address cooldown between magic-link requests still applies and
@@ -3220,9 +3251,11 @@ real course schedule, with weak spots feeding the same daily review queue.
    verified. Still to provide as M1 lands: `INNGEST_*`, `VOYAGE_API_KEY`,
    `CRON_SECRET`; accounts needed then: Inngest (free), Voyage AI (free tier covers
    years). The Supabase Free plan suffices — every upload fits its 50 MB per-file cap.
-2. **The ICS feed URL(s)** from Blackboard (one global or per-course?) — needed to write
-   realistic parser fixtures in M1, ideally a raw `.ics` export attached to the repo's
-   test fixtures.
+2. **The ICS feed URL(s)** from Blackboard — ✅ partially resolved 2026-07-16: the ICS
+   share link is confirmed to exist in IE's Blackboard calendar. Still to hand over
+   when CAL-1 lands: the URL itself (treated as a secret — it embeds a capability
+   token), whether it's one global feed or per-course, and a raw `.ics` export saved
+   into the repo's test fixtures.
 3. **One real course bundle for pipeline evaluation** — 2–3 lecture decks (incl. one
    image-heavy) and one reading PDF. The merge algorithm gets tuned
    against real material, not synthetic fixtures.

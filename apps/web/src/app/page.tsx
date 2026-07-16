@@ -11,7 +11,9 @@ export default async function HomePage() {
   return (
     <main className="mx-auto flex min-h-svh max-w-4xl flex-col gap-8 p-8">
       <header className="flex items-center justify-between">
-        <h1 className="font-semibold text-2xl tracking-tight">StudyOS</h1>
+        <h1 className="font-medium font-mono text-lg tracking-tight">
+          study<span className="text-primary">.</span>dashboard
+        </h1>
         <div className="flex items-center gap-2">
           <ThemeToggle />
           <form action={signOut}>

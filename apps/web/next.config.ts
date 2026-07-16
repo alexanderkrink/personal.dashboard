@@ -4,7 +4,7 @@ import "./src/env";
 
 const nextConfig: NextConfig = {
   typedRoutes: true,
-  transpilePackages: ["@studyos/ai", "@studyos/core", "@studyos/db", "@studyos/ui"],
+  transpilePackages: ["@study/ai", "@study/core", "@study/db", "@study/ui"],
 };
 
 export default nextConfig;
