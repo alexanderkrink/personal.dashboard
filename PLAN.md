@@ -3031,6 +3031,28 @@ with session refresh in `proxy.ts`; `profiles` migration establishing RLS conven
 strict TS 5.9 + Biome + Vitest + Playwright + Husky/commitlint; GitHub Actions CI;
 t3-env build-time env validation; Vercel-ready.
 
+### M0.5 — Production launch ✅ (shipped 2026-07-16)
+
+Everything needed to run StudyOS for real, done the same day:
+
+- **Database live** — `profiles` migration + `handle_new_user` execute-revoke hardening
+  applied to the personal Supabase project; security advisor reports zero findings;
+  the remote migration ledger matches the checked-in filenames.
+- **Deployed on Vercel** at <https://www.alexanderkrink.com> (apex 308-redirects to
+  `www`); GoDaddy DNS pointed at Vercel; Node 24 via `.nvmrc`. Env values in the Vercel
+  dashboard are stored literally — never paste them with quotes (broke the first deploy).
+- **Auth emails via Resend, not Supabase templates** — the Supabase **Send Email Hook**
+  POSTs to `/api/hooks/send-email` (standardwebhooks signature verification), which
+  renders our own HTML template and sends through Resend from
+  `StudyOS <auth@alexanderkrink.com>` (domain verified in Resend). Links use the
+  server-side `token_hash` → `/auth/confirm` flow, eliminating the URL-fragment token
+  loss that broke the default templates. Envs: `RESEND_API_KEY`,
+  `SEND_EMAIL_HOOK_SECRET`, `EMAIL_FROM`.
+- **Login UX hardening** — submit button disables while pending (double submits were
+  causing 429s); rate-limited and error states show distinct messages.
+- **Verified end-to-end in production** — magic-link sign-in completes and
+  `auth.users.last_sign_in_at` is set.
+
 ### M1 — "The app is useful every day": deadlines + document pipeline v1
 
 **Goal:** By the end of M1, the user checks StudyOS every morning (This Week view) and
@@ -3169,8 +3191,10 @@ real course schedule, with weak spots feeding the same daily review queue.
 - **Blackboard REST API is approval-gated and may never arrive.** Everything is designed
   manual-first + ICS-first; REST is purely additive (provider swap, `source` columns).
   This is the single highest-uncertainty integration — hence M4 and optional.
-- **Supabase magic-link emails** on the built-in SMTP are rate-limited (~2/hour) — fine
-  single-user; custom SMTP (Resend) is the fix if ever needed.
+- **Supabase auth emails — resolved in M0.5**: the built-in SMTP (and its ~2/hour
+  limit) is out of the loop; the Send Email Hook delivers via Resend from a verified
+  domain. Supabase's per-address cooldown between magic-link requests still applies and
+  surfaces as a friendly "already sent" message on the login page.
 - **iOS PWA push** requires iOS 16.4+ and home-screen install; acceptable for a personal
   tool, documented in the Today Queue spec.
 - **Sonnet 5 intro pricing ends 2026-08-31** — cost model uses durable pricing, so the
@@ -3191,11 +3215,11 @@ real course schedule, with weak spots feeding the same daily review queue.
 
 ### Open questions for Alexander
 
-1. **Supabase + Vercel projects** — create both and provide env values per
-   `apps/web/.env.example` (plus `INNGEST_*`, `VOYAGE_API_KEY`,
-   `CRON_SECRET` as M1 lands). Accounts needed: Inngest (free), Voyage AI (free tier
-   covers years). The Supabase Free plan suffices — every upload fits its 50 MB
-   per-file cap.
+1. **Supabase + Vercel projects** — ✅ done 2026-07-16: both projects live, envs set
+   locally and on Vercel, production deployed, Resend account + sending domain
+   verified. Still to provide as M1 lands: `INNGEST_*`, `VOYAGE_API_KEY`,
+   `CRON_SECRET`; accounts needed then: Inngest (free), Voyage AI (free tier covers
+   years). The Supabase Free plan suffices — every upload fits its 50 MB per-file cap.
 2. **The ICS feed URL(s)** from Blackboard (one global or per-course?) — needed to write
    realistic parser fixtures in M1, ideally a raw `.ics` export attached to the repo's
    test fixtures.
