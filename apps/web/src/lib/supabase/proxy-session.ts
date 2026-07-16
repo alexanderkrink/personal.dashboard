@@ -3,7 +3,7 @@ import { type NextRequest, NextResponse } from "next/server";
 import { env } from "@/env";
 
 /** Route prefixes reachable without a session. */
-const PUBLIC_PATHS = ["/login", "/auth"];
+const PUBLIC_PATHS = ["/login", "/auth", "/api/hooks"];
 
 /**
  * Refreshes the Supabase session on every request and redirects
