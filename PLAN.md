@@ -81,7 +81,6 @@ graph TD
         supabase[("Supabase<br/>Postgres + pgvector · Auth ·<br/>Storage · Realtime")]
         anthropic["Anthropic API<br/>(via Vercel AI SDK)"]
         voyage["Voyage AI<br/>embeddings"]
-        assemblyai["AssemblyAI<br/>transcription"]
         inngest["Inngest<br/>durable job orchestration"]
     end
     web --> core
@@ -92,7 +91,6 @@ graph TD
     ai --> anthropic
     ai --> voyage
     web <--> inngest
-    web --> assemblyai
 ```
 
 Boundary rules (enforced; see CLAUDE.md):
@@ -114,7 +112,7 @@ flowchart LR
     U["Browser<br/>drag-drop upload"] -->|"TUS resumable upload"| ST[("Supabase Storage<br/>documents bucket")]
     U -->|"Server Action:<br/>insert documents row"| DB[("Postgres")]
     DB -->|"inngest.send<br/>document/uploaded"| ING["Inngest function<br/>process-document"]
-    ING --> V["validate"] --> EX["extract<br/>PDF: Claude vision<br/>PPTX: XML parse<br/>audio: AssemblyAI"]
+    ING --> V["validate"] --> EX["extract<br/>PDF: Claude vision<br/>PPTX: XML parse"]
     EX --> RT["segment & route<br/>(fast tier + embeddings)"]
     RT --> MG["merge per topic<br/>(balanced tier,<br/>1 step per topic)"]
     MG --> EM["chunk + embed<br/>(Voyage → pgvector)"]
@@ -151,8 +149,8 @@ The five pillars. Each was designed to the same contract: (a) what & why, (b) UX
 
 ## Document & Notes Pipeline
 
-The heart of StudyOS: users upload lecture slides (PDF/PPTX), readings, and optional audio
-recordings per course; the pipeline extracts content, structures it into a **cumulative
+The heart of StudyOS: users upload lecture slides (PDF/PPTX) and readings
+per course; the pipeline extracts content, structures it into a **cumulative
 knowledge base of topic pages**, and keeps a **final-exam review** per course up to date.
 Uploading session 7's slides *expands and refines* existing topic pages — it never creates
 duplicates.
@@ -176,7 +174,7 @@ Client (drag-drop)                     apps/web                          Inngest
       ├──────────────► documents row ─────┤ 3. inngest.send("document/uploaded")
       │                (status=queued)    │                                   │
       │                                   │              ┌────────────────────┴───────────────────┐
-      │   Supabase Realtime               │              │ validate → extract (PDF/PPTX/audio)    │
+      │   Supabase Realtime               │              │ validate → extract (PDF/PPTX)          │
       │◄── status updates ────────────────┤              │ → segment & route → merge per topic    │
       │   (documents.status,              │              │ → chunk + embed (pgvector)             │
       │    processing_events)             │              │ → mark ready / partial / failed        │
@@ -206,7 +204,7 @@ on delete cascade`, RLS enabled, per-operation policies with `(select auth.uid()
 create extension if not exists vector;
 
 create type document_status as enum (
-  'queued', 'validating', 'extracting', 'transcribing',
+  'queued', 'validating', 'extracting',
   'structuring', 'merging', 'embedding', 'ready', 'partial', 'failed'
 );
 
@@ -214,7 +212,7 @@ create table documents (
   id              uuid primary key default gen_random_uuid(),
   user_id         uuid not null references auth.users(id) on delete cascade,
   course_id       uuid not null references courses(id) on delete cascade,
-  kind            text not null check (kind in ('slides','reading','audio','case','syllabus','other')),
+  kind            text not null check (kind in ('slides','reading','case','syllabus','other')),
   storage_path    text not null,            -- {user_id}/{course_id}/{document_id}/{filename}
   filename        text not null,
   mime_type       text not null,
@@ -283,7 +281,7 @@ create table topic_sources (
   user_id      uuid not null references auth.users(id) on delete cascade,
   topic_id     uuid not null references topics(id) on delete cascade,
   document_id  uuid not null references documents(id) on delete cascade,
-  locators     jsonb not null default '[]', -- [{page:12},{slide:4},{startMs,endMs}]
+  locators     jsonb not null default '[]', -- [{page:12},{slide:4}]
   created_at   timestamptz not null default now(),
   unique (topic_id, document_id)
 );
@@ -298,7 +296,7 @@ create table document_chunks (
   content      text not null,
   chunk_hash   text not null,               -- sha256(normalized content); embedding-reuse key
   token_count  int not null,
-  locator      jsonb not null,              -- {page} | {slide} | {startMs,endMs}
+  locator      jsonb not null,              -- {page} | {slide}
   embedding    vector(1024),
   created_at   timestamptz not null default now()
 );
@@ -330,12 +328,10 @@ is the fine-grained provenance; `topic_sources` is the coarse join for fast "wha
 topic" queries and for idempotent re-processing (see §7).
 
 Storage: private `documents` bucket, path `{user_id}/{course_id}/{document_id}/{filename}`,
-storage RLS policy `owner = auth.uid()` on the first path segment. Audio uploads use
-Supabase's resumable (TUS) upload from the client — lecture recordings are 50–150 MB and must
-not proxy through a Vercel function (4.5 MB request body limit). Note: lecture recordings
-require **Supabase Pro** (~$25/mo) — the Free plan caps individual uploads at 50 MB; Pro
-raises the per-file limit (set the bucket cap to ~500 MB). Staying on Free until audio
-lands is fine; a client-side Opus transcode (~22 MB per 90 min) is the documented fallback.
+storage RLS policy `owner = auth.uid()` on the first path segment. Uploads go client →
+Storage directly (resumable TUS for large decks) — file bytes never proxy through a Vercel
+function (4.5 MB request body limit). Our 50 MB per-file cap in `validate` matches the
+Supabase Free plan's upload ceiling, so the Free plan suffices.
 
 ---
 
@@ -350,7 +346,7 @@ Verified current state (July 2026):
 | Durability & retries | None — `waitUntil` is fire-and-forget; a crash or redeploy loses the job; Vercel Queues still limited beta | **Durable step functions**: each step checkpointed, automatic per-step retries with backoff, `onFailure` hook, event replay from dashboard | Durable runs, retries, checkpoints |
 | Concurrency / rate control | DIY | **Built-in `concurrency` keys + throttling** (we need per-course serialization for merges and LLM rate limiting) | Built-in queues/concurrency |
 | Free tier | n/a (just function invocations) | ~50k step-executions/month, 5 concurrent steps; Pro $75/mo (1M executions) | $5 compute credit/month, 20 concurrent runs; usage-based compute after |
-| Fan-out / events | DIY | First-class events, `step.waitForEvent` (perfect for transcription webhooks) | Events supported |
+| Fan-out / events | DIY | First-class events, `step.waitForEvent` (useful for external webhooks and cross-feature events) | Events supported |
 
 **Decision: Inngest.**
 
@@ -361,9 +357,8 @@ Verified current state (July 2026):
    no visibility — a poison PDF would just vanish. Inngest checkpoints every step, retries
    only the failed step, and gives a replay/debug dashboard.
 3. **The step-duration ceiling doesn't bind us.** No single step needs > 300s: extraction is
-   one Claude call on a PDF (~1–3 min worst case), merges are per-topic calls (~30–60s each),
-   transcription is *offloaded* to AssemblyAI's async API and awaited via
-   `step.waitForEvent` — the function is not running while audio transcribes. If a single
+   one Claude call on a PDF (~1–3 min worst case) and merges are per-topic calls (~30–60s
+   each). If a single
    Sonnet call ever brushes 300s on Hobby, upgrading Vercel to Pro (800s) is the escape
    hatch, not a re-architecture.
 4. **Free tier fits the workload.** A heavy month (~40 documents × ~15 steps) is ~650
@@ -378,7 +373,7 @@ those specific tasks. Inngest and Trigger.dev can coexist; don't prematurely mig
 `app/api/inngest/route.ts`. Job code uses `createAdminSupabaseClient` (RLS bypass is
 appropriate here per repo conventions — jobs act on behalf of the system, and every row
 still carries `user_id`). New env vars (`INNGEST_SIGNING_KEY`, `INNGEST_EVENT_KEY`,
-`ASSEMBLYAI_API_KEY`, `VOYAGE_API_KEY`) go through the full t3-env checklist.
+`VOYAGE_API_KEY`) go through the full t3-env checklist.
 
 #### The pipeline as an Inngest function (sketch)
 
@@ -394,9 +389,7 @@ export const processDocument = inngest.createFunction(
   async ({ event, step }) => {
     const doc = await step.run("validate", () => validateDocument(event.data.documentId));
 
-    const extraction = doc.kind === "audio"
-      ? await transcribeAndStructure(step, doc)      // §4.3: submit → waitForEvent → structure
-      : await step.run("extract", () => extractDocument(doc)); // §4.1/4.2: PDF or PPTX
+    const extraction = await step.run("extract", () => extractDocument(doc)); // §4.1/4.2
 
     const routing = await step.run("segment-and-route", () => routeSegments(doc, extraction));
 
@@ -427,7 +420,7 @@ text), so the `balanced` model sees the slides the way a student does.
 
 - **Mechanics:** signed URL → fetch bytes in the step → base64 `document` block (no beta
   needed) → one `generateObject` call (AI SDK) with the *extraction schema*: per-page/section
-  markdown transcription, detected structure (headings, definitions, formulas as LaTeX,
+  markdown rendition, detected structure (headings, definitions, formulas as LaTeX,
   worked examples), `examSignals` (verbatim quotes like "this will be on the exam" with page
   numbers), and a proposed `session_label`. This single call yields both the structured
   content for merging **and** the clean text we chunk for embeddings — solving the
@@ -457,34 +450,6 @@ Claude has no native PPTX input. Two-tier approach:
   document records `extraction_fidelity: 'text-only' | 'visual'` so the UI can explain
   quality differences.
 
-#### 4.3 Audio (lecture recordings) — AssemblyAI, async with webhook
-
-Comparison at current prices (per **lecture-hour**, batch/pre-recorded):
-
-| Service | $/hour | Notes |
-| --- | --- | --- |
-| **AssemblyAI Universal (chosen)** | **$0.15** ($0.0025/min) | Async API accepts a URL directly; webhooks; speaker labels & auto-chapters |
-| OpenAI gpt-4o-mini-transcribe | $0.18 ($0.003/min) | 25 MB upload limit → we'd have to split 90-min recordings client-side |
-| Deepgram Nova-3 (batch) | ~$0.26 ($0.0043/min) | Accuracy leader; keep as drop-in alternative behind our `Transcriber` interface |
-| OpenAI whisper-1 / gpt-4o-transcribe | $0.36 ($0.006/min) | Same 25 MB limit |
-
-**Why AssemblyAI:** cheapest at comparable quality, takes a Supabase Storage **signed URL**
-(no file-size juggling, no proxying bytes through a function), and its async job + webhook
-model composes perfectly with Inngest:
-
-1. Step `submit-transcription`: POST the signed URL (+ `webhook_url` pointing at
-   `app/api/webhooks/assemblyai/route.ts` with a per-job secret header). Status →
-   `transcribing`.
-2. `step.waitForEvent("transcription/completed", { timeout: "2h", match: "data.documentId" })`
-   — the webhook route verifies the secret, fetches the transcript, stores it, and emits the
-   event. Timeout fallback: one polling step (GET transcript status) before failing, so a
-   lost webhook doesn't poison the job.
-3. Transcript (with utterance timestamps + auto-chapters) goes through the same structuring
-   call as text extractions; locators are `{startMs, endMs}` so topic notes can deep-link
-   back into the recording.
-
-A 90-minute lecture: **$0.23 transcription + ~$0.15–0.30 structuring ≈ under $0.55 total.**
-Cap uploads at 4h / 300 MB in `validate`.
 
 ---
 
@@ -500,8 +465,7 @@ it; they never own pages.**
    plus the frozen routing system prompt — is the stable prompt prefix, prompt-cached across
    the document's routing batches (the merge calls build their own cached prefix — prompt
    caches are per-model and per-prompt).
-2. Split the extraction into candidate segments along its structure (slide runs, headings,
-   audio chapters). Embed each segment (§6) and retrieve top-5 nearest existing topics by
+2. Split the extraction into candidate segments along its structure (slide runs, headings). Embed each segment (§6) and retrieve top-5 nearest existing topics by
    cosine similarity against `topics.title_embedding` + each topic's summary embedding.
 3. One Haiku call per document (segments batched): for each segment, decide
    `assignTo: topicId` **or** `createNew: {title, rationale}` — the schema *requires* it to
@@ -571,8 +535,7 @@ the provider is swappable; store `embedding_model` on chunks if/when we ever mix
 (different models' vectors are not comparable).
 
 **Chunking (pure functions in `packages/core`):** structure-aware, not fixed-window. Units:
-slide/page for decks, heading sections for readings, chapter-grouped utterances for
-transcripts. Target 300–500 tokens; merge tiny neighbors below ~120 tokens; split
+slide/page for decks, heading sections for readings. Target 300–500 tokens; merge tiny neighbors below ~120 tokens; split
 over-800-token units at paragraph boundaries with ~15% overlap. Every chunk keeps its
 `locator` and, after routing, its `topic_id` — so RAG answers can cite "Lecture 7, slide 12"
 and filter by topic. Topic-page sections themselves are also embedded (into
@@ -606,7 +569,7 @@ chat with citations, and context retrieval for the exam-review generator.
   transient 429/5xx inside a step; permanent errors (invalid PDF, schema-validation failure
   after one repair attempt) throw `NonRetriableError` to skip pointless retries.
 - **Poison files:** `validate` rejects early with user-readable reasons — magic-byte MIME
-  sniff (not extension), size/page/duration caps, encrypted-PDF detection, zip-bomb guard.
+  sniff (not extension), size/page caps, encrypted-PDF detection, zip-bomb guard.
   Files that pass validation but exhaust retries hit the function's `onFailure` handler:
   status `failed`, `failure_reason` set, `error`-level processing event logged. The Inngest
   dashboard retains the run for replay after a fix ships. A repeated-failure guard (same
@@ -617,8 +580,6 @@ chat with citations, and context retrieval for the exam-review generator.
   failed topic list stored; extraction itself failed → `failed`. A `document/retry-merges`
   event re-runs only failed topics. Embedding failures also degrade to `partial` — the topic
   pages are readable even when search indexing lags.
-- **Transcription edge cases:** webhook lost → `waitForEvent` timeout → one polling attempt →
-  fail with reason. AssemblyAI job errored → surfaced verbatim in `failure_reason`.
 - **Money guard:** per-document LLM spend estimated from token usage and logged to
   processing events; a document exceeding a sanity ceiling (~$5) aborts with `failed` rather
   than looping.
@@ -632,10 +593,9 @@ chat with citations, and context retrieval for the exam-review generator.
   both tables filtered by `course_id`) — no polling.
 - **Upload flow:** drag-drop → client-side TUS upload with progress bar → row appears
   instantly as `queued`. The upload dialog asks for `kind` (slides / reading / case /
-  syllabus / audio), pre-guessed from MIME type and filename. The card then walks a step checklist with the active step
-  spinning: *Validating → Extracting text* (or *Transcribing audio — usually a few
-  minutes*) *→ Organizing into topics → Updating 4 topic pages → Indexing for search →
-  Done*. Merge steps stream per-topic lines ("Expanded **Eigenvalues** · added 2 formulas")
+  syllabus), pre-guessed from MIME type and filename. The card then walks a step checklist with the active step
+  spinning: *Validating → Extracting text → Organizing into topics → Updating 4 topic
+  pages → Indexing for search → Done*. Merge steps stream per-topic lines ("Expanded **Eigenvalues** · added 2 formulas")
   from the change summaries — this is the moment the product's core promise is visible, so
   it gets real UI attention.
 - **Terminal states:** `ready` → card collapses to a summary ("Contributed to 4 topics",
@@ -644,7 +604,7 @@ chat with citations, and context retrieval for the exam-review generator.
   ("This PDF is password-protected"), *Try again* and *Delete* actions. Never a raw stack
   trace.
 - **Topic pages** show provenance affordances: each block's source chip (Lecture 7 · slide
-  12 / 41:20) deep-links to the document viewer or audio timestamp; a *History* drawer lists
+  12) deep-links to the document viewer; a *History* drawer lists
   revisions ("Lecture 7 expanded this page — view diff / revert"). Topic pages render via
   unified/remark (`react-markdown` + `remark-gfm`) in RSC — component in
   `apps/web/src/components/topic-page/`; the remark plugin chain is the extension point the
@@ -677,11 +637,10 @@ chat with citations, and context retrieval for the exam-review generator.
 | --- | --- | --- | --- | --- |
 | 40-page slide PDF | $0.30–0.50 (Sonnet 5, vision) | $0.15–0.35 | <$0.01 | **≈ $0.50–0.85** |
 | PPTX (text path) | $0.03–0.08 | $0.15–0.35 | <$0.01 | **≈ $0.20–0.45** |
-| 90-min recording | $0.23 (AssemblyAI) + $0.15–0.30 | $0.15–0.35 | <$0.01 | **≈ $0.55–0.90** |
 | Exam review (per regen) | — | — | — | **≈ $0.50–1.50** (Opus 4.8) |
 
-A full 12-week course (12 decks + 12 recordings + a few readings + 3 review regens) lands
-around **$15–25** — comfortably fine for a personal tool, and the tier registry lets us
+A full 12-week course (12 decks + a few readings + 3 review regens) lands
+around **$8–15** — comfortably fine for a personal tool, and the tier registry lets us
 step any stage down a tier if it isn't.
 
 ---
@@ -691,12 +650,10 @@ step any stage down a tier if it isn't.
 - Vercel function duration & Fluid compute: [Vercel docs — duration](https://vercel.com/docs/functions/configuring-functions/duration), [Fluid compute limits changelog](https://vercel.com/changelog/higher-defaults-and-limits-for-vercel-functions-running-fluid-compute)
 - Inngest pricing/limits: [inngest.com/pricing](https://www.inngest.com/pricing), [usage limits](https://www.inngest.com/docs/usage-limits/inngest), [concurrency](https://www.inngest.com/docs/guides/concurrency)
 - Trigger.dev pricing/limits: [trigger.dev/pricing](https://trigger.dev/pricing), [limits](https://trigger.dev/docs/limits)
-- Transcription pricing: [AssemblyAI vs Deepgram](https://brasstranscripts.com/blog/assemblyai-vs-deepgram-pricing-high-volume-comparison), [Deepgram pricing](https://deepgram.com/pricing), [OpenAI transcription pricing](https://costgoat.com/pricing/openai-transcription)
 - Embeddings pricing: [Voyage AI pricing](https://docs.voyageai.com/docs/pricing), [voyage-3.5 announcement](https://www.mongodb.com/company/blog/product-release-announcements/introducing-voyage-3-5-voyage-3-5-lite-improved-quality-new-retrieval-frontier), [OpenAI embeddings pricing](https://costgoat.com/pricing/openai-embeddings)
 - Claude model pricing/PDF limits: Anthropic platform docs (models overview, PDF support) — cached via claude-api reference, July 2026.
 
-**Dependencies:** foundation tables (`courses`), Inngest wiring, `ASSEMBLYAI_API_KEY` /
-`VOYAGE_API_KEY` env keys. **Effort:** L — the anchor of M1. **Milestone:** M1.
+**Dependencies:** foundation tables (`courses`), Inngest wiring, `VOYAGE_API_KEY` env key. **Effort:** L — the anchor of M1. **Milestone:** M1.
 
 ---
 
@@ -2170,9 +2127,9 @@ Supabase + Vercel, (4) differentiation vs Notion/Anki/Google Calendar. Ordered b
   low weekly leverage. Its best fragments survive smaller: term chips (#7) and cross-course
   retrieval (#1) already expose the dual-degree overlap.
 - *Deck Rehearsal Studio* — best differentiation of the cuts, but presentations are episodic
-  (a few per semester), it's L effort, and it adds a new STT dependency. The Cold-Call drill
-  (#2) covers the weekly rehearse-under-pressure need; revisit at M4+ when its voice infra
-  can also upgrade #2 to spoken drills.
+  (a few per semester), it's L effort, and it would introduce speech-to-text infrastructure
+  the product otherwise has no use for (audio is deliberately out of scope). The Cold-Call
+  drill (#2) covers the weekly rehearse-under-pressure need in text form.
 - Two more candidates were absorbed by the merges above rather than cut outright.
 - *Gamification beyond lightweight streaks* (commissioned direction, considered): streak
   counters already live where they earn their pixels — the practice-session header and the
@@ -2963,7 +2920,7 @@ Rules of thumb encoded in the registry doc comment: `fast` for high-volume extra
 
 **Embeddings — Voyage AI `voyage-3.5-lite`**: $0.02/MTok, and the first 200M tokens per account are free — at StudyOS volumes (~1M tokens/month, see §4) embeddings are effectively free for years. Chosen because it is Anthropic's recommended embedding partner (Anthropic has no first-party embeddings), tops its price class on retrieval quality, and its 1,024-dim default (Matryoshka-truncatable to 512/256 if index size ever matters) stores directly in Supabase `pgvector`. Fallback if we ever want a single-vendor bill: OpenAI `text-embedding-3-small` at the same $0.02/MTok.
 
-Sources: [Anthropic pricing docs](https://platform.claude.com/docs/en/about-claude/pricing), [Voyage AI pricing](https://docs.voyageai.com/docs/pricing), [OpenAI transcription pricing overview](https://diyai.io/ai-tools/speech-to-text/openai-whisper-api-pricing-2026/).
+Sources: [Anthropic pricing docs](https://platform.claude.com/docs/en/about-claude/pricing), [Voyage AI pricing](https://docs.voyageai.com/docs/pricing).
 
 ### 2. Structured outputs
 
@@ -3003,14 +2960,12 @@ Policy built on top of it:
 
 ### 4. Monthly cost estimate (this user)
 
-Assumptions: 5 courses × 3 lectures/week = 15 decks/week (~30 slides each), 2 audio hours/week transcribed, ~200 flashcards/week, ~50 chat/RAG queries/week, exam reviews regenerated on demand (≈5 runs/month, clustered into exam periods), ~4 case briefs/week. 4.3 weeks/month.
+Assumptions: 5 courses × 3 lectures/week = 15 decks/week (~30 slides each), ~200 flashcards/week, ~50 chat/RAG queries/week, exam reviews regenerated on demand (≈5 runs/month, clustered into exam periods), ~4 case briefs/week. 4.3 weeks/month.
 
 | Workload | Tier | Arithmetic | $/month |
 | --- | --- | --- | --- |
 | Doc structuring | balanced | 15 decks/wk × 4.3 ≈ **65 decks**. Per deck: 30 slides as PDF pages ≈ 60K tok in (≈2K/slide incl. image tokens), 8K tok out → 60K×$3/M + 8K×$15/M = **$0.30/deck** | **$19.50** |
-| Audio transcription | (AssemblyAI Universal) | 2 h/wk × 4.3 = 8.6 h × $0.15/h ($0.0025/min) | **$1.29** |
 | Topic merge | balanced | 65 docs × ~4 topic merges/doc ≈ (24K in × $3/M + 8K out × $15/M) ≈ $0.20/doc | **$13.00** |
-| Transcript structuring | balanced | 8.6 h ≈ 72K words ≈ 95K tok in, 18K out → $0.29 + $0.27 | **$0.60** |
 | Flashcards — basic/cloze | fast | ~26 calls × (6K in × $1/M + 2K out × $5/M) = $0.016/call | **$0.42** |
 | Flashcards — MCQ/numeric | balanced | ~17 calls × (6K in × $3/M + 2K out × $15/M) = $0.048/call | **$0.82** |
 | Quiz grading | fast | ~100 answers/wk → 430/mo × (1.2K in + 0.15K out) ≈ $0.002/answer | **$0.85** |
@@ -3020,7 +2975,7 @@ Assumptions: 5 courses × 3 lectures/week = 15 decks/week (~30 slides each), 2 a
 | Quick-add, topic routing, misc small jobs | fast | ~800 small Haiku calls at ~$0.001–0.003 each | **~$2.00** |
 | Embeddings | voyage-3.5-lite | ~1M tok/mo new content × $0.02/M — inside the 200M free allowance | **$0.00** |
 
-**Sum: ≈ $52/month** at standard interactive pricing. Exam months trend $5–10 higher
+**Sum: ≈ $50/month** at standard interactive pricing. Exam months trend $5–10 higher
 (mock-exam generation, cold-call drills); glossary extraction and capture classification
 are sub-dollar noise.
 
@@ -3088,13 +3043,12 @@ uploads every lecture's materials (topic pages appear minutes later).
 | 3 | Calendar hub CAL-1: provider interface, ical.js parsing + RRULE expansion w/ fixture tests, sync engine (dedup, tombstones), feed CRUD | M–L | Deadlines & calendar hub |
 | 4 | Calendar hub CAL-2: course matching, weight resolution + priority score, This Week view, structured quick-add, daily cron + staleness sync | M | Deadlines & calendar hub |
 | 5 | Document pipeline: upload (TUS) → validate → extract (PDF via Claude vision, PPTX via XML) → route → merge → embed → status UX w/ Realtime | L (the big one) | Document & notes pipeline |
-| 6 | Audio ingestion via AssemblyAI (submit → webhook → structure) | M | Document & notes pipeline §4.3 |
-| 7 | Topic pages UI: rendered page, provenance chips, revision history/revert | M | Document & notes pipeline §8 |
-| 8 | Exam review v1: weight computation + Opus generation + staleness banner | S–M | Document & notes pipeline §9 |
-| 9 | `ai_generations` log + cost rollup + kill-switch env vars | S | AI strategy §5–6 |
-| 10 | Participation & Attendance Ledger (PWA manifest, 2-tap logging) | M | Additional #4 |
-| 11 | Case-brief slice (pipeline step for `case`-tagged docs) | S–M | Additional #2 |
-| 12 | *Stretch:* NL quick-add (CAL-3), syllabus → `assessments` extraction | S+S | Calendar §6, Additional #3 |
+| 6 | Topic pages UI: rendered page, provenance chips, revision history/revert | M | Document & notes pipeline §8 |
+| 7 | Exam review v1: weight computation + Opus generation + staleness banner | S–M | Document & notes pipeline §9 |
+| 8 | `ai_generations` log + cost rollup + kill-switch env vars | S | AI strategy §5–6 |
+| 9 | Participation & Attendance Ledger (PWA manifest, 2-tap logging) | M | Additional #4 |
+| 10 | Case-brief slice (pipeline step for `case`-tagged docs) | S–M | Additional #2 |
+| 11 | *Stretch:* NL quick-add (CAL-3), syllabus → `assessments` extraction | S+S | Calendar §6, Additional #3 |
 
 **Definition of done**
 
@@ -3103,8 +3057,6 @@ uploads every lecture's materials (topic pages appear minutes later).
   *changes existing pages* (verified against a real course's decks).
 - Real Blackboard ICS feed synced; This Week shows deadlines ranked by grade impact;
   a moved/cancelled lecture reflects correctly across a DST boundary (fixture-tested).
-- A lecture recording becomes a transcript-backed topic contribution for < $1.00 all-in
-  (transcription + structuring + merges).
 - Every new table has RLS policies; every AI call appears in `ai_generations` with cost;
   `AI_KILL_SWITCH=true` verifiably stops all spend.
 - Deployed on Vercel; CI green; participation loggable from a phone in < 5 seconds.
@@ -3203,7 +3155,7 @@ real course schedule, with weak spots feeding the same daily review queue.
 | --- | --- | --- |
 | **Topic-merge quality drift** — the LLM merge produces duplicated or mangled topic pages over a semester of uploads | Medium / High (it's the core promise) | Deterministic duplicate guard (embedding similarity ≥ 0.85 coerces create→update); immutable `topic_revisions` with one-click revert; eval-by-diff before any prompt-version bump; conflicts surfaced as `openQuestions`, never silently resolved |
 | **Slide decks tokenize heavier than modeled** (~2K/slide assumed; image-dense decks hit 3K+) → doc-structuring cost balloons | Medium / Medium | `ai_generations` rollup watched after first real decks; Batch API (−50%) on all pipeline calls; PPTX text path is 10× cheaper; budget guard defers background jobs at 100% of `AI_MONTHLY_BUDGET_USD` |
-| **Vercel Hobby limits bite** (300 s function ceiling, 1 cron/day) | Medium / Low | Inngest steps are each < 300 s by design (transcription offloaded + `waitForEvent`); on-demand staleness sync makes daily cron a safety net only; Pro upgrade (800 s, unlimited crons) is the escape hatch, not a re-architecture |
+| **Vercel Hobby limits bite** (300 s function ceiling, 1 cron/day) | Medium / Low | Inngest steps are each < 300 s by design; on-demand staleness sync makes daily cron a safety net only; Pro upgrade (800 s, unlimited crons) is the escape hatch, not a re-architecture |
 | **Blackboard ICS feed fidelity** — truncated windows, missing VTIMEZONE, no weights/categories | High / Medium | Tombstone grace period (24 h hide, 7 d delete); IANA fallback for naked TZIDs; weights come from `assessments` (manual/syllabus-extracted) rather than the feed; fixture tests on real feed exports |
 | **TS 7 / ecosystem gap** (already hit at scaffold: Next 16 needs the JS compiler API) | Certain / Low | Pinned to TS 5.9 with a documented revisit; no code depends on TS 7 features |
 | **Node-side Pyodide for the lesson validation gate proves brittle on Vercel** | Medium / Low | Explicit spike early in CT-2; documented fallback = validate in-browser on first open ("checking lesson…" state) |
@@ -3240,22 +3192,20 @@ real course schedule, with weak spots feeding the same daily review queue.
 ### Open questions for Alexander
 
 1. **Supabase + Vercel projects** — create both and provide env values per
-   `apps/web/.env.example` (plus `INNGEST_*`, `ASSEMBLYAI_API_KEY`, `VOYAGE_API_KEY`,
-   `CRON_SECRET` as M1 lands). Accounts needed: Inngest (free), AssemblyAI (~$0.15/h
-   usage), Voyage AI (free tier covers years). Supabase Free works until audio ingestion —
-   lecture recordings exceed its 50 MB per-file cap, so plan on Supabase Pro (~$25/mo)
-   when M1 audio lands.
+   `apps/web/.env.example` (plus `INNGEST_*`, `VOYAGE_API_KEY`,
+   `CRON_SECRET` as M1 lands). Accounts needed: Inngest (free), Voyage AI (free tier
+   covers years). The Supabase Free plan suffices — every upload fits its 50 MB
+   per-file cap.
 2. **The ICS feed URL(s)** from Blackboard (one global or per-course?) — needed to write
    realistic parser fixtures in M1, ideally a raw `.ics` export attached to the repo's
    test fixtures.
 3. **One real course bundle for pipeline evaluation** — 2–3 lecture decks (incl. one
-   image-heavy), one reading PDF, one lecture recording. The merge algorithm gets tuned
+   image-heavy) and one reading PDF. The merge algorithm gets tuned
    against real material, not synthetic fixtures.
 4. **IE grading specifics to verify**: pass mark (assumed 5/10) for the Bavarian-formula
    conversion; typical participation weight ranges; the exact attendance-failure policy.
    Syllabi PDFs answer all three (and feed the `assessments` extractor).
-5. **Budget comfort**: the plan assumes ≈ $35–65/month AI spend at full usage (plus ~$25/mo
-   Supabase Pro once audio ingestion lands) with a $75 soft cap — confirm or adjust
+5. **Budget comfort**: the plan assumes ≈ $35–65/month AI spend at full usage with a $75 soft cap — confirm or adjust
    `AI_MONTHLY_BUDGET_USD`.
 6. **Vercel plan**: Hobby works for M1 by design; Pro (~$20/mo) buys 800 s functions +
    frequent crons and removes two mitigations. Decide when M1 pipeline volume is real.
