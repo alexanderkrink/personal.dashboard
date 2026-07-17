@@ -6,8 +6,9 @@
 > guessing. Read `CLAUDE.md` for repo conventions first; this document covers *what* to
 > build, *why*, and *how*.
 
-**Status:** M0 (scaffold) shipped. This plan covers M1–M4.
-**Last updated:** 2026-07-16.
+**Status:** M0 + M0.5 shipped (renamed to Alex's Study Dashboard; cockpit design system live
+in production). M1 in progress — see the M1 progress note. This plan covers M1–M4.
+**Last updated:** 2026-07-17.
 
 ## Contents
 
@@ -685,29 +686,30 @@ step any stage down a tier if it isn't.
 ## Deadlines & Calendar Hub
 
 One place that answers "what is due, when, and how much does it matter?" Sources: the
-university's Blackboard-generated ICS feed(s) today, the Blackboard REST API later
-(pending institutional approval), and manual quick-add for everything Blackboard doesn't
-know about. The integration layer is a provider interface from day one so ICS → REST is
-a provider swap, not a rewrite.
+university's ICS calendar feed(s) and manual quick-add for everything the feed doesn't
+know about. The integration layer is a provider interface from day one, so additional
+ICS feeds or a future calendar source are a provider add, not a rewrite.
 
 ### 1. Architecture overview
 
 ```
-Blackboard ICS URL(s)                 Blackboard REST (future)
-        │                                      │
-        ▼                                      ▼
-┌─ IcsCalendarProvider ─┐        ┌─ BlackboardCalendarProvider ─┐
-│ fetch + conditional   │        │ (stub now; OAuth + delta     │
-│ GET, parse, expand    │        │  queries when approved)      │
-└───────────┬───────────┘        └──────────────┬───────────────┘
-            └────────────── SyncEngine ─────────┘
-              (provider-agnostic: dedup by UID, diff,
-               tombstones, course matching, upserts)
-                            │
-                     Supabase (Postgres)
-        calendar_feeds · calendar_items · calendar_occurrences
-                            │
-              "This week" view  ·  full calendar  ·  quick-add
+University ICS URL(s)
+        │
+        ▼
+┌─ IcsCalendarProvider ─┐
+│ fetch + conditional   │
+│ GET, parse, expand    │
+└───────────┬───────────┘
+            ▼
+        SyncEngine
+  (provider-agnostic: dedup by UID, diff,
+   tombstones, course matching, upserts)
+            │
+            ▼
+     Supabase (Postgres)  ◄── manual quick-add (feed_id = null, never synced)
+ calendar_feeds · calendar_items · calendar_occurrences
+            │
+   "This week" view  ·  full calendar  ·  quick-add
 ```
 
 Package placement (per repo boundary rules):
@@ -715,7 +717,7 @@ Package placement (per repo boundary rules):
 - `packages/core/src/calendar/` — everything pure: the `CalendarProvider` interface and
   normalized types, ICS parsing + RRULE expansion (`string in → occurrences out`), the
   diff algorithm, the grade-impact scoring function. All heavily unit-tested with
-  fixture `.ics` files (including Blackboard-shaped ones).
+  fixture `.ics` files (including ones shaped like the university's real export).
 - `apps/web/src/server/calendar/` — the I/O shells: provider implementations that fetch
   (core does the parsing), the sync engine entry point, cron route handler, server
   actions. Lifted into a `packages/integrations` package only if a second consumer
@@ -730,12 +732,12 @@ Package placement (per repo boundary rules):
 create table public.calendar_feeds (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users (id) on delete cascade,
-  provider text not null check (provider in ('ics', 'blackboard')),
+  provider text not null default 'ics' check (provider in ('ics')),
   label text not null,
-  -- ICS: the subscription URL. Blackboard embeds a capability token in it —
+  -- The ICS subscription URL. It embeds a capability token —
   -- treat as a secret: RLS-protected, masked in the UI, never logged in full.
-  config jsonb not null,               -- { url } for ics; { baseUrl, ... } for blackboard
-  sync_cursor jsonb,                   -- { etag, lastModified, contentHash } | { deltaToken }
+  config jsonb not null,               -- { url }
+  sync_cursor jsonb,                   -- { etag, lastModified, contentHash }
   last_synced_at timestamptz,
   last_sync_status text,               -- 'ok' | 'unchanged' | 'error'
   last_sync_error text,
@@ -749,7 +751,7 @@ create table public.calendar_items (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users (id) on delete cascade,
   feed_id uuid references public.calendar_feeds (id) on delete cascade,  -- null = manual
-  source text not null check (source in ('ics', 'blackboard', 'manual')),
+  source text not null check (source in ('ics', 'manual')),
   ics_uid text not null,               -- VEVENT UID; generated uuid for manual items
   sequence int not null default 0,     -- ICS SEQUENCE, detects upstream edits
   kind text not null check (kind in ('deadline', 'class', 'event')),
@@ -805,8 +807,8 @@ Semester Cockpit feature; this feature only references them.
 
 #### 3.1 Fetch cadence: on-demand with staleness check, daily cron as safety net
 
-Vercel Hobby limits cron to one invocation per day per job, and Blackboard regenerates
-ICS feeds lazily anyway — so polling every N minutes buys little. Chosen design:
+Vercel Hobby limits cron to one invocation per day per job, and the university's ICS
+feed regenerates lazily upstream anyway — so polling every N minutes buys little. Chosen design:
 
 1. **On-demand, stale-while-revalidate.** When the dashboard or calendar page renders
    and any active feed has `last_synced_at` older than **30 minutes**, the page renders
@@ -829,7 +831,7 @@ ICS is a full-snapshot format — there is no delta protocol. "Incremental" ther
 skipping work, in three layers:
 
 1. **HTTP conditional GET**: send `If-None-Match` / `If-Modified-Since` from
-   `sync_cursor`; a `304` ends the run (`status = 'unchanged'`). Blackboard's ICS
+   `sync_cursor`; a `304` ends the run (`status = 'unchanged'`). The ICS
    endpoint doesn't reliably honor these, so also:
 2. **Content hash**: SHA-256 of the response body compared to `sync_cursor.contentHash`;
    identical → end the run without parsing.
@@ -846,7 +848,7 @@ skipping work, in three layers:
   except fields listed in `user_locked_fields`. If the user edited a title, reassigned a
   course, or set `weight_override`, sync records the field as locked and never clobbers
   it again.
-- **Disappearance ≠ deletion (immediately)**: Blackboard feeds are windowed and
+- **Disappearance ≠ deletion (immediately)**: ICS feeds are windowed and
   occasionally truncated. A UID present in the DB but absent from the fetched snapshot
   gets `missing_since = now()` (tombstone) and is hidden from views after 24 h; the row
   is hard-deleted after 7 days of continuous absence. If the UID reappears, the
@@ -863,11 +865,11 @@ Rules, in order:
    `parseIcsToNormalizedEvents()` iterates the calendar's `vtimezone` components and
    registers each with `ICAL.TimezoneService` before expansion (ical.js ships no tz data
    and registers nothing automatically; the registry is scoped per parse). If a `TZID` arrives *without* a `VTIMEZONE`
-   block (Blackboard does this), resolve the offset via the platform IANA database
+   block (some feeds do this), resolve the offset via the platform IANA database
    (`Intl.DateTimeFormat` — full tz data, zero dependencies) in a small pure helper in
    `core`. This is what makes a class at "10:00 Europe/Madrid" stay at 10:00 local
    across the March/October DST transitions while its UTC representation shifts.
-3. UTC times (`...Z` suffix — Blackboard's usual output for due dates) pass through.
+3. UTC times (`...Z` suffix — the usual output for due dates) pass through.
 4. **Floating times** (no TZID, no Z) are interpreted in `profiles.timezone`
    (default `Europe/Madrid` — already in the schema).
 5. All-day events (`VALUE=DATE`) set `all_day = true` and are anchored to midnight in
@@ -926,12 +928,13 @@ Rejected alternatives (same registry check):
 
 The sync engine owns everything stateful (dedup, diffing, tombstones, course matching,
 persistence). A provider only turns a remote source into normalized events plus a new
-cursor. That split is what makes ICS → REST a swap: the engine never changes.
+cursor. That split keeps the engine independent of any particular feed: adding another
+ICS feed (or a future calendar source) touches only a provider, never the engine.
 
 ```ts
 // packages/core/src/calendar/provider.ts  (pure types — no I/O in core)
 
-export type CalendarSource = "ics" | "blackboard";
+export type CalendarSource = "ics";
 
 export interface NormalizedEvent {
   uid: string;
@@ -951,7 +954,6 @@ export interface NormalizedEvent {
     overridden: boolean;
   }>;
   courseHint?: string;           // raw course text for the matcher
-  gradeWeightPercent?: number;   // only REST can populate this (capability-gated)
 }
 
 export interface SyncInput {
@@ -967,25 +969,16 @@ export type SyncOutput =
       changed: true;
       cursor: unknown;
       // ICS returns the full window every time → engine runs tombstone diffing.
-      // REST returns only deltas → engine applies them as patches, no tombstoning.
-      snapshot: "full" | "delta";
       events: NormalizedEvent[];
-      deletedUids?: string[];    // delta mode only
     };
 
 export type SyncError =
   | { kind: "unauthorized" }     // feed URL/token revoked → surface "reconnect" in UI
   | { kind: "unavailable"; retryable: true }
-  | { kind: "parse"; detail: string }
-  | { kind: "not-implemented" }; // the stub
+  | { kind: "parse"; detail: string };
 
 export interface CalendarProvider {
   readonly source: CalendarSource;
-  readonly capabilities: {
-    incremental: boolean;        // true native deltas (REST), not just conditional GET
-    gradeWeights: boolean;       // can supply assessment weights itself
-    categories: boolean;         // reliable deadline-vs-class typing from the source
-  };
   readonly configSchema: z.ZodType<unknown>;
   sync(input: SyncInput): Promise<Result<SyncOutput, SyncError>>;
 }
@@ -994,20 +987,10 @@ export interface CalendarProvider {
 **`IcsCalendarProvider`** (`apps/web/src/server/calendar/providers/ics.ts`): fetches with
 conditional headers, hashes the body, then calls the pure `parseIcsToNormalizedEvents()`
 in `core` (ical.js parse → timezone resolution → horizon expansion → kind
-classification). Capabilities: `{ incremental: false, gradeWeights: false, categories: false }`.
-Kind classification heuristics (each overridable by the user, which locks the field):
-zero-duration or all-day VEVENTs whose summary matches `/\bdue\b/i` or Blackboard's
-"Assignment/Test" categories → `deadline`; events with an RRULE and a duration →
-`class`; everything else → `event`.
-
-**`BlackboardCalendarProvider`** (stub now, same file layout): declares the target
-capabilities `{ incremental: true, gradeWeights: true, categories: true }`, has a real
-`configSchema` (`{ baseUrl, courseIds }`), and `sync()` returns
-`err({ kind: "not-implemented" })`. The UI already renders provider status from the
-registry, so when institutional approval lands the work is confined to: OAuth token
-storage on `calendar_feeds.config`, mapping `/learn/api/public/v1/calendars/items` +
-gradebook columns (which carry due dates *and* weights natively) into
-`NormalizedEvent[]`, and returning `snapshot: "delta"`. No engine, schema, or UI changes.
+classification). Kind classification heuristics (each overridable by the user, which
+locks the field): zero-duration or all-day VEVENTs whose summary matches `/\bdue\b/i`
+(or an assignment/test-style category in the feed) → `deadline`; events with an RRULE
+and a duration → `class`; everything else → `event`.
 
 A `PROVIDERS: Record<CalendarSource, CalendarProvider>` registry in
 `apps/web/src/server/calendar/` is the only place implementations are enumerated.
@@ -1016,7 +999,7 @@ A `PROVIDERS: Record<CalendarSource, CalendarProvider>` registry in
 
 #### 5.1 Linking synced events to courses
 
-Blackboard prefixes summaries or descriptions with the course name/ID, and per-course
+The feed often prefixes summaries or descriptions with the course name/ID, and per-course
 feeds exist too. Matching pipeline at sync time, first hit wins:
 
 1. Feed-level default: a feed can be pinned to one course (`config.courseId`) — right
@@ -1040,8 +1023,6 @@ item is worth. Resolution order (first non-null wins):
    milestone can extract them from syllabus PDFs later). Linking an event to an
    assessment is a one-click suggestion when titles fuzzy-match, confirmed by the user.
 3. Kind-based default: `deadline` → 5 %, `class`/`event` → 0 %.
-4. Future: Blackboard REST populates `gradeWeightPercent` directly (capability-gated),
-   which auto-creates the assessment link.
 
 Priority score — pure function in `core`, unit-tested, no magic at call sites:
 
@@ -1125,13 +1106,12 @@ correct feeling is "clear this week, exam in 9 days," never false calm.
 | CAL-1 | Migrations; `CalendarProvider` + normalized types in core; ical.js parse/expand with fixture tests (DST, EXDATE, RECURRENCE-ID, cancelled, floating-time cases); sync engine with dedup/tombstones; feed CRUD UI; plain chronological list. |
 | CAL-2 | Course matching + matchers; weight resolution + priority scoring in core; full "This week" composition; structured quick-add form; daily cron + on-demand staleness sync. |
 | CAL-3 | NL quick-add (`quick-add-parse` prompt, fast tier, confirm card); assessment linking suggestions; completed/overdue flows polish. |
-| CAL-4 *(blocked on institutional approval)* | Blackboard REST provider: OAuth config, delta sync, native grade weights. Engine/UI unchanged by design. |
 
 Mapping to the roadmap: CAL-1 and CAL-2 land in **M1**, CAL-3 in **M2** (pulled into M1 as
-stretch when there's slack), CAL-4 in **M4**.
+stretch when there's slack).
 
 **Dependencies:** foundation tables (`courses`, `assessments`). **Effort:** CAL-1 M–L ·
-CAL-2 M · CAL-3 S–M · CAL-4 M.
+CAL-2 M · CAL-3 S–M.
 
 Cross-section dependencies: `courses` and `assessments` tables (Courses/Grades section);
 `MODELS.fast` + prompt registry (AI section); `CRON_SECRET` env var added per the env
@@ -2303,13 +2283,12 @@ Component weights are *not* a new schema: they live in the core `assessments` ta
 prompt (`syllabus_components@v1`, `balanced` tier, Zod array) runs as a pipeline step when a
 document has `kind = 'syllabus'` and proposes `assessments` rows behind a mandatory confirm
 step showing the source snippet. Deliberately near-zero AI for the numbers themselves —
-grades must be deterministic. Automatic grade import needs the Blackboard REST API — HIGH
-approval risk (IE IT must register the app; may never happen); design is manual-first, with
-a `source` column making REST import purely additive at M4.
+grades must be deterministic. Grades are entered manually (or extracted from a syllabus
+behind a confirm step); there is no automatic grade import.
 
 **(d) Data model additions.**
 - `assessment_results`: `assessment_id → assessments`, `score numeric`, `max_score numeric`,
-  `graded_at date`, `source text check (source in ('manual','blackboard'))`, `note text`
+  `graded_at date`, `source text check (source in ('manual'))`, `note text`
 - `grade_scenarios`: `course_id → courses`, `name text`, `assumptions jsonb`
 - `semesters` — created by the M1 foundation migration (see *Data model*); no new columns here
 - Extensions: `courses` gains `semester_id uuid null → semesters`, `credits numeric`,
@@ -2322,7 +2301,7 @@ live from #4; workload sparkline reads #9's `study_events` (degrades gracefully 
 
 **(f) Effort.** M.
 
-**(g) Milestone.** M2 (manual-entry core can land late M1; Blackboard import M4).
+**(g) Milestone.** M2 (manual-entry core can land late M1).
 
 ---
 
@@ -2684,11 +2663,10 @@ consumes everything and belongs last.
 | Voyage AI embeddings (existing, from pipeline) | #1 | None new — key already in env chain |
 | Anthropic (existing core stack) | #1, #2, #3, #5, #6, #7, #8 | None new |
 | GitHub PAT (optional Obsidian sync) | #10 | Low — personal token, no app review |
-| Blackboard REST (optional grade import, M4) | #3 | **High** — needs IE IT; manual-first design keeps it purely additive |
 | Google Calendar | #6 | Avoided entirely — one-way signed ICS export instead of OAuth |
 
-Zero mandatory OAuth-review integrations across all ten features; the only high-risk API is
-optional and additive.
+Zero mandatory OAuth-review integrations across all ten features — every external
+dependency is either already in the stack or an optional, low-risk personal token.
 
 ---
 
@@ -2752,7 +2730,7 @@ create table assessments (
   weight_percent numeric(5,2) not null,
   due_hint text,                 -- freeform from syllabus ("week 9")
   confirmed boolean not null default true,  -- false for unreviewed LLM extractions
-  source text not null default 'manual' check (source in ('manual','syllabus_extract','blackboard'))
+  source text not null default 'manual' check (source in ('manual','syllabus_extract'))
 );
 ```
 
@@ -3083,10 +3061,33 @@ Everything needed to run Study Dashboard for real, done the same day:
 **Goal:** By the end of M1, the user checks Study Dashboard every morning (This Week view) and
 uploads every lecture's materials (topic pages appear minutes later).
 
+**Progress (as of 2026-07-17):**
+
+- **Item 0 shipped** — renamed StudyOS → Alex's Study Dashboard, package scope `@studyos/*` →
+  `@study/*`, cockpit design system (dark-default, electric-blue OKLCH tokens, sharp radius, mono
+  `study.dashboard` wordmark), and all auth-email/user-facing copy. Committed + deployed.
+- **LMS REST-API integration dropped** — IE formally denied programmatic API access to student
+  accounts (2026-07-17), so all LMS-API content was removed from this plan; the calendar runs on
+  the university's ICS feed + manual entry only, and grades are entered manually. Do not
+  reintroduce it (see *External / platform limitations*).
+- **Item 1 in progress, NOT done** — the `semesters`/`courses`/`assessments` migration SQL is
+  written (`packages/db/supabase/migrations/20260716164334_foundation_semesters_courses_assessments.sql`)
+  but **not yet applied, type-regenerated, or committed**. Blocked: the Supabase connector is
+  scoped to a different org and must be re-pointed at the personal project
+  (`fvqnscvqysxreetwstgr`) before the migration can be applied. Course CRUD UI not started.
+- **External accounts/keys provisioned** (held; wiring lands with items 2/5/8): Anthropic key
+  live (local + Vercel); Inngest account + `INNGEST_EVENT_KEY`/`INNGEST_SIGNING_KEY` created;
+  Voyage AI `VOYAGE_API_KEY` created. Still to set (self-chosen, no account): `CRON_SECRET`,
+  `AI_KILL_SWITCH`, `AI_MONTHLY_BUDGET_USD`. Each new var still needs the full env checklist
+  (`env.ts`, `.env.example`, `turbo.json`, Vercel).
+- **Design deep-dive next** — the `impeccable` design skill is installed at
+  `.claude/skills/impeccable/`; a detailed design-system interview will expand the *Identity &
+  design* section and may refine the current baseline tokens before UI work scales up.
+
 | # | Work item | Effort | Spec |
 | --- | --- | --- | --- |
 | 0 | ✅ Rename to Alex's Study Dashboard + cockpit design system (scope `@study/*`, tokens, dark default, email copy) — shipped 2026-07-16 | S | Vision § Identity & design |
-| 1 | Foundation: `semesters`/`courses`/`assessments` migrations + course CRUD UI | S–M | Data model |
+| 1 | Foundation: `semesters`/`courses`/`assessments` migrations + course CRUD UI — ⏳ migration SQL written, not yet applied/committed (blocked on Supabase connector re-scope) | S–M | Data model |
 | 2 | Inngest wiring (`/api/inngest`, client, env, first no-op function) | S | Architecture |
 | 3 | Calendar hub CAL-1: provider interface, ical.js parsing + RRULE expansion w/ fixture tests, sync engine (dedup, tombstones), feed CRUD | M–L | Deadlines & calendar hub |
 | 4 | Calendar hub CAL-2: course matching, weight resolution + priority score, This Week view, structured quick-add, daily cron + staleness sync | M | Deadlines & calendar hub |
@@ -3103,7 +3104,7 @@ uploads every lecture's materials (topic pages appear minutes later).
 - Upload a real 40-page lecture deck → topic pages update within ~3 minutes, with
   per-block source chips that deep-link to the right slide; uploading session N+1
   *changes existing pages* (verified against a real course's decks).
-- Real Blackboard ICS feed synced; This Week shows deadlines ranked by grade impact;
+- Real university ICS feed synced; This Week shows deadlines ranked by grade impact;
   a moved/cancelled lecture reflects correctly across a DST boundary (fixture-tested).
 - Every new table has RLS policies; every AI call appears in `ai_generations` with cost;
   `AI_KILL_SWITCH=true` verifiably stops all spend.
@@ -3171,25 +3172,22 @@ real course schedule, with weak spots feeding the same daily review queue.
 - Sunday ritual produces a confirmed, persona-colored week that never double-books
   planner sessions; the analytics studio shows a real FSRS retention curve.
 
-### M4 — "The app is a product": polish, Blackboard API, interop
+### M4 — "The app is a product": polish, interop
 
-**Goal:** Close the loop on integrations and portability; harden for a second user.
+**Goal:** Close the loop on portability; harden for a second user.
 
 | # | Work item | Effort | Spec |
 | --- | --- | --- | --- |
-| 1 | Blackboard REST provider (OAuth config, delta sync, native grade weights) — *blocked on IE approval* | M | Calendar §4 (CAL-4), Additional #3 |
-| 2 | CT-5: SQL (DuckDB-WASM) and R (webR) runners | M each | Coding trainer |
-| 3 | Interop hub: Anki `.apkg` export → Obsidian vault export → personal API + MCP server | S+M+M | Additional #10 |
-| 4 | Data Lab (DuckDB-WASM SQL console over own-data snapshots) | M | Additional #9 |
-| 5 | Polish pass: a11y sweep, perf (React Compiler, `cacheComponents` evaluation), PWA push, error UX, empty states | M | — |
-| 6 | Multi-user hardening: second-account smoke test, invite flow, rate limiting on token surfaces | M | Data model §RLS |
+| 1 | CT-5: SQL (DuckDB-WASM) and R (webR) runners | M each | Coding trainer |
+| 2 | Interop hub: Anki `.apkg` export → Obsidian vault export → personal API + MCP server | S+M+M | Additional #10 |
+| 3 | Data Lab (DuckDB-WASM SQL console over own-data snapshots) | M | Additional #9 |
+| 4 | Polish pass: a11y sweep, perf (React Compiler, `cacheComponents` evaluation), PWA push, error UX, empty states | M | — |
+| 5 | Multi-user hardening: second-account smoke test, invite flow, rate limiting on token surfaces | M | Data model §RLS |
 
 **Definition of done**
 
 - Anki export imports cleanly into desktop Anki; Obsidian export opens as a working
   vault with wikilinks; "what's due this week?" answerable from Claude via MCP.
-- If approved: Blackboard REST replaces ICS for one course with zero engine/UI changes
-  (the provider-interface bet, proven).
 - A second account sees nothing of the first (automated E2E), and the app survives a
   Lighthouse + axe pass.
 
@@ -3204,7 +3202,7 @@ real course schedule, with weak spots feeding the same daily review queue.
 | **Topic-merge quality drift** — the LLM merge produces duplicated or mangled topic pages over a semester of uploads | Medium / High (it's the core promise) | Deterministic duplicate guard (embedding similarity ≥ 0.85 coerces create→update); immutable `topic_revisions` with one-click revert; eval-by-diff before any prompt-version bump; conflicts surfaced as `openQuestions`, never silently resolved |
 | **Slide decks tokenize heavier than modeled** (~2K/slide assumed; image-dense decks hit 3K+) → doc-structuring cost balloons | Medium / Medium | `ai_generations` rollup watched after first real decks; Batch API (−50%) on all pipeline calls; PPTX text path is 10× cheaper; budget guard defers background jobs at 100% of `AI_MONTHLY_BUDGET_USD` |
 | **Vercel Hobby limits bite** (300 s function ceiling, 1 cron/day) | Medium / Low | Inngest steps are each < 300 s by design; on-demand staleness sync makes daily cron a safety net only; Pro upgrade (800 s, unlimited crons) is the escape hatch, not a re-architecture |
-| **Blackboard ICS feed fidelity** — truncated windows, missing VTIMEZONE, no weights/categories | High / Medium | Tombstone grace period (24 h hide, 7 d delete); IANA fallback for naked TZIDs; weights come from `assessments` (manual/syllabus-extracted) rather than the feed; fixture tests on real feed exports |
+| **ICS feed fidelity** — truncated windows, missing VTIMEZONE, no weights/categories | High / Medium | Tombstone grace period (24 h hide, 7 d delete); IANA fallback for naked TZIDs; weights come from `assessments` (manual/syllabus-extracted) rather than the feed; fixture tests on real feed exports |
 | **TS 7 / ecosystem gap** (already hit at scaffold: Next 16 needs the JS compiler API) | Certain / Low | Pinned to TS 5.9 with a documented revisit; no code depends on TS 7 features |
 | **Node-side Pyodide for the lesson validation gate proves brittle on Vercel** | Medium / Low | Explicit spike early in CT-2; documented fallback = validate in-browser on first open ("checking lesson…" state) |
 | **Inngest vendor dependency** | Low / Medium | Free tier is ~75× above a heavy month's needs; functions are plain route-handler code — the step structure would port to Trigger.dev with mechanical effort; event names and job tables are ours |
@@ -3214,14 +3212,10 @@ real course schedule, with weak spots feeding the same daily review queue.
 
 ### External / platform limitations
 
-- **Blackboard REST API is approval-gated and may never arrive.** Everything is designed
-  manual-first + ICS-first; REST is purely additive (provider swap, `source` columns).
-  This is the single highest-uncertainty integration — hence M4 and optional.
-  **Update 2026-07-16:** the student-facing **ICS share link is confirmed available** in
-  IE's Blackboard (Alexander located it in the calendar UI) — M1's calendar source
-  needs no institutional involvement. A read-only REST-access request to IE's IT/LMS
-  team has been drafted so the weeks-long approval clock for M4 starts early; approval
-  remains uncertain and nothing depends on it.
+- **No LMS API access.** The university grants no programmatic API access to student
+  accounts, so the calendar runs entirely on the exported ICS feed and grades are entered
+  manually (or extracted from a syllabus behind a confirm step). This is the plan's
+  designed manual-first path — nothing depends on institutional API approval.
 - **Supabase auth emails — resolved in M0.5**: the built-in SMTP (and its ~2/hour
   limit) is out of the loop; the Send Email Hook delivers via Resend from a verified
   domain. Supabase's per-address cooldown between magic-link requests still applies and
@@ -3248,14 +3242,15 @@ real course schedule, with weak spots feeding the same daily review queue.
 
 1. **Supabase + Vercel projects** — ✅ done 2026-07-16: both projects live, envs set
    locally and on Vercel, production deployed, Resend account + sending domain
-   verified. Still to provide as M1 lands: `INNGEST_*`, `VOYAGE_API_KEY`,
-   `CRON_SECRET`; accounts needed then: Inngest (free), Voyage AI (free tier covers
-   years). The Supabase Free plan suffices — every upload fits its 50 MB per-file cap.
-2. **The ICS feed URL(s)** from Blackboard — ✅ partially resolved 2026-07-16: the ICS
-   share link is confirmed to exist in IE's Blackboard calendar. Still to hand over
-   when CAL-1 lands: the URL itself (treated as a secret — it embeds a capability
-   token), whether it's one global feed or per-course, and a raw `.ics` export saved
-   into the repo's test fixtures.
+   verified. **Accounts/keys provisioned 2026-07-17:** Anthropic key live (local +
+   Vercel), Inngest account + `INNGEST_EVENT_KEY`/`INNGEST_SIGNING_KEY`, Voyage AI
+   `VOYAGE_API_KEY`. Still to set (self-chosen, no account): `CRON_SECRET`,
+   `AI_KILL_SWITCH`, `AI_MONTHLY_BUDGET_USD`. The Supabase Free plan suffices — every
+   upload fits its 50 MB per-file cap.
+2. **The ICS feed URL(s)** from the university calendar — ✅ confirmed to exist
+   2026-07-16. Still to hand over when CAL-1 lands: the URL itself (treated as a
+   secret — it embeds a capability token), whether it's one global feed or per-course,
+   and a raw `.ics` export saved into the repo's test fixtures.
 3. **One real course bundle for pipeline evaluation** — 2–3 lecture decks (incl. one
    image-heavy) and one reading PDF. The merge algorithm gets tuned
    against real material, not synthetic fixtures.
