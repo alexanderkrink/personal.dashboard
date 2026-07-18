@@ -39,7 +39,12 @@ export function GateForm({ invalid }: { invalid: boolean }) {
         autoCapitalize="off"
         autoCorrect="off"
         spellCheck={false}
-        className="h-11 text-center font-mono text-mono-data tracking-[0.35em] placeholder:tracking-[0.35em]"
+        // `md:text-mono-data` is not redundant: the Input primitive carries
+        // `text-base md:text-sm`, and tailwind-merge keys responsive variants
+        // separately from unprefixed ones — so a bare `text-mono-data` replaces
+        // `text-base` but loses to `md:text-sm` from 768px up, silently
+        // rendering the gate at 14px instead of the 13px token.
+        className="h-11 text-center font-mono text-mono-data md:text-mono-data tracking-[0.35em] placeholder:tracking-[0.35em]"
       />
 
       {invalid ? (
