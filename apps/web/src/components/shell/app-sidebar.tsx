@@ -4,7 +4,7 @@ import { SidebarSimple, SignOut } from "@phosphor-icons/react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { signOut } from "@/app/auth/actions";
-import { FOCUS_RING_SIDEBAR } from "@/components/shell/focus-ring";
+import { FOCUS_RING } from "@/components/shell/focus-ring";
 import { isNavItemActive, NAV_ITEMS, type NavItem } from "@/components/shell/nav-items";
 import { Wordmark } from "@/components/shell/wordmark";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -28,7 +28,7 @@ function SidebarNavLink({ item, collapsed }: { item: NavItem; collapsed: boolean
         // compact 36px row is for mice only.
         "pointer-coarse:h-11",
         collapsed ? "justify-center px-0" : "gap-2.5 px-2.5",
-        FOCUS_RING_SIDEBAR,
+        FOCUS_RING,
         active
           ? "bg-accent-subtle font-medium text-foreground"
           : "font-normal text-muted-foreground hover:bg-muted hover:text-foreground",
@@ -100,7 +100,7 @@ export function AppSidebar({
         {collapsed ? (
           <span aria-hidden="true" className="dot-motif size-1.5" />
         ) : (
-          <Link href="/" className={cn("rounded-md", FOCUS_RING_SIDEBAR)}>
+          <Link href="/" className={cn("rounded-md", FOCUS_RING)}>
             <Wordmark />
           </Link>
         )}
@@ -130,7 +130,7 @@ export function AppSidebar({
               "flex h-9 w-full items-center rounded-md text-muted-foreground text-ui-base transition-colors duration-fast ease-out-quart hover:bg-muted hover:text-foreground",
               "pointer-coarse:h-11",
               collapsed ? "justify-center px-0" : "gap-2.5 px-2.5",
-              FOCUS_RING_SIDEBAR,
+              FOCUS_RING,
             )}
           >
             <SignOut aria-hidden="true" className="size-5 shrink-0" />
@@ -145,7 +145,7 @@ export function AppSidebar({
             "mt-0.5 flex h-9 w-full items-center rounded-md text-muted-foreground text-ui-base transition-colors duration-fast ease-out-quart hover:bg-muted hover:text-foreground",
             "pointer-coarse:h-11",
             collapsed ? "justify-center px-0" : "gap-2.5 px-2.5",
-            FOCUS_RING_SIDEBAR,
+            FOCUS_RING,
           )}
         >
           <SidebarSimple aria-hidden="true" className="size-5 shrink-0" />

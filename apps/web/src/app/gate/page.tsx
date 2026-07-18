@@ -17,17 +17,14 @@ export const metadata: Metadata = {
  * one line of copy. It confirms nothing about what is behind it and does not
  * mention sign-in or sign-up at all.
  */
-export default async function GatePage({
-  searchParams,
-}: {
-  searchParams: Promise<{ status?: string }>;
-}) {
-  const { status } = await searchParams;
-
+export default function GatePage() {
   return (
     <main className="flex min-h-svh flex-col items-center justify-center gap-12 px-6 py-16">
       <Wordmark />
-      <GateForm invalid={status === "invalid"} />
+      {/* A rejected code used to come back as `?status=invalid`, which remounted
+          this page and wiped the field. The rejection is form state now, so the
+          URL stays clean and nothing is retyped. */}
+      <GateForm />
       <p className="text-center text-muted-foreground text-ui-sm">By invitation.</p>
     </main>
   );

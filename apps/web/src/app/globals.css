@@ -104,6 +104,8 @@
     --color-secondary-foreground: var(--secondary-foreground);
     --color-border: var(--border);
     --color-input: var(--input);
+    /* Deliberately NOT the same slot as --border. See the declaration below. */
+    --color-input-border: var(--input-border);
     --color-ring: var(--ring);
 
     /* ---- Azure accent ---- */
@@ -210,7 +212,28 @@
   --foreground: oklch(0.21 0.02 237); /* primary ink ~#1c2531 */
   --muted-foreground: oklch(0.45 0.02 237); /* AA on canvas ~#5b6675 */
   --border: oklch(0.9 0.008 237); /* hairline    ~#dde1e8 */
-  --input: oklch(0.9 0.008 237);
+  --input: oklch(0.9 0.008 237); /* control FILL + disabled wash, not its edge */
+
+  /*
+   * The interactive-control edge, kept as its own token on purpose.
+   *
+   * `--border` is the DECORATIVE hairline that draws PLAN's elevation system
+   * (panel edges, table row separators, dividers). It is supposed to be quiet,
+   * and at 1px it reads as a hairline precisely because it is low-contrast.
+   * A form control's edge is a different thing: it is the only visual boundary
+   * of a non-text UI component, so WCAG 2.2 SC 1.4.11 requires 3:1 against the
+   * adjacent surface. Raising `--border` itself to clear 3:1 would repaint every
+   * panel and table rule in the app and flatten the e0/e1/e2 stack into a
+   * wireframe — hairline is an aesthetic, low-contrast is not. Splitting the two
+   * keeps the hairline aesthetic on decoration and pays the 3:1 where the
+   * success criterion actually applies. Inputs stay 1px; only the value changes.
+   *
+   * Measured with CSS Color 4 §13.2 gamut mapping (hold L and hue, reduce
+   * chroma) rather than naive channel clipping, which reports optimistically for
+   * this palette: 3.58:1 on --surface, 3.42:1 on --background, 3.28:1 on
+   * --muted. Was 1.33:1 when this slot was --border.
+   */
+  --input-border: oklch(0.62 0.02 237);
 
   --primary: oklch(0.52 0.16 237); /* azure btn fill; white text ~5.0:1 (AA) */
   --primary-foreground: oklch(0.99 0.005 237);
@@ -365,7 +388,12 @@
   --foreground: oklch(0.94 0.006 237); /* primary ink ~#e9ecf1 */
   --muted-foreground: oklch(0.7 0.012 237); /* AA on card ~#9aa4b2 */
   --border: oklch(0.94 0.01 237 / 10%); /* hairline */
-  --input: oklch(0.94 0.01 237 / 14%);
+  --input: oklch(0.94 0.01 237 / 14%); /* control FILL + disabled wash */
+  /* See the light column for why this is not --border. On dark the control's
+   * own `bg-input/30` fill is the tightest adjacent colour, not the page:
+   * 4.12:1 against that fill and 6.77:1 against --surface (was 2.25:1 / 3.69:1).
+   * Alpha rather than a solid keeps it composing over every surface tier. */
+  --input-border: oklch(0.94 0.01 237 / 35%);
 
   --primary: oklch(0.54 0.15 237); /* white text ~4.8:1 (AA, tight — do not brighten) */
   --primary-foreground: oklch(0.99 0.005 237);
@@ -535,6 +563,47 @@
 @utility duration-slow {
   --tw-duration: var(--duration-slow);
   transition-duration: var(--duration-slow);
+}
+
+/*
+ * THE focus treatment (PLAN.md "Elevation & surfaces": "2px --ring (bright
+ * azure) + 2px offset in the surface color, always visible"). One utility,
+ * `focus-ring`, on every focusable in the app.
+ *
+ * `outline`, not `ring`. Three reasons, all of them load-bearing:
+ *
+ *  1. The 2px offset is genuinely TRANSPARENT, so the gap shows whatever surface
+ *     the control actually sits on. A `ring-offset-*` colour has to be named at
+ *     the call site, which means the same button carries the wrong gap colour
+ *     when it moves from the canvas onto a card, a popover or the sidebar.
+ *  2. `outline` is painted outside the border box and never participates in
+ *     layout, so nothing reflows on focus.
+ *  3. The registry's 3px ring at 50% alpha measured 1.60:1 in light and 4.07:1
+ *     in dark against the canvas — the light theme was passing SC 1.4.11 only
+ *     by way of the 1px border underneath it, which is not a focus indicator.
+ *     At full opacity `--ring` measures 3.96:1 on --background, 4.14:1 on
+ *     --surface and 3.79:1 on --muted in light, and 7.14 / 6.89 / 6.14:1 in
+ *     dark (CSS Color 4 §13.2 gamut-mapped).
+ *
+ * The outline is present but transparent when unfocused: it costs nothing, it
+ * keeps Windows High Contrast mode able to paint it, and only `outline-color`
+ * animates. Components must NOT pair this with `outline-none`, which would win
+ * on source order in the unfocused state and fight it.
+ */
+@utility focus-ring {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  transition: outline-color var(--duration-fast) var(--ease-out-quart);
+
+  &:focus-visible {
+    outline-color: var(--ring);
+  }
+
+  /* An invalid control keeps the identical geometry and swaps hue, so the ring
+   * never has to compete with the danger border for meaning. */
+  &[aria-invalid="true"]:focus-visible {
+    outline-color: var(--destructive);
+  }
 }
 
 @layer components {

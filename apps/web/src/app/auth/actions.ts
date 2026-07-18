@@ -4,15 +4,23 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { emailSchema, existingPasswordSchema, passwordSchema } from "@/lib/auth/password";
+import { type FormState, formError, toFormState } from "@/lib/forms/form-state";
 import { createClient } from "@/lib/supabase/server";
 
 /**
  * Auth Server Actions. Every one of them parses its FormData through Zod
- * before anything reaches Supabase — the boundary rule in CLAUDE.md — and
- * reports back by redirecting with a `?status=` code that the page maps to
- * copy. Statuses are deliberately coarse on the sign-in path: "wrong email" and
- * "wrong password" collapse into one message so the form is not an account
- * enumeration oracle.
+ * before anything reaches Supabase — the boundary rule in CLAUDE.md.
+ *
+ * Failures RETURN a `FormState`; they do not redirect. A redirect remounts the
+ * route and wipes every field the visitor typed, which is WCAG 2.2 SC 3.3.7
+ * (Redundant Entry). Success still redirects, because that is a real navigation.
+ *
+ * Statuses stay deliberately coarse on the sign-in path: "wrong email" and
+ * "wrong password" collapse into one form-level message, attached to no field,
+ * so the form is not an account-enumeration oracle.
+ *
+ * Only the actions the forms actually post to are exported: every export of a
+ * `"use server"` module is a callable endpoint, so helpers stay module-private.
  */
 
 /**
@@ -31,6 +39,18 @@ async function requestOrigin(): Promise<string> {
   return host ? `${protocol}://${host}` : "";
 }
 
+/** The email is the only value ever echoed back into `values` — never a password. */
+function submittedEmail(formData: FormData): Record<string, string> {
+  const email = formData.get("email");
+  return typeof email === "string" ? { email } : {};
+}
+
+const RATE_LIMITED = "An email went out recently. Give it a minute, then try again.";
+const GENERIC_FAILURE = "Something went wrong. Please try again.";
+const WEAK_PASSWORD = "That password was rejected as too weak. Try a longer, less predictable one.";
+
+const emailOnlySchema = z.object({ email: emailSchema });
+
 const credentialsSchema = z.object({
   email: emailSchema,
   password: existingPasswordSchema,
@@ -47,14 +67,60 @@ const signUpSchema = z
     message: "Those two passwords do not match.",
   });
 
-/** Email + password sign-in. */
-export async function signIn(formData: FormData) {
+const updatePasswordSchema = z
+  .object({ password: passwordSchema, confirmPassword: z.string() })
+  .refine((value) => value.password === value.confirmPassword, {
+    path: ["confirmPassword"],
+    message: "Those two passwords do not match.",
+  });
+
+/** Secondary path on the sign-in form: a one-time sign-in link. */
+async function sendMagicLink(formData: FormData): Promise<FormState> {
+  const values = submittedEmail(formData);
+  const parsed = emailOnlySchema.safeParse({ email: formData.get("email") });
+  if (!parsed.success) {
+    return toFormState(parsed.error, values);
+  }
+
+  const supabase = await createClient();
+  const { error } = await supabase.auth.signInWithOtp({
+    email: parsed.data.email,
+    options: { emailRedirectTo: `${await requestOrigin()}/auth/callback` },
+  });
+
+  if (!error) {
+    return {
+      status: "success",
+      message: "Check your inbox — a one-time sign-in link is on its way.",
+      values,
+    };
+  }
+  if (error.code === "over_email_send_rate_limit") {
+    return { status: "info", message: RATE_LIMITED, values };
+  }
+  return formError(GENERIC_FAILURE, values);
+}
+
+/**
+ * Email + password sign-in, plus the magic-link path.
+ *
+ * Both live on one form so the email is typed once, and one action serves both
+ * so `useActionState` has a single state to own. The magic-link submit button
+ * carries `name="intent" value="magic-link"` — a submitter's own name/value is
+ * how it tells the action which of a form's two jobs it is asking for.
+ */
+export async function signIn(_previous: FormState, formData: FormData): Promise<FormState> {
+  if (formData.get("intent") === "magic-link") {
+    return sendMagicLink(formData);
+  }
+
+  const values = submittedEmail(formData);
   const parsed = credentialsSchema.safeParse({
     email: formData.get("email"),
     password: formData.get("password"),
   });
   if (!parsed.success) {
-    redirect("/login?status=invalid-credentials");
+    return toFormState(parsed.error, values);
   }
 
   const supabase = await createClient();
@@ -64,21 +130,23 @@ export async function signIn(formData: FormData) {
     redirect("/");
   }
   if (error.code === "email_not_confirmed") {
-    redirect("/login?status=unconfirmed");
+    return formError("Confirm your email first — the link is in your inbox.", values);
   }
-  redirect("/login?status=invalid-credentials");
+  // Form-level, and attached to NO field: naming the wrong half would leak
+  // whether the address is registered.
+  return formError("That email and password don't match an account.", values);
 }
 
 /** Self-serve sign-up. Supabase emails a confirmation via the Resend hook. */
-export async function signUp(formData: FormData) {
+export async function signUp(_previous: FormState, formData: FormData): Promise<FormState> {
+  const values = submittedEmail(formData);
   const parsed = signUpSchema.safeParse({
     email: formData.get("email"),
     password: formData.get("password"),
     confirmPassword: formData.get("confirmPassword"),
   });
   if (!parsed.success) {
-    const [issue] = parsed.error.issues;
-    redirect(`/signup?status=invalid&message=${encodeURIComponent(issue?.message ?? "")}`);
+    return toFormState(parsed.error, values);
   }
 
   const supabase = await createClient();
@@ -91,79 +159,61 @@ export async function signUp(formData: FormData) {
   });
 
   if (!error) {
-    redirect("/signup?status=check-inbox");
+    return {
+      status: "success",
+      message:
+        "Account created. Confirm your email address from the link we just sent, then sign in.",
+      values,
+    };
   }
   if (error.code === "over_email_send_rate_limit") {
-    redirect("/signup?status=rate-limited");
+    return { status: "info", message: RATE_LIMITED, values };
   }
   if (error.code === "weak_password") {
-    redirect("/signup?status=weak-password");
+    return { status: "error", fieldErrors: { password: WEAK_PASSWORD }, values };
   }
-  redirect("/signup?status=error");
-}
-
-/** Secondary path: a one-time sign-in link, for when the password is forgotten mid-flow. */
-export async function sendMagicLink(formData: FormData) {
-  const parsed = emailSchema.safeParse(formData.get("email"));
-  if (!parsed.success) {
-    redirect("/login?status=invalid-email");
-  }
-
-  const supabase = await createClient();
-  const { error } = await supabase.auth.signInWithOtp({
-    email: parsed.data,
-    options: { emailRedirectTo: `${await requestOrigin()}/auth/callback` },
-  });
-
-  if (!error) {
-    redirect("/login?status=link-sent");
-  }
-  redirect(
-    error.code === "over_email_send_rate_limit"
-      ? "/login?status=rate-limited"
-      : "/login?status=error",
-  );
+  return formError(GENERIC_FAILURE, values);
 }
 
 /**
  * Starts a password reset. Always reports success — telling the visitor whether
  * an address is registered would be an enumeration oracle.
  */
-export async function requestPasswordReset(formData: FormData) {
-  const parsed = emailSchema.safeParse(formData.get("email"));
+export async function requestPasswordReset(
+  _previous: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const values = submittedEmail(formData);
+  const parsed = emailOnlySchema.safeParse({ email: formData.get("email") });
   if (!parsed.success) {
-    redirect("/forgot-password?status=invalid-email");
+    return toFormState(parsed.error, values);
   }
 
   const supabase = await createClient();
-  const { error } = await supabase.auth.resetPasswordForEmail(parsed.data, {
+  const { error } = await supabase.auth.resetPasswordForEmail(parsed.data.email, {
     redirectTo: `${await requestOrigin()}/auth/update-password`,
   });
 
   if (error?.code === "over_email_send_rate_limit") {
-    redirect("/forgot-password?status=rate-limited");
+    return { status: "info", message: RATE_LIMITED, values };
   }
-  redirect("/forgot-password?status=check-inbox");
+  return {
+    status: "success",
+    message: "If that address has an account, a reset link is on its way to it.",
+    values,
+  };
 }
 
-const updatePasswordSchema = z
-  .object({ password: passwordSchema, confirmPassword: z.string() })
-  .refine((value) => value.password === value.confirmPassword, {
-    path: ["confirmPassword"],
-    message: "Those two passwords do not match.",
-  });
-
 /** Finishes a password reset. Requires the recovery session /auth/confirm minted. */
-export async function updatePassword(formData: FormData) {
+export async function updatePassword(_previous: FormState, formData: FormData): Promise<FormState> {
   const parsed = updatePasswordSchema.safeParse({
     password: formData.get("password"),
     confirmPassword: formData.get("confirmPassword"),
   });
   if (!parsed.success) {
-    const [issue] = parsed.error.issues;
-    redirect(
-      `/auth/update-password?status=invalid&message=${encodeURIComponent(issue?.message ?? "")}`,
-    );
+    // No `values`: both fields here are passwords, and a password is never
+    // echoed back into the document.
+    return toFormState(parsed.error);
   }
 
   const supabase = await createClient();
@@ -173,9 +223,9 @@ export async function updatePassword(formData: FormData) {
     redirect("/");
   }
   if (error.code === "weak_password") {
-    redirect("/auth/update-password?status=weak-password");
+    return { status: "error", fieldErrors: { password: WEAK_PASSWORD } };
   }
-  redirect("/auth/update-password?status=error");
+  return formError(GENERIC_FAILURE);
 }
 
 export async function signOut() {

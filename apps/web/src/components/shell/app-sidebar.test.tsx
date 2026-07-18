@@ -60,6 +60,23 @@ describe("AppSidebar active route", () => {
     expect(activeIcon?.innerHTML).not.toEqual(inactiveIcon?.innerHTML);
   });
 
+  /**
+   * The focus treatment is a single utility (`focus-ring` in globals.css) so
+   * that PLAN's "2px --ring + 2px offset, always visible" cannot drift per
+   * component. The sidebar used to carry its own `FOCUS_RING_SIDEBAR` variant,
+   * which existed only to re-declare a ring-offset colour; an `outline` with a
+   * transparent offset is correct on every surface, so there is one again.
+   */
+  it("gives every focusable in the rail the one focus treatment", () => {
+    renderSidebar("/");
+
+    for (const label of ["Dashboard", "Courses", "Calendar", "Documents"]) {
+      expect(navLink(label)).toHaveClass("focus-ring");
+    }
+    expect(screen.getByRole("button", { name: "Sign out" })).toHaveClass("focus-ring");
+    expect(screen.getByRole("button", { name: "Collapse sidebar" })).toHaveClass("focus-ring");
+  });
+
   it("treats `/` as an exact match so a subroute does not light the Dashboard", () => {
     renderSidebar("/courses/some-course-id");
 

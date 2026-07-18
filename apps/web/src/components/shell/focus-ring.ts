@@ -1,12 +1,14 @@
 /**
  * The one focus treatment (PLAN.md "Elevation & surfaces" / "Mobile / PWA &
  * accessibility"): 2px bright-azure ring + 2px offset in the surface colour,
- * always visible. Every focusable in the shell composes this; nothing may
- * replace it with `outline-none` alone.
+ * always visible. Every focusable in the app composes this; nothing may replace
+ * it with `outline-none` alone.
+ *
+ * The implementation is the `focus-ring` utility in `globals.css`, which uses a
+ * real `outline` so the 2px offset is transparent and therefore picks up
+ * whichever surface the control is actually standing on. That is also why the
+ * sidebar no longer needs a variant of its own: `FOCUS_RING_SIDEBAR` existed
+ * only to re-declare the ring-offset colour against `--sidebar`, and a
+ * transparent offset is correct on every surface by construction.
  */
-export const FOCUS_RING =
-  "outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background";
-
-/** Same ring, offset against the sidebar surface rather than the app canvas. */
-export const FOCUS_RING_SIDEBAR =
-  "outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar";
+export const FOCUS_RING = "focus-ring";

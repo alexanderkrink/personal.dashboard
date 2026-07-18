@@ -74,7 +74,9 @@ function CommandInput({
 }: React.ComponentProps<typeof CommandPrimitive.Input>) {
   return (
     <div data-slot="command-input-wrapper" className="p-1 pb-0">
-      <InputGroup className="h-8! rounded-lg! border-input/30 bg-input/30 shadow-none! *:data-[slot=input-group-addon]:pl-2!">
+      {/* `border-input/30` was a decorative 30%-of-a-hairline edge on a real
+          form control; `--input-border` is the 3:1 control edge (globals.css). */}
+      <InputGroup className="h-8! rounded-lg! border-input-border bg-input/30 shadow-none! *:data-[slot=input-group-addon]:pl-2!">
         <CommandPrimitive.Input
           data-slot="command-input"
           className={cn(

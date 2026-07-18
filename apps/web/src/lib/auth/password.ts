@@ -20,8 +20,21 @@ export const MIN_PASSWORD_LENGTH = 12;
 /**
  * bcrypt silently truncates beyond 72 BYTES, so anything longer gives a false
  * sense of strength. Rejecting is honest; GoTrue enforces the same ceiling.
+ *
+ * BYTES, not characters — the distinction is the whole point. `"é".length` is 1
+ * but it is 2 bytes in UTF-8, and an emoji is 4; a 72-CHARACTER passphrase in
+ * any non-ASCII script therefore sails past a `.length` check and is then
+ * truncated by bcrypt, so everything the user typed past byte 72 silently stops
+ * protecting the account. Counting characters here also disagreed with GoTrue,
+ * which counts bytes — so such a password passed our schema and was rejected
+ * downstream anyway.
  */
-export const MAX_PASSWORD_LENGTH = 72;
+export const MAX_PASSWORD_BYTES = 72;
+
+/** UTF-8 byte length, which is what bcrypt and GoTrue both measure. */
+export function passwordByteLength(value: string): number {
+  return new TextEncoder().encode(value).length;
+}
 
 /** The exact symbol set GoTrue counts as a symbol. Order is irrelevant. */
 const SYMBOLS = "!@#$%^&*()_+-=[]{};'\\:\"|<>?,./`~";
@@ -58,7 +71,9 @@ export function evaluatePassword(value: string): { label: string; satisfied: boo
  */
 export const passwordSchema = z
   .string()
-  .max(MAX_PASSWORD_LENGTH, `Use at most ${MAX_PASSWORD_LENGTH} characters.`)
+  .refine((value) => passwordByteLength(value) <= MAX_PASSWORD_BYTES, {
+    message: `Use at most ${MAX_PASSWORD_BYTES} bytes — accented letters and emoji count as more than one each.`,
+  })
   .superRefine((value, context) => {
     const unmet = PASSWORD_RULES.filter((rule) => !rule.test(value));
     if (unmet.length === 0) return;
