@@ -9,6 +9,11 @@ import { z } from "zod";
 export const env = createEnv({
   server: {
     SUPABASE_SECRET_KEY: z.string().min(1),
+    // The single shared access code guarding the whole auth surface. Required —
+    // an empty or missing code would silently open /login and /signup to the
+    // internet, so the build must fail instead. Rotating = changing this value;
+    // every issued gate cookie is derived from it and dies with it.
+    ACCESS_CODE: z.string().min(8),
     ANTHROPIC_API_KEY: z.string().min(1).optional(),
     // Auth emails via Resend (Supabase Send Email Hook). Optional so local dev
     // and CI build without them; the hook route 500s with a clear message if unset.
@@ -22,6 +27,7 @@ export const env = createEnv({
   },
   runtimeEnv: {
     SUPABASE_SECRET_KEY: process.env.SUPABASE_SECRET_KEY,
+    ACCESS_CODE: process.env.ACCESS_CODE,
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
     RESEND_API_KEY: process.env.RESEND_API_KEY,
     SEND_EMAIL_HOOK_SECRET: process.env.SEND_EMAIL_HOOK_SECRET,
