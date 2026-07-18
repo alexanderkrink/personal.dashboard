@@ -315,6 +315,73 @@ describe("user_locked_fields (§3.3)", () => {
     expect(state.items[0]?.course_id).toBe("course-mkt");
   });
 
+  /**
+   * ⚠ Archiving a course must not orphan its history.
+   *
+   * An archived course leaves the match context — that is what stops it
+   * claiming newly synced events. Its already-linked rows then match nothing,
+   * and before `preserveCourseLink` the diff wrote `course_id → null` on every
+   * one of them, tipping a whole archived course into the Unassigned bucket.
+   *
+   * The required semantics, asserted here: **archiving excludes a course from
+   * NEW matching; existing links survive.**
+   */
+  it("keeps existing course links when the course is archived out of the match context", async () => {
+    const { store, state } = createMemoryStore({
+      context: {
+        timezone: "Europe/Madrid",
+        courses: [
+          {
+            id: "course-algo",
+            code: null,
+            title: "ALGORITHMS & DATA STRUCTURES",
+            total_sessions: 30,
+          },
+        ],
+        matchers: [],
+        assessments: [],
+        semesters: [],
+      },
+    });
+
+    events.current = [lecture("uid-G", "2026-09-10T08:00:00.000Z")];
+    await syncFeed(store, "feed-1", at(0));
+    expect(state.items[0]?.course_id).toBe("course-algo");
+    expect(state.items[0]?.user_locked_fields).toEqual([]);
+
+    // Archiving is exactly this: the course stops being offered to the matcher.
+    state.context.courses = [];
+
+    await syncFeed(store, "feed-1", at(1));
+    await syncFeed(store, "feed-1", at(2));
+
+    // Still filed. Not in the Unassigned bucket.
+    expect(state.items[0]?.course_id).toBe("course-algo");
+  });
+
+  it("still assigns a course to an item that has none", async () => {
+    const { store, state } = createMemoryStore({
+      context: {
+        timezone: "Europe/Madrid",
+        courses: [],
+        matchers: [],
+        assessments: [],
+        semesters: [],
+      },
+    });
+
+    events.current = [lecture("uid-H", "2026-09-10T08:00:00.000Z")];
+    await syncFeed(store, "feed-1", at(0));
+    expect(state.items[0]?.course_id).toBeNull();
+
+    // The guard is one-directional: it protects a link, it does not block one.
+    state.context.courses = [
+      { id: "course-algo", code: null, title: "ALGORITHMS & DATA STRUCTURES", total_sessions: 30 },
+    ];
+    await syncFeed(store, "feed-1", at(1));
+    expect(state.items[0]?.course_id).toBe("course-algo");
+  });
+
   it("still fills a locked field on FIRST insert, since there is nothing to protect yet", async () => {
     // A lock protects an existing value. On an insert there is none, and title
     // is `not null` — so a lock must not produce a row that cannot be written.

@@ -29,6 +29,7 @@ import {
   occurrenceFingerprint,
   planOrphanedOccurrences,
   planTombstones,
+  preserveCourseLink,
   toOccurrencePayload,
   toSyncedItemPayload,
 } from "./diff";
@@ -189,7 +190,14 @@ async function runSync(
     //     user edit yet to protect.
     if (existing) {
       itemIdByUid.set(event.uid, existing.id);
-      const allowed = applyLocks(payload, existing.user_locked_fields);
+      // Matching is additive: "no match" never strips a course this row already
+      // has. Applied before the locks so the guard covers unlocked rows too —
+      // which is every row the user has not personally filed, i.e. all the ones
+      // archiving a course would otherwise have orphaned.
+      const allowed = applyLocks(
+        preserveCourseLink(payload, existing),
+        existing.user_locked_fields,
+      );
       const patch: Record<string, unknown> = {
         ...changedFields(allowed, existing as unknown as Record<string, unknown>),
       };

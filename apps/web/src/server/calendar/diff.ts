@@ -127,6 +127,40 @@ export function withLockedField(lockedFields: readonly string[], field: string):
   return [...new Set([...lockedFields, field])].sort();
 }
 
+/**
+ * Stops a failed course match from **unassigning** an item that already has a
+ * course (§5.1).
+ *
+ * `matchCourse` returns `null` for "the chain did not answer", and
+ * `toSyncedItemPayload` copies that straight into `course_id`. On an existing
+ * row that is a destructive difference: the diff sees `courseId → null` and
+ * writes it, silently tipping the item into the Unassigned bucket.
+ *
+ * ⚠ **Verified 2026-07-19 to be reachable.** Archiving a course is the trigger.
+ * The archived course drops out of the match context, so every one of its
+ * already-linked items stops matching, and the next sync empties `course_id` on
+ * all of them — archiving `ATTENTION MANAGEMENT FOR LEARNING` would have dumped
+ * its 2 items into a bucket that is meant to hold things needing a decision.
+ * The same hole fires on a course rename and on a deleted `course_matchers` row.
+ *
+ * The rule this encodes: **matching is additive.** It may give an unassigned
+ * item a course; it may move an item between courses when it positively
+ * identifies a different one; it may never take a course away on the strength of
+ * having no opinion. Losing a link is a decision, and no decision was made here.
+ *
+ * Locks are the user's veto and are applied separately — this guard covers the
+ * unlocked rows, which is where the damage was.
+ */
+export function preserveCourseLink<T extends { course_id?: string | null }>(
+  payload: T,
+  existing: { course_id: string | null },
+): T {
+  if (payload.course_id !== null || existing.course_id === null) return payload;
+
+  const { course_id: _dropped, ...rest } = payload;
+  return rest as T;
+}
+
 /* -------------------------------------------------------------------------- */
 /* Row-level diff (§3.2 layer 3)                                              */
 /* -------------------------------------------------------------------------- */

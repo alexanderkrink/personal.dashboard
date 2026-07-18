@@ -82,7 +82,19 @@ export function createSupabaseCalendarStore(supabase: SupabaseAdminClient): Cale
     async loadContext(userId): Promise<SyncContext> {
       const [profile, courses, matchers, assessments, semesters] = await Promise.all([
         supabase.from("profiles").select("timezone").eq("id", userId).maybeSingle(),
-        supabase.from("courses").select("id, code, title, total_sessions").eq("user_id", userId),
+        // Archived courses are excluded from MATCHING, not from the data.
+        //
+        // Archiving means "I am done with this course" — it must stop claiming
+        // newly synced events, or a course archived in June keeps absorbing
+        // events forever. What it must NOT do is break the links it already
+        // has, and it does not: `preserveCourseLink` stops a now-unmatchable
+        // course being nulled out of its existing rows, so archiving moves a
+        // course out of the way without dropping its history into Unassigned.
+        supabase
+          .from("courses")
+          .select("id, code, title, total_sessions")
+          .eq("user_id", userId)
+          .eq("archived", false),
         supabase.from("course_matchers").select("course_id, pattern").eq("user_id", userId),
         supabase
           .from("assessments")
