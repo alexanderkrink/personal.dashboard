@@ -6,10 +6,10 @@
 > guessing. Read `CLAUDE.md` for repo conventions first; this document covers *what* to
 > build, *why*, and *how*.
 
-**Status:** M0 + M0.5 shipped (renamed to Alex's Study Dashboard; interim cockpit design
-system live in production). Complete design system specified 2026-07-17 (see *Identity &
-design*) — the shipped electric-blue baseline is superseded by the azure analyst-terminal
-system, which UI work implements from M1 onward. M1 in progress — see the M1 progress note.
+**Status:** M0 + M0.5 shipped (renamed to Alex's Study Dashboard). Complete design system
+specified 2026-07-17 (see *Identity & design*) and **implemented 2026-07-18** in M1 Wave 1
+(items 13a + 13b) — the azure analyst-terminal system is live in production and the interim
+electric-blue cockpit baseline is gone. M1 in progress — see the M1 progress note.
 This plan covers M1–M4.
 **Last updated:** 2026-07-18.
 
@@ -74,14 +74,15 @@ upload / capture  →  structured knowledge (topic pages)  →  practice artifac
    append-only event stream makes the user's own learning analyzable — fitting for an
    analytics degree.
 
-### Identity & design (design system — decided 2026-07-16, fully specified 2026-07-17)
+### Identity & design (design system — decided 2026-07-16, specified 2026-07-17, **implemented 2026-07-18**)
 
 This is the complete visual design system for Alex's Study Dashboard, decided explicitly
 by Alexander in a structured design interview (2026-07-17) run against the `impeccable`
-skill's product register. It supersedes the shipped M0.5 baseline: the app currently runs
-an "electric-blue cockpit" (see [M1 progress](#m1--the-app-is-useful-every-day-deadlines--document-pipeline-v1),
-item 0); the values below are the **target** system that UI work implements from here on.
-Nothing about the product name, domain, or package scope changes.
+skill's product register. It **replaced** the shipped M0.5 "electric-blue cockpit" baseline
+(see [M1 progress](#m1--the-app-is-useful-every-day-deadlines--document-pipeline-v1), item 0),
+which was ported out in M1 Wave 1 (items 13a + 13b, merged 2026-07-18). The values below are
+the **live** system in `apps/web/src/app/globals.css`, not a target; corrections found while
+implementing are marked inline. Nothing about the product name, domain, or package scope changes.
 
 Everything here is implementable inside the CLAUDE.md constraints: Tailwind v4 `@theme`
 tokens + shadcn/ui on Base UI (Nova preset, `render` prop not `asChild`), fonts as
@@ -379,7 +380,8 @@ carrying most of the elevation work; radius never exceeds 12px on any card (no o
 
 #### Iconography
 
-**Phosphor** (`@phosphor-icons/react`) — migrate off the currently-installed `lucide-react`.
+**Phosphor** (`@phosphor-icons/react`) — the only icon set. ✅ `lucide-react` was fully
+migrated off and removed in M1 Wave 1 (item 13a), lockfile included.
 Weights: `regular` default, `bold` for emphasis, **`fill` for active/selected**, `duotone`
 for feature/empty-state moments (the multi-weight range is what serves the "distinctive"
 brief). Sizes: 16px inline · 20px nav · 24px feature. Outline default; color inherits
@@ -437,9 +439,15 @@ sections must not invent competing names):
 | Coding | `/coding/...` | Coding trainer workspace |
 | Analytics | `/analytics` | Learning Analytics Studio (`/analytics/lab` = Data Lab) |
 
-Secondary routes owned by feature sections (not sidebar entries): `/semester` (Grade &
-Semester Cockpit), `/courses/[id]/...` (grades, chat, glossary, cards queue, mock exams),
-`/queue/[sessionId]` (the Today Queue runner), `/settings/interop`.
+Secondary routes owned by feature sections (not sidebar entries). **⚠ Corrected 2026-07-18
+against shipped routes in `apps/web/src/app`** — there is **no `/semester` route**; the
+Grade & Semester Cockpit surface is `/courses/semesters`.
+
+- **Shipped in Wave 1:** `/courses` (list), `/courses/new`, `/courses/[id]`,
+  `/courses/[id]/edit`, `/courses/semesters` (Grade & Semester Cockpit), `/documents`,
+  `/gate` (access-code gate).
+- **Planned:** `/courses/[id]/...` (grades, chat, glossary, cards queue, mock exams),
+  `/queue/[sessionId]` (the Today Queue runner), `/settings/interop`.
 
 **"Today" disambiguated.** Three things share the word: the **Today nav item**, which is the
 route `/`; the planner's **Today view**, a *section* of `/` (see *Exam Planner §3*); and the
@@ -618,12 +626,14 @@ non-essential secondary text only**; screen-reader announcements on async state
 - New dependencies (Newsreader/JetBrains Mono are `next/font`, no package; Phosphor is a
   package) are the deliberate cost of the identity — the earlier "zero new dependencies"
   goal is superseded by the design decisions here.
-- **Design-system migration is scheduled**, not floating: M1 work item 13 ports `globals.css`
-  to the tokens above, swaps the fonts and icons, and redesigns the auth surface. Everything
-  in this section is the target that item implements.
+- ✅ **Design-system migration is complete** (was: "scheduled, not floating"). Work item 13
+  was split into **13a** (`globals.css` tokens, fonts, icons) and **13b** (app shell); both
+  shipped 2026-07-18, as did item 12 (the auth-surface redesign). Everything in this section
+  describes the **live** system, not a target that item still implements.
 - Auth emails send from `Study Dashboard <auth@alexanderkrink.com>` (`EMAIL_FROM`); the email
   button color updates from the old `#2563eb` to an **email-safe azure `#1c74d8`** (≈ light
-  `--primary`; white text clears AA). Update the Resend template when UI work resumes.
+  `--primary`; white text clears AA). **Open follow-up from Wave 1 (items 12/13a):** confirm
+  the live Resend template actually carries `#1c74d8` and not the old `#2563eb`.
 
 ---
 
@@ -648,6 +658,7 @@ graph TD
         google["Google Gemini API<br/>(via @ai-sdk/google)"]
         voyage["Voyage AI<br/>embeddings"]
         inngest["Inngest<br/>durable job orchestration"]
+        cloudconvert["CloudConvert<br/>PPTX to PDF conversion<br/>(visual extraction path, M1 item 5)"]
     end
     web --> core
     web --> db
@@ -658,6 +669,7 @@ graph TD
     ai --> google
     ai --> voyage
     web <--> inngest
+    web --> cloudconvert
 ```
 
 Boundary rules (enforced; see CLAUDE.md):
@@ -679,13 +691,13 @@ flowchart LR
     U["Browser<br/>drag-drop upload"] -->|"TUS resumable upload"| ST[("Supabase Storage<br/>documents bucket")]
     U -->|"Server Action:<br/>insert documents row"| DB[("Postgres")]
     U -->|"same Server Action:<br/>inngest.send document/uploaded"| ING["Inngest function<br/>process-document"]
-    ING --> V["validate"] --> EX["extract<br/>PDF: Gemini vision<br/>PPTX: XML parse<br/>(+ declares skipped)"]
+    ING --> V["validate<br/>(over 50 MB fails with an<br/>actionable message)"] --> EX["extract<br/>PDF: Gemini vision<br/>PPTX: XML parse; if under 40 words/slide<br/>CloudConvert to PDF then Gemini vision<br/>(+ declares skipped)"]
     EX --> RT["segment & route<br/>(Gemini Flash-Lite + embeddings)"]
     RT --> MG["merge per topic<br/>(Sonnet 5,<br/>1 step per topic)"]
     MG --> VF["merge critic<br/>(block-diff loss-detect<br/>+ Gemini verify → auto-retry once)"]
     VF --> EM["chunk + embed<br/>(Voyage → pgvector)"]
     EM --> CV["coverage map<br/>(pages mapped vs total<br/>+ Gemini syllabus checklist)"]
-    CV --> KX["kind-conditional extras<br/>glossary terms (all) ·<br/>syllabus→assessments (kind=syllabus) ·<br/>case brief (kind=case)"]
+    CV --> KX["kind-conditional extras<br/>glossary terms (all) ·<br/>syllabus→assessments (kind=syllabus) ·<br/>case brief (kind=case — DESCOPED<br/>2026-07-18 to opportunistic)"]
     KX --> FN["finalize status<br/>ready / partial / failed<br/>→ emits document/ready"]
     FN -.->|"if 'Deep review' toggled"| DR["deep-review audit<br/>(Opus 4.8 · 2nd reader<br/>adds/flags, revertible)"]
     ING -.->|"status events"| DB
@@ -753,10 +765,11 @@ Client (drag-drop)                     apps/web                          Inngest
       ├──────────────► documents row ─────┤ 3. inngest.send("document/uploaded")
       │                (status=queued)    │                                   │
       │                                   │              ┌────────────────────┴───────────────────┐
-      │   Supabase Realtime               │              │ validate → extract (PDF/PPTX)          │
-      │◄── status updates ────────────────┤              │ → route → merge → merge critic         │
-      │   (documents.status,              │              │ → chunk + embed → coverage map         │
-      │    processing_events)             │              │ → kind extras (glossary/syllabus/case) │
+      │   Supabase Realtime               │              │ validate → extract (PDF/PPTX;          │
+      │◄── status updates ────────────────┤              │   visual PPTX → CloudConvert → PDF)    │
+      │   (documents.status,              │              │ → route → merge → merge critic         │
+      │    processing_events)             │              │ → chunk + embed → coverage map         │
+      │                                   │              │ → kind extras (glossary/syllabus/case) │
       │                                   │              │ → ready/partial/failed (+deep-review)  │
       │                                   │              └────────────────────┬───────────────────┘
       │                                   │                                   │
@@ -932,7 +945,10 @@ Storage: private `documents` bucket, path `{user_id}/{course_id}/{document_id}/{
 storage RLS policy `owner = auth.uid()` on the first path segment. Uploads go client →
 Storage directly (resumable TUS for large decks) — file bytes never proxy through a Vercel
 function (4.5 MB request body limit). Our 50 MB per-file cap in `validate` matches the
-Supabase Free plan's upload ceiling, so the Free plan suffices.
+Supabase Free plan's upload ceiling, so the Free plan suffices. Files over the cap are
+**not** split or re-compressed by the pipeline (✅ DECIDED 2026-07-18, see open question 1):
+`validate` fails them with a specific, actionable message stating the actual size, the
+50 MB limit, and how to compress and re-upload.
 
 ---
 
@@ -962,8 +978,11 @@ Verified current state (July 2026):
    each). If a single
    extraction or merge call ever brushes 300s on Hobby, upgrading Vercel to Pro (800s) is the escape
    hatch, not a re-architecture.
-4. **Free tier fits the workload.** The §4 cost model's steady state is ~65 documents/month
-   (15 decks/week × 4.3); at ~15 steps each that is ~1,000 executions, and a heavy exam month
+4. **Free tier fits the workload.** ⚠ **Corrected 2026-07-18 — volume is now measured, not
+   estimated.** The verified ICS feed gives **7 normalised Fall 2026 courses totalling ~172
+   sessions** across 2026-08-31 → 2026-12-18 (~15.5 weeks) ≈ 11 sessions/week ≈ **~46
+   documents/month** — not the earlier ~65 docs/month (15 decks/week × 4.3) estimate. At ~15
+   steps each that is ~700 executions, and a heavy exam month
    with card and mock-exam generation on top stays under ~2,000 — still ~25–50× under the
    50k/month free quota. Trigger.dev's $5 compute credit would also suffice, but pays for
    compute we already pay Vercel for.
@@ -976,8 +995,11 @@ those specific tasks. Inngest and Trigger.dev can coexist; don't prematurely mig
 `app/api/inngest/route.ts`. Job code uses `createAdminSupabaseClient` (RLS bypass is
 appropriate here per repo conventions — jobs act on behalf of the system, and every row
 still carries `user_id`). New env vars (`INNGEST_SIGNING_KEY`, `INNGEST_EVENT_KEY`,
-`VOYAGE_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY` — the new Gemini provider) go through the
-full t3-env checklist (the Anthropic key is already wired from M0).
+`VOYAGE_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY` — the new Gemini provider — **and
+`CLOUDCONVERT_API_KEY` for the visual PPTX path, added 2026-07-18 per §4.2**) go through the
+full t3-env checklist. ⚠ As of 2026-07-18 all five sit in `.env.local` only, wired into
+**0 of the 4** required locations (`env.ts`, `.env.example`, `turbo.json` `env`, CI
+placeholders). The Anthropic key is already fully wired from M0.
 
 #### The pipeline as an Inngest function (sketch)
 
@@ -1018,8 +1040,11 @@ export const processDocument = inngest.createFunction(
     if (doc.kind === "syllabus") {
       await step.run("syllabus-components", () => proposeAssessments(doc));          // Additional #3 — lands `confirmed = false`
     }
+    // Additional #2 — DESCOPED to opportunistic 2026-07-18 (real cases are rare in the
+    // actual corpus). The `kind='case'` enum value and this branch stay; the generator is
+    // NOT an item-5 deliverable and must not gate M1.
     if (doc.kind === "case") {
-      await step.run("case-brief", () => generateCaseBrief(doc));                    // Additional #2
+      await step.run("case-brief", () => generateCaseBrief(doc));
     }
 
     await step.run("finalize", () => finalizeStatus(doc, results, embedding)); // ready | partial
@@ -1061,18 +1086,26 @@ is a step up on image-dense decks over the previous Claude-vision path.
   scanned/diagram-slide problem in one pass.
 - **Limits to enforce in `validate`:** Gemini reads large PDFs natively (many hundreds of
   pages; big files go through the Gemini File API rather than inline — exact caps verified at
-  wiring). Our own caps stay 50 MB and 300 pages. Oversized PDFs are split by page ranges
-  (`pdf-lib`, pure JS) and extracted in parallel steps, then concatenated. Routing and merging
-  see extracted *text*, never the PDF, so page/context caps there never bind.
+  wiring). Our own caps stay 50 MB and 300 pages, and ⚠ **CORRECTED 2026-07-18 they are hard
+  failures, not auto-handled.** The earlier plan here — split oversized PDFs by page range
+  (`pdf-lib`, pure JS), extract in parallel steps, concatenate — is **superseded**: it added a
+  splitter, a re-assembly path and cross-chunk coherence problems to save a manual step the
+  user is happy to do. Instead `validate` **rejects** an oversized file with a specific,
+  actionable message stating the actual size, the 50 MB limit, and the fix (e.g. "This deck is
+  78 MB; the limit is 50 MB. Compress it and re-upload"). No page-range splitting and no
+  re-compression anywhere in the pipeline — see open question 1. Routing and merging see
+  extracted *text*, never the PDF, so page/context caps there never bind.
 - **Cost:** a 40-page deck ≈ 80–120K input tokens (pages are billed as image+text, under
   Gemini's 200K long-context surcharge) + ~8K output on `gemini-3.1-pro` ≈ **$0.26–0.34**
   (80K × $2/M + 8K × $12/M = $0.256; 120K × $2/M + 8K × $12/M = $0.336).
   Cheap fallback: run `unpdf` text extraction first and attach it as context — negligible
   cost, helps with tiny fonts.
 
-#### 4.2 PPTX — parse the zip; convert-to-PDF as the fidelity upgrade
+#### 4.2 PPTX — parse the zip; convert to PDF whenever the deck is visual (both paths ship in item 5)
 
-Neither provider reads PPTX natively. Two-tier approach:
+Neither provider reads PPTX natively. Two branches, **both in scope for M1 item 5** — the
+"v1 / v1.1" tiering below is retained for history but superseded by the DECIDED note that
+follows it:
 
 - **v1 (default): direct XML extraction in Node.** A `.pptx` is a zip of XML. In
   `packages/core`: `jszip` + `fast-xml-parser` over `ppt/slides/slide{N}.xml` (shape text,
@@ -1341,10 +1374,13 @@ chat with citations, and context retrieval for the exam-review generator.
   (off by default) — on for a prof-flagged book or a high-stakes reading, it runs the opt-in
   second-reader completeness audit (§5 Step D) after the normal pipeline. The card then walks
   a step checklist with the active step
-  marked by the pulsing dot motif: *Validating → Extracting → Organizing into topics →
-  Verifying changes → Indexing for search → Checking coverage → Extracting terms → Done*
-  (plus *Reading the syllabus* / *Briefing the case* when `kind` is `syllabus`/`case`, and
-  *Deep review* when toggled). This checklist, the §1 ASCII flow, the §3 Inngest sketch and
+  marked by the pulsing dot motif: *Validating → (Converting for visual fidelity, when the
+  deck is image-heavy) → Extracting → Organizing into topics → Verifying changes → Indexing
+  for search → Checking coverage → Extracting terms → Done*
+  (plus *Reading the syllabus* when `kind` is `syllabus`, and *Deep review* when toggled;
+  *Briefing the case* is **deferred** — the case-brief slice was descoped to opportunistic
+  2026-07-18). The conversion step is new as of 2026-07-18: CloudConvert ships inside item 5,
+  so a visual deck really does show an extra step. This checklist, the §1 ASCII flow, the §3 Inngest sketch and
   the architecture mermaid are four views of one step list — change them together. Merge steps stream per-topic lines ("Expanded **Eigenvalues** · added 2 formulas";
   a held one reads "⚠ **Jordan forms** · flagged for review")
   from the change summaries and critic verdicts — this is the moment the product's core promise is visible, so
@@ -1391,11 +1427,18 @@ chat with citations, and context retrieval for the exam-review generator.
 | --- | --- | --- | --- | --- | --- | --- |
 | 40-page slide PDF | $0.26–0.34 (Gemini 3.1 Pro, multimodal) | $0.15–0.35 (Sonnet 5) | ~$0.005–0.01 (Gemini merge critic + checklist) | ~$0.03–0.05 (Sonnet extract + Flash-Lite critic) | <$0.01 | **≈ $0.46–0.76** |
 | PPTX (text path) | $0.10–0.13 (Gemini 3.1 Pro; input ~10× cheaper, but the ~8K output is shared with the PDF path at $12/MTok ≈ $0.096) | $0.15–0.35 | ~$0.005–0.01 | ~$0.03–0.05 | <$0.01 | **≈ $0.30–0.55** |
+| PPTX (**visual path, converted** — added 2026-07-18; 4 of 5 Marketing decks take this branch) | ~$0.01 CloudConvert + $0.26–0.34 (Gemini 3.1 Pro multimodal) | $0.15–0.35 | ~$0.005–0.01 | ~$0.03–0.05 | <$0.01 | **≈ $0.46–0.76** |
 | Exam review (per regen) | — | — | — | — | — | **≈ $0.50–1.50** (Opus 4.8) |
 | Deep-review audit (opt-in, per doc) | — | — | — | — | — | **≈ $0.80–2.00** (Opus 4.8, big docs) |
 
-A full 12-week course at the §4 cadence (3 sessions/week ≈ 36 decks + a few readings + 3
-review regens) lands around **$20–32** — Gemini extraction dominates, with the Sonnet topic merges the
+⚠ **Corrected 2026-07-18 against the verified feed** (the old figure assumed a 12-week term
+at 3 sessions/week ≈ 36 decks): the Fall term actually runs 2026-08-31 → 2026-12-18
+(~15.5 weeks) and real per-course session counts are **20–35 at roughly 2/week** (e.g.
+Probability & Statistics 35, Marketing Management 20). A full Fall course at that measured
+cadence, plus a few readings and 3 review regens, lands around **$18–30 on the text path**,
+and materially higher on the visual path — for a course like Marketing every deck converts
+and re-enters the Gemini vision branch, so price it against the visual row above. Gemini
+extraction dominates, with the Sonnet topic merges the
 second line (glossary is a distant fourth). This pipeline runs three critics — the merge critic and coverage
 checklist (both Gemini Flash-Lite, well under a cent per document) and the glossary critic
 (Flash-Lite, priced in the glossary column). The Haiku card critic is *not* here: it belongs
@@ -1414,7 +1457,7 @@ cheaper model if it isn't.
 - Embeddings pricing: [Voyage AI pricing](https://docs.voyageai.com/docs/pricing), [voyage-3.5 announcement](https://www.mongodb.com/company/blog/product-release-announcements/introducing-voyage-3-5-voyage-3-5-lite-improved-quality-new-retrieval-frontier), [OpenAI embeddings pricing](https://costgoat.com/pricing/openai-embeddings)
 - Model pricing / PDF limits: Anthropic platform docs (models overview, PDF support) + [Google Gemini API docs](https://ai.google.dev/gemini-api/docs/document-processing) (document understanding) — cached via claude-api reference + web sources, July 2026.
 
-**Dependencies:** foundation tables (`courses`), Inngest wiring, `VOYAGE_API_KEY` + `GOOGLE_GENERATIVE_AI_API_KEY` env keys (the new Gemini provider; Anthropic key already wired from M0). **Effort:** L — the anchor of M1. **Milestone:** M1.
+**Dependencies:** foundation tables (`courses` — ✅ shipped, item 1b), Inngest wiring, and the `VOYAGE_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY` and `CLOUDCONVERT_API_KEY` env keys (the Gemini provider and the visual-deck conversion path — the latter added 2026-07-18 when CloudConvert moved inside this item; Anthropic key already wired from M0). **Effort:** L — the anchor of M1. **Milestone:** M1.
 
 ---
 
@@ -1451,8 +1494,12 @@ Package placement (per repo boundary rules):
 
 - `packages/core/src/calendar/` — everything pure: the `CalendarProvider` interface and
   normalized types, ICS parsing + RRULE expansion (`string in → occurrences out`), the
-  diff algorithm, the grade-impact scoring function. All heavily unit-tested with
-  fixture `.ics` files (including ones shaped like the university's real export).
+  diff algorithm, the grade-impact scoring function. All heavily unit-tested with fixture
+  `.ics` files **derived from the real IE export** (fetched 2026-07-18 to the gitignored
+  `apps/web/.local-fixtures/calendar/ie-agenda-20260718.ics`; trim and sanitize before
+  committing a fixture) — the export is no longer approximated, so fixtures come *from* it
+  rather than being *shaped like* it — plus synthetic files for the generic capabilities the
+  IE feed never exercises (RRULE, EXDATE, RECURRENCE-ID, STATUS:CANCELLED).
 - `apps/web/src/server/calendar/` — the I/O shells: provider implementations that fetch
   (core does the parsing), the sync engine entry point, cron route handler, server
   actions. Lifted into a `packages/integrations` package only if a second consumer
@@ -1478,14 +1525,18 @@ create table public.calendar_feeds (
   last_sync_error text,
   active boolean not null default true,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  -- Required so children can declare tenant-scoped composite FKs against this table
+  -- (RLS strategy rule 7). Redundant with the pk, but a composite FK needs a matching
+  -- unique key on the parent.
+  unique (id, user_id)
 );
 
 -- One row per VEVENT master (or per manual entry). Holds the recurrence rule.
 create table public.calendar_items (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users (id) on delete cascade,
-  feed_id uuid references public.calendar_feeds (id) on delete cascade,  -- null = manual
+  feed_id uuid,                        -- null = manual; composite FK declared below
   source text not null check (source in ('ics', 'manual')),
   ics_uid text not null,               -- VEVENT UID; generated uuid for manual items
   sequence int not null default 0,     -- ICS SEQUENCE, detects upstream edits
@@ -1496,20 +1547,32 @@ create table public.calendar_items (
   location text,
   rrule text,                          -- raw RRULE if recurring, else null
   original_tzid text,                  -- TZID as published (e.g. 'Europe/Madrid')
-  course_id uuid references public.courses (id) on delete set null,
-  assessment_id uuid references public.assessments (id) on delete set null,
+  course_id uuid,                      -- composite FK declared below
+  assessment_id uuid,                  -- composite FK declared below
   -- §5.1b session parsing (null for feeds without a session grammar, and for manual items)
   session_from int,                    -- (Ses. N) or the N of (Ses. N-M)
   session_to int,                      -- the M of (Ses. N-M); = session_from for a single session
   descriptor text check (descriptor in ('regular','extra','retake','final_exam')),
-  is_exam_candidate boolean not null default false,  -- won the max-session rule (§5.1b)
+  is_exam_candidate boolean not null default false,  -- exam candidate per the §5.1b resolution chain
+  detection_source text check (detection_source in ('syllabus_header','syllabus_body','max_session','manual')),
+                                       -- which step of the §5.1b chain resolved it; lets
+                                       -- "exam not yet published" be distinguished from "exam found"
   hidden boolean not null default false,             -- retakes are hidden by default, never deleted (§5.1b)
   weight_override numeric(5,2),        -- manual grade-impact override, wins over everything
   user_locked_fields text[] not null default '{}',  -- fields sync must not clobber
   missing_since timestamptz,           -- tombstone: vanished from feed at this time
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  unique (feed_id, ics_uid)
+  unique (feed_id, ics_uid),
+  unique (id, user_id),                -- parent key for calendar_occurrences' composite FK
+  -- Tenant-scoped composite FKs (RLS strategy rule 7). `on delete set null (col)` names the
+  -- column deliberately — the bare form would try to null `user_id`, which is `not null`.
+  constraint calendar_items_feed_id_fkey foreign key (feed_id, user_id)
+    references public.calendar_feeds (id, user_id) on delete cascade,
+  constraint calendar_items_course_id_fkey foreign key (course_id, user_id)
+    references public.courses (id, user_id) on delete set null (course_id),
+  constraint calendar_items_assessment_id_fkey foreign key (assessment_id, user_id)
+    references public.assessments (id, user_id) on delete set null (assessment_id)
 );
 
 -- Expanded concrete instances within the sync horizon. Non-recurring items get
@@ -1517,7 +1580,7 @@ create table public.calendar_items (
 create table public.calendar_occurrences (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users (id) on delete cascade,
-  item_id uuid not null references public.calendar_items (id) on delete cascade,
+  item_id uuid not null,               -- composite FK declared below
   recurrence_id text not null default '',  -- ICS RECURRENCE-ID (UTC ISO) or '' for the sole instance
   starts_at timestamptz not null,
   ends_at timestamptz,
@@ -1526,18 +1589,42 @@ create table public.calendar_occurrences (
   overridden boolean not null default false,  -- this instance was individually edited upstream
   completed_at timestamptz,                   -- user checked it off
   updated_at timestamptz not null default now(),  -- row-diff bookkeeping (§3.2)
-  unique (item_id, recurrence_id)
+  unique (item_id, recurrence_id),
+  constraint calendar_occurrences_item_id_fkey foreign key (item_id, user_id)
+    references public.calendar_items (id, user_id) on delete cascade
 );
 
 -- Learned course-matching rules (created when the user assigns an unmatched event).
 create table public.course_matchers (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users (id) on delete cascade,
-  course_id uuid not null references public.courses (id) on delete cascade,
+  course_id uuid not null,             -- composite FK declared below
   pattern text not null,               -- substring matched case-insensitively
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  constraint course_matchers_course_id_fkey foreign key (course_id, user_id)
+    references public.courses (id, user_id) on delete cascade
 );
 ```
+
+> **⚠ Tenant-scoped composite FKs — added 2026-07-18 (RLS strategy rule 7).** Every FK above
+> that crosses between two user-owned tables is composite `(fk_column, user_id)`, replacing the
+> single-column `references public.x (id)` form this spec originally carried. Single-column FKs
+> let user B point a row at user A's `course_id` and Postgres accepts it — RLS validates only
+> the row being *written*, never the row being *pointed at*. That matters more here than
+> anywhere else: **calendar sync runs under `createAdminSupabaseClient`**, which bypasses RLS
+> entirely, so structural constraints are the only defence.
+>
+> **The calendar migration must add the parent unique keys before it can declare these FKs.**
+> `20260718140050` added `(id, user_id)` unique keys **only to `semesters` and `courses`**.
+> `assessments`, `calendar_feeds` and `calendar_items` have none, so the migration must create
+> `assessments_id_user_key`, `calendar_feeds_id_user_key` and `calendar_items_id_user_key`
+> (the latter two are in the DDL above; `assessments` needs an `alter table`) *first* — a
+> composite FK against a parent with no matching unique key fails outright.
+>
+> Note `on delete set null (course_id)` / `(assessment_id)`: the column list is a PostgreSQL
+> 15+ feature and is **required** here, because the bare `on delete set null` would try to null
+> `user_id` too, which is `not null`. Nullable FK columns keep `match simple` semantics, so an
+> unmatched calendar item (no course assigned) correctly skips the check.
 
 All four tables: RLS enabled, per-operation policies on `(select auth.uid()) = user_id` —
 the `init_profiles` pattern. `set_updated_at()` triggers on feeds, items, and occurrences;
@@ -1785,17 +1872,20 @@ A `PROVIDERS: Record<CalendarSource, CalendarProvider>` registry in
 #### 5.1 Linking synced events to courses
 
 The IE feed is **one global feed** (`X-WR-CALNAME: My IE Agenda`) that prefixes every
-`SUMMARY` with the course name; `DESCRIPTION` is always empty, so the summary is the only
-matching surface (see §5.1b for its verified grammar). Per-course feeds are still supported
+`SUMMARY` with the course name; `DESCRIPTION` is **present but blank** on every real event
+(literal `\n\n`; only the `Last Update` pseudo-row carries text — ⚠ corrected 2026-07-18 from
+"always empty", which made a truthiness test look safe when it is not), so after `.trim()`
+the summary is the only matching surface (see §5.1b for its verified grammar). Per-course feeds are still supported
 by the provider abstraction. Matching pipeline at sync time, first hit wins:
 
 1. Feed-level default: a feed can be pinned to one course (`config.courseId`) — right
    answer for per-course feeds, zero inference.
 2. `course_matchers` patterns (case-insensitive substring) against `courseHint` — which the
    §5.1b normalizer fills with the first multi-space segment of `SUMMARY`, i.e. the clean
-   course name. (`description` is *not* a matching surface for this feed: it is empty on all
-   379 events. The provider still falls back to `title` for feeds that publish no course
-   prefix.)
+   course name. (`description` is *not* a matching surface for this feed: it is **blank after
+   trimming** on all 378 real events, and the one non-blank value belongs to the `Last Update`
+   pseudo-row — ⚠ corrected 2026-07-18 from "empty on all 379". The provider still falls back
+   to `title` for feeds that publish no course prefix.)
 3. Course `code` and `title` from the `courses` table as implicit patterns.
 4. No match → the event lands in an **Unassigned** bucket surfaced at the top of the
    calendar page. One click assigns a course *and* writes a `course_matchers` row from
@@ -1805,7 +1895,9 @@ by the provider abstraction. Matching pipeline at sync time, first hit wins:
 #### 5.1b IE feed grammar, session parsing & exam detection
 
 *Verified against the real feed on 2026-07-18: 379 events, 2026-01-19 → 2026-12-18 (two
-semesters), 15 courses. All parsing rules below are grounded in that sample, not assumed.*
+semesters), **15 apparent course-name variants** — ⚠ not 15 courses: the fall term's 9
+apparent variants normalise to **7 real courses** (see correction 3 below). All parsing rules
+below are grounded in that sample, not assumed.*
 
 **`SUMMARY` grammar** (multi-space delimited, fields optional):
 
@@ -1830,7 +1922,10 @@ course name; strip trailing `|`, `, null` sequences, and collapsed whitespace; p
 `(Ses. N)` / `(Ses. N-M)` into `sessionFrom`/`sessionTo` (ranges are real — one calendar
 event can cover two sessions); classify `Extra` / `Retake` / `Final Exam` descriptors; take
 the room from the `LOCATION` field, never from `SUMMARY` (it is duplicated there). Drop the
-`**Last Update (IE Calendar)**` pseudo-event and the two LMS-style `BBADBA SEP-2025…` rows.
+**5** pseudo/LMS rows (⚠ corrected 2026-07-18 from 3): `**Last Update (IE Calendar)**`, the
+two LMS-style `BBADBA SEP-2025…` rows, and the two `APPLIED BUSINESS MATHEMATICS` proctoring/
+upload checks (`Test the download and upload of Excel files`, `Smowl Check-Test: Multiattempt…`).
+The last two carry a **real course prefix**, so the filter cannot key on "no course name".
 
 > **✅ Re-fetched and re-verified 2026-07-18 against the live feed** (URL now in
 > `apps/web/.env.local` as `DEV_ICS_URL`; export saved to the gitignored
@@ -1870,12 +1965,19 @@ the room from the `LOCATION` field, never from `SUMMARY` (it is duplicated there
 > e.g. `BUILDING POWERFUL RELATIONSHIPS  (Ses. 24-25)`. Any per-session logic must expand
 > ranges, or it will undercount taught sessions by nearly half on these courses.
 
-**Exam detection — max session number, not keyword, not chronology.** Two observations
-from the real feed drive this:
+**Exam detection — syllabus session count first, max session number as fallback; never
+keyword, never chronology.** (⚠ Heading corrected 2026-07-18: it previously read "max session
+number, not keyword, not chronology", naming the *fallback* as the rule — see the REVISED note
+below.) Two observations from the real feed drive the **fallback** path:
 
-- The `FINAL EXAM` keyword appears on **1 of 15 courses**. Text matching is useless.
-- Exams are the **last regular session** of a course; max session lands on clean values
-  (35 / 30 / 25 / 20 / 6) and resolves **15 of 15** courses to a real date.
+- The `FINAL EXAM` keyword appears on **1 course in the whole feed**. Text matching is useless.
+- Exams are the **last regular session** of a course; on the 7 normalised fall courses
+  `max(sessionTo)` lands on clean values (35 / 30 / 30 / 30 / 25 / 20 / 2) — but ⚠ only
+  *after* normalisation, and only for courses whose feed rows are complete. The earlier
+  "resolves 15 of 15 courses" claim was computed over 15 un-normalised name variants and is
+  withdrawn: fragmentation understates max session (correction 3 above), and some fall
+  courses have feed rows incomplete relative to their true session count (see the revision
+  below).
 
 > **⚠ REVISED 2026-07-18 (Alexander's decision) — the syllabus session count is the PRIMARY
 > oracle, and max-session becomes the fallback.** The rule is now:
@@ -1929,7 +2031,12 @@ feed formats change:
 1. Among events sharing `max(sessionTo)`, **earliest date wins** — defeats a retake that
    ever reuses the final session number.
 2. The candidate must fall **inside the semester bounds** (`semesters` row); anything after
-   term end cannot be the regular final.
+   term end cannot be the regular final. ⚠ **Corrected 2026-07-18 — this must not be a hard
+   requirement.** Only two `semesters` rows are seeded (2026/27 Fall and Spring); the 2025/26
+   term has no row while the verified feed carries 225 events from 2026-01-19, so a strict
+   bounds check would silently drop half the sample the fixtures are built from. **If no
+   `semesters` row covers the candidate's date, skip the bounds check and flag the candidate
+   `unbounded` rather than discarding it.**
 3. Events with no session number matching `/retake|resit|convocatoria/i` after the
    max-session date are tagged `retake` and **hidden by default, never deleted**.
 
@@ -1945,9 +2052,20 @@ too tight to be a primary rule), and an explicit `Final Exam` string.
 **Syllabus reconciliation — where the LLM earns its place.** The calendar can never say
 whether the last session is a written exam, a project defense, or nothing at all, nor what it
 is *worth*. That comes from the syllabus via `syllabus-components` (`claude-sonnet-5`, §Grade
-cockpit), which proposes `assessments` rows. The join is deterministic: syllabus-declared exam
-session **agrees** with the calendar's max session → prefill with high confidence;
-**disagrees** → surface as a conflict for one-tap resolution. Either way the result passes the
+cockpit), which proposes `assessments` rows. ⚠ **Reordered 2026-07-18 to match the REVISED
+chain above** — the join is deterministic and **syllabus-led**, not a co-equal comparison of
+two oracles:
+
+- The syllabus declares session `N` (and *which* assessment it is) → find the feed event
+  carrying session `N` → prefill with high confidence.
+- No event carries session `N` → state **"exam not yet published, expect session N"** rather
+  than falling back to a date. This third state is the whole point of the reordering; the
+  earlier "agrees / disagrees" framing had no way to express it.
+- No syllabus on file → use `max(sessionTo)` and mark the result fallback-derived.
+- Syllabus and feed genuinely disagree → surface as a conflict for one-tap resolution, never
+  a silent pick.
+
+Either way the result passes the
 **mandatory human confirm** gate — exam dates are both date-critical *and* grade-critical, the
 two gates deliberately reserved by the Human-reversible-AI principle.
 
@@ -2046,21 +2164,26 @@ correct feeling is "clear this week, exam in 9 days," never false calm.
 | Milestone | Scope |
 | --- | --- |
 | CAL-1 | Migrations; `CalendarProvider` + normalized types in core; ical.js parse with **naked-TZID IANA fallback** (the IE path — §3.4) and DST fixtures built from real 27 Mar / 26 Oct events; **sync engine with dedup + tombstones — the priority, since the IE feed signals cancellation only by disappearance (§3.6)**; generic RRULE/EXDATE/RECURRENCE-ID expansion built to spec but *not* fixture-heavy (the IE feed has none — §3.5); feed CRUD UI; plain chronological list. |
-| CAL-2 | **`SUMMARY` normalizer + session parser (§5.1b)** — course name extraction from the multi-space grammar, `\| , null` junk stripping, `(Ses. N-M)` ranges, `Extra`/`Retake` classification, pseudo-event filtering; **exam detection via max-session rule + its three guards**; course matching + matchers; weight resolution + priority scoring in core; full "This week" composition; structured quick-add form; daily cron + on-demand staleness sync. |
+| CAL-2 | **`SUMMARY` normalizer + session parser (§5.1b)** — course name extraction from the multi-space grammar, `\| , null` junk stripping, `(Ses. N-M)` ranges, `Extra`/`Retake` classification, pseudo-event filtering (**5** pseudo/LMS rows, two of which carry a real course prefix); **exam detection via the REVISED §5.1b oracle chain — syllabus header session-count → in-body `SESSION n` headings + inline exam labels → `max(sessionTo)` from the feed as fallback, with the fallback's three guards**; course matching + matchers; weight resolution + priority scoring in core; full "This week" composition; structured quick-add form; daily cron + on-demand staleness sync. |
 | CAL-3 | NL quick-add (the `quick-add` job + prompt, `gemini-3.1-flash-lite`, confirm card); assessment linking suggestions; completed/overdue flows polish. |
 
 Mapping to the roadmap: CAL-1 and CAL-2 land in **M1**, CAL-3 in **M2** (pulled into M1 as
 stretch when there's slack).
 
 **Dependencies:** foundation tables (`semesters`, `courses`, `assessments`) — `semesters` is
-load-bearing, not incidental: guard 2 of the §5.1b exam-detection rule requires term bounds.
+load-bearing, not incidental: guard 2 of the §5.1b fallback rule uses term bounds (softened
+2026-07-18 to skip-and-flag when no row covers the candidate, so a missing row degrades
+confidence rather than dropping events).
 **Effort:** CAL-1 M–L · CAL-2 **M–L** (it absorbed the whole §5.1b normalizer, session parser
 and exam-detection rule) · CAL-3 S–M.
 
 Cross-section dependencies: `semesters`, `courses` and `assessments` tables (Courses/Grades section);
 the `quick-add` job (`gemini-3.1-flash-lite`) + prompt registry (AI section); `CRON_SECRET` env var added per the env
-checklist in CLAUDE.md. Syllabus-extraction of weights depends on the document pipeline
-milestone but only *feeds* `assessments` — nothing here blocks on it.
+checklist in CLAUDE.md. ⚠ **Corrected 2026-07-18 — "nothing here blocks on it" is no longer
+true.** Syllabus extraction feeds `assessments` (weights) **and is now the primary oracle for
+exam detection** (§5.1b REVISED): CAL-2's detection chain reads the syllabus body first and
+only falls back to max-session, so the **syllabus-parsing slice must land with or before
+CAL-2**. Only the weight-*writing* half remains deferrable to the document-pipeline milestone.
 
 ---
 
@@ -3218,8 +3341,11 @@ already built by the M1 shell (item 13) — this feature adds a result group, no
   (to_tsvector('english', content)) stored` + GIN index (backfill migration).
 
 **(e) Dependencies / prerequisites.** Document pipeline v1 with embedded chunks (M1). No new
-env vars — `VOYAGE_API_KEY` and the two AI provider keys (`ANTHROPIC_API_KEY`,
-`GOOGLE_GENERATIVE_AI_API_KEY`) are already in the pipeline's t3-env checklist.
+env vars *specific to this feature* — but ⚠ **corrected 2026-07-18**: of the three keys this
+relies on, only `ANTHROPIC_API_KEY` is actually through the t3-env checklist. `VOYAGE_API_KEY`
+and `GOOGLE_GENERATIVE_AI_API_KEY` exist in `.env.local` only, wired into **0 of 4** required
+locations (`env.ts`, `.env.example`, `turbo.json` `env`, CI placeholders). M1 items 2b and 5
+must land that wiring first.
 
 **(f) Effort.** M — 2–3 days for chat + citations, ~half a day for the palette group, ~1 day
 for the `tsv` column + RRF upgrade.
@@ -3232,8 +3358,11 @@ whole system.
 ### 2. Cold-Call Cockpit — case brief + cold-call simulator
 
 **(a) What it is & why it matters.** IE sections run on cold calls: the professor opens with
-"walk us through the situation" and drills into exhibit numbers. The user reads 2–4 cases a
-week; the gap is not reading them, it's being *callable* — able to state a stance, defend it
+"walk us through the situation" and drills into exhibit numbers. ⚠ **Volume premise withdrawn
+2026-07-18** — the corpus audit found real HBS-style cases are **rare** in this programme, not
+the 2–4/week this section originally assumed, so the feature is **opportunistic**: it runs
+when a case actually appears rather than on a weekly cadence. The gap it closes is unchanged
+— it is not reading cases, it's being *callable* — able to state a stance, defend it
 under pushback, and quote the numbers. This feature produces a one-page structured brief per
 case from the already-ingested PDF, then lets the user rehearse the cold call against an AI
 professor before class. Prepared talking points flow into the participation ledger (#4) —
@@ -3253,8 +3382,9 @@ points sent to #4's pre-class list with one tap.
 
 **(c) Implementation approach.** The case PDF is already a `documents` row; the brief is the
 `kind = 'case'` branch of the pipeline function's kind-conditional extras (see the §3 sketch):
-`packages/ai` prompt `case-brief` v1 (job `case-brief` · `claude-opus-4-8` — wrong numbers in class are expensive,
-volume is ~4/week) with a Zod brief schema. The drill is a route handler using AI SDK v7
+`packages/ai` prompt `case-brief` v1 (job `case-brief` · `claude-opus-4-8` — wrong numbers in class are expensive
+and volume is *low and sporadic* now that the ~4/week assumption is withdrawn, so the deep
+tier costs almost nothing here) with a Zod brief schema. The drill is a route handler using AI SDK v7
 `streamText` + `useChat` (same plumbing as #1), prompt `cold-call-drill` v1 (job `cold-call-drill` · `claude-sonnet-5`)
 seeded with the brief JSON; a final structured call (prompt `cold-call-rubric` v1, job `cold-call-rubric` · `claude-sonnet-5`)
 scores the transcript. Readiness score = pure function in `packages/core` over rubric
@@ -3276,7 +3406,10 @@ with #1.
 **(f) Effort.** L overall, shipped as two M-or-smaller slices: brief generator S–M (rides
 the pipeline), drill + rubric + readiness M.
 
-**(g) Milestone.** Brief slice M1 (ships with pipeline v1); drill M2.
+**(g) Milestone.** ⚠ **REVISED 2026-07-18** — the brief slice is **descoped to opportunistic**
+(was: "M1, ships with pipeline v1"). Real cases are rare in the corpus, so build it the first
+time one actually lands, not on the M1 schedule; **it must not gate M1**. Drill M2 at the
+earliest.
 
 ---
 
@@ -3295,7 +3428,8 @@ it?") is a grade-math question; this is the objective function the exam planner 
 **(b) UX sketch.** Course grade page: component table (assessment, weight, score entered or
 pending, inline-editable), a live "current weighted standing: 8.4/10" header, and a what-if
 panel — sliders on ungraded components with a solver line ("final exam ≥ 7.9 → course ≥
-9.0"); save named scenarios ("realistic", "if group project tanks"). `/semester`: GPA tile
+9.0"); save named scenarios ("realistic", "if group project tanks"). `/courses/semesters`
+(⚠ corrected 2026-07-18 — this section previously said `/semester`; there is no such route): GPA tile
 showing IE scale and German equivalent side by side, credits earned / in progress /
 required, per-course contribution bars weighted by credits, a weekly-study-minutes sparkline
 per course (from #9's events), a "biggest lever" callout (largest ungraded weight ×
@@ -3305,14 +3439,19 @@ days; 40% of grade still open").
 **(c) Implementation approach.** All math is pure `packages/core`: `weighted_standing()`,
 `required_score(target)` (closed-form linear solve; degenerate cases handled: already
 locked / unreachable), `semester_gpa()`, `bavarian_grade()` (`1 + 3 × (10 − x) / (10 − 5)`,
-clamped; verify IE's pass mark of 5). What-ifs compute client-side — no server round-trip.
+clamped) — ✅ **confirmed 2026-07-18: IE's pass mark is 5/10**, so the denominator is correct
+as written; it maps 10 → 1.0 and exactly 5 → 4.0. Clamp at both ends. What-ifs compute
+client-side — no server round-trip.
 Component weights are *not* a new schema: they live in the core `assessments` table
 (`weight_percent`), which the calendar hub already links events to; the syllabus-extraction
 prompt (`syllabus-components` v1, job `syllabus-components` · `claude-sonnet-5`, Zod array) runs as the
 `kind = 'syllabus'` branch of the pipeline's kind-conditional extras (see the §3 sketch) and
 proposes `assessments` rows with `confirmed = false` behind a **mandatory
-confirm step** showing the source snippet. The same gate covers the §5.1b calendar-derived
-exam date when it is reconciled against a syllabus-declared exam session. This is one of the two deliberately-reserved
+confirm step** showing the source snippet. The same gate covers the §5.1b exam date wherever
+the two sources disagree — ⚠ note the REVISED §5.1b chain (2026-07-18): the **syllabus is the
+primary oracle** (header session-count → in-body `SESSION n` headings and inline labels) and
+the calendar-derived max-session date is only the fallback, which is the reverse of the
+priority this sentence originally implied. The confirm gate itself is unaffected. This is one of the two deliberately-reserved
 hard gates (grade weights are grade-critical, per the Human-reversible-AI principle) — a
 wrong weight silently corrupts every "what do I need on the final" answer, so it is never
 born active. Deliberately near-zero AI for the numbers themselves — grades must be
@@ -3714,16 +3853,19 @@ Ship the Anki export first — it's the highest daily-use item.
 
 ### Sequencing & external-API exposure
 
-Build order within the milestone frame: **#4 → #2-brief (M1) → #1 → #9-instrumentation →
-#3 → #5 → #7 → #8 → #2-drill (M2) → #6 → #9-studio (M3) → #9-lab → #10 (M4)**. #4 and the
-#2 brief ride M1 infrastructure while it's fresh; #9's event logging must start the moment
+Build order within the milestone frame: **#4 → #1 → #9-instrumentation →
+#3 → #5 → #7 → #8 → #2-drill (M2) → #6 → #9-studio (M3) → #9-lab → #10 (M4)**.
+⚠ **REVISED 2026-07-18: the #2 case-brief slice is descoped to opportunistic** (real cases are
+rare in the corpus) and no longer rides M1 — it has been removed from this order; only #4
+does. Note this is a spec-level *dependency* sketch: the executable M1 order is the recorded
+wave plan, not these item numbers. #4 rides M1 infrastructure while it's fresh; #9's event logging must start the moment
 M2 features generate events; #6 needs the exam planner's output to plan around; #10
 consumes everything and belongs last.
 
 | External dependency | Features | Approval risk |
 | --- | --- | --- |
-| Voyage AI embeddings (existing, from pipeline) | #1 | None new — key already in env chain |
-| AI providers — Anthropic + Google Gemini (core stack) | #1, #2, #3, #4 (optional M4 digest only), #5, #6, #7, #8 | None new — both keys in the env chain (Gemini added in M1 item 2b) |
+| Voyage AI embeddings (arrives with item 5, pipeline) | #1 | None new — but ⚠ 2026-07-18: `VOYAGE_API_KEY` is in `.env.local` **only**, wired into 0 of the 4 required locations (`env.ts`, `.env.example`, `turbo.json` `env`, CI) |
+| AI providers — Anthropic + Google Gemini (core stack) | #1, #2, #3, #4 (optional M4 digest only), #5, #6, #7, #8 | No approval risk — Anthropic is fully wired; ⚠ the Gemini key is in `.env.local` only, wired into 0 of 4 locations. Closes in M1 item 2b |
 | GitHub PAT (optional Obsidian sync) | #10 | Low — personal token, no app review |
 | Google Calendar | #6 | Avoided entirely — one-way signed ICS export instead of OAuth |
 
@@ -3786,7 +3928,12 @@ create table courses (
   grading_scale text not null default 'ie_10',
   exam_format_profile jsonb,     -- {mcq: 30, numeric: 3, open: 1, duration_min: 90}
   participation_weight numeric,  -- % of grade (Grade Cockpit / Participation Ledger)
-  absence_fail_pct numeric,      -- attendance failure threshold
+  absence_fail_pct numeric,      -- % of sessions missable before the attendance gate fails.
+                                 -- ✅ RESOLVED 2026-07-18: IE requires 80% attendance
+                                 -- UNIVERSALLY, so 20 is a constant, not a per-course unknown.
+                                 -- Shipped without a DB default — the app layer supplies 20.
+                                 -- Distinct from participation_weight above: attendance is a
+                                 -- pass/fail gate worth ZERO points; never conflate the two.
   participation_target numeric,  -- contributions per session aimed for
   archived boolean not null default false
 );
@@ -3918,7 +4065,7 @@ pluralized here for diagram consistency. Final migration names are plural:
 | Document pipeline | `documents` · `document_processing_events` · `topics` · `topic_revisions` · `topic_sources` · `document_chunks` · `exam_reviews` | M1 |
 | AI infrastructure | `ai_generations` (append-only call log) | M1 |
 | Participation ledger | `attendance_records` · `participation_logs` · `talking_points` | M1 |
-| Case prep | `case_briefs` (M1) · `cold_call_drills` (M2) | M1–M2 |
+| Case prep | `case_briefs` (**opportunistic — descoped 2026-07-18, no committed milestone**) · `cold_call_drills` (M2) | opportunistic / M2 |
 | Practice engine | `cards` · `review_logs` · `card_generation_jobs` · `practice_settings` · `mock_exams` · `mock_exam_items` · `exam_attempts` · `attempt_answers` (+ `daily_review_load` view) | M2 |
 | Exam planner | `exams` · `exam_topics` · `plan_sessions` · `topic_review_state` · `study_settings` · `blackout_dates` · `day_capacity_overrides` | M2 |
 | Course Copilot | `chat_threads` · `chat_messages` (+ `document_chunks.tsv` extension) | M2 |
@@ -3980,9 +4127,13 @@ feature's migration, never ahead of need.
 
 ## AI Strategy
 
-All LLM interaction lives in `packages/ai` (providers, prompt templates, Zod output schemas, the model registry). It wires **two providers** through the Vercel AI SDK — `@ai-sdk/anthropic` and `@ai-sdk/google` — and no `@ai-sdk/*` import or model ID appears anywhere else in the repo; the package never reads `process.env` — `apps/web/src/env.ts` injects configuration (both provider keys included). That boundary is what makes the multi-provider network below enforceable: one place to swap models *or providers*, one place to version prompts, one place to meter and kill spend. (The boundary governs prompts, providers, schemas, and model calls — UI streaming hooks like `useChat` from `@ai-sdk/react` live in `apps/web`, pointed at endpoints backed by this package.)
+⚠ **This whole section is SPEC, NOT SHIPPED — it lands with M1 item 2b, which has not started.** Verified 2026-07-18: `packages/ai/package.json` depends only on `@ai-sdk/anthropic`, `provider.ts` wires only `createAnthropic`, and `env.ts` declares no Google key at all (`GOOGLE_GENERATIVE_AI_API_KEY` sits in `.env.local`, wired into 0 of 4 checklist locations). Read the present tense below as the target state.
+
+All LLM interaction lives in `packages/ai` (providers, prompt templates, Zod output schemas, the model registry). It *will* wire **two providers** through the Vercel AI SDK — `@ai-sdk/anthropic` (wired today) and `@ai-sdk/google` (**not yet installed**) — and no `@ai-sdk/*` import or model ID appears anywhere else in the repo; the package never reads `process.env` — `apps/web/src/env.ts` injects configuration (both provider keys included). That boundary is what makes the multi-provider network below enforceable: one place to swap models *or providers*, one place to version prompts, one place to meter and kill spend. (The boundary governs prompts, providers, schemas, and model calls — UI streaming hooks like `useChat` from `@ai-sdk/react` live in `apps/web`, pointed at endpoints backed by this package.)
 
 ### 1. Model-per-job network
+
+⚠ **SPEC, NOT SHIPPED (M1 item 2b).** Today `packages/ai/src/models.ts` is still the 3-tier registry `MODELS = { fast: "claude-haiku-4-5", balanced: "claude-sonnet-5", deep: "claude-opus-4-8" }` (Anthropic-only) with the signature `getModel(provider, tier)`. **When 2b lands, CLAUDE.md's "model selection by tier" rule must be rewritten to "by job" in the same change** — until then, code written against the job API below violates the repo conventions.
 
 Call sites select a **job**, never a model ID — `getModel("topic-merge")` resolves the job to its pinned `(provider, model)`. The registry in `packages/ai/src/models.ts` pins each job to an explicit model across two providers; coarse capability **ranks** (`fast < balanced < deep`) survive only to drive confidence escalation, the `AI_MAX_TIER` clamp (§6), and 429 failover:
 
@@ -4273,7 +4424,11 @@ uploads every lecture's materials (topic pages appear minutes later).
   Supabase project** (`fvqnscvqysxreetwstgr`, ledger version 20260717161053; RLS +
   `set_updated_at` triggers + FK indexes; security advisor reports no findings), **types
   regenerated**, and **committed**. The Supabase-connector re-scope blocker is resolved.
-  Remaining for item 1: the **course CRUD UI** (not started).
+  ✅ **Item 1 is now fully complete** (was: "Remaining for item 1: the course CRUD UI (not
+  started)") — the **course CRUD UI shipped in Wave 1** (`609d211`): `/courses` list +
+  create/edit/archive, `/courses/[id]` with inline assessments CRUD, semesters CRUD at
+  `/courses/semesters`. Composite tenant-scoped FKs and the `grading_scale` check constraint
+  landed in `20260718140050`.
 - **External accounts/keys provisioned** (held; each value's *code wiring* lands with the item
   that first needs it — `INNGEST_*` with item 2, `GOOGLE_GENERATIVE_AI_API_KEY` with item 2b,
   `CRON_SECRET` with item 4, `VOYAGE_API_KEY` with item 5, the `AI_*` guards with item 8):
@@ -4347,7 +4502,9 @@ uploads every lecture's materials (topic pages appear minutes later).
   | --- | --- | --- |
   | **Live ICS feed URL** (embeds a capability token) | `DEV_ICS_URL` in `apps/web/.env.local`, gitignored. Production stores it per-user in `calendar_feeds.config`, never as an env var | 3, 4 |
   | **ICS export**, re-fetched and re-verified | `.local-fixtures/calendar/` | 3, 4 |
-  | **Marketing Fundamentals syllabus** | `.local-fixtures/syllabi/` | 4, 9, 11 |
+  | **3 syllabi** (`marketing-fundamentals-sem1.pdf`, `bdba-loes-fall2025.docx`, `mathematics.pdf`) | `.local-fixtures/syllabi/` | 4, 9, 11 |
+  | **10 Marketing files** (consecutive `s01→s02→s03→s04`; `s01` as both `.pptx` and `.pdf`) + **3 Micro units** | `.local-fixtures/decks/` | 5, 6, 7 |
+  | **3 textbooks** (Kotler 156 MB, Corporate Finance 42 MB, Business in Action 12 MB) | `.local-fixtures/book/` | 5 (Deep review) |
   | **IE Academic Calendar 2026-2027** | `.local-fixtures/reference/` | 4 (term bounds) |
   | **Email sign-up verified end to end** | Confirmed working 2026-07-18 | closes the last Wave 1 auth clause |
 
@@ -4381,19 +4538,28 @@ uploads every lecture's materials (topic pages appear minutes later).
   Jun–Jul events are the retake period rather than classes.
 
   **Still outstanding, in priority order:**
-  1. 🔴 **Lecture decks** — 2–3 consecutive sessions from one course, plus one reading PDF.
-     **Blocks items 5, 6, 7.** Nothing else in M1 is waiting on a human.
-  2. 🟡 **A book-length document** for the Deep-review path (item 5 DoD clause).
-  3. 🟡 **Syllabi for the fall courses** — the one on file is from a past term and does not
-     correspond to a fall-2026 calendar course, so syllabus→calendar matching cannot yet be
-     exercised on real pairs.
+  1. ✅ ~~**Lecture decks**~~ — **supplied 2026-07-18.** `.local-fixtures/decks/` holds 10
+     Marketing files (including the consecutive `s01→s02→s03→s04` run and the `s01` .pptx/.pdf
+     A/B pair; 4 of the 5 .pptx decks measure 22–39 words/slide = visual) and 3 Micro units
+     (60–84 words/slide = text). Items 5, 6 and 7 are **unblocked**, and **no M1 item is
+     waiting on a human input.** The 40-words/slide routing threshold is well calibrated
+     against this corpus.
+  2. ✅ ~~**A book-length document**~~ — **supplied**: 3 textbooks in `.local-fixtures/book/`
+     (Kotler 156 MB — over the 50 MB cap, so it is also the `validate`-rejection test case;
+     Corporate Finance 42 MB; Business in Action 12 MB). The Deep-review DoD clause has real
+     material to run against.
+  3. 🟡 **Fall-2026 syllabi** — 3 syllabi are now on file (`marketing-fundamentals-sem1.pdf`,
+     `bdba-loes-fall2025.docx`, `mathematics.pdf`) and the revised §5.1b exam chain resolved
+     **2 of 2** of them, but they are past-term documents; a syllabus for a *fall-2026*
+     calendar course is still wanted to exercise syllabus→calendar matching on a real pair.
+     **Not blocking.**
   4. ✅ ~~IE's pass mark~~ — **resolved 2026-07-18: 5/10.**
   5. 🟡 **Inngest app sync** — only possible once `/api/inngest` is deployed; needs the
      production hostname, which appears nowhere in the repo.
   6. 🟢 **Favicon / PWA icons** — or approval to generate them from the wordmark and accent.
-  8. 🟢 **Which auth account is the real one** — needed to seed the two `semesters` rows and
-     the fall course list. Production has two users and neither matches the address on file,
-     so this must be stated, not inferred.
+  8. ✅ ~~**Which auth account is the real one**~~ — **resolved 2026-07-18:
+     `krinkk02@gmail.com` (`0092dd81-…`).** The second auth user is a test account and owns no
+     rows. Both `semesters` rows are seeded under it.
   7. 🟢 **Case PDFs** — **descoped 2026-07-18: real cases are rarer in this program than the
      plan assumed, so item 10 drops to opportunistic.** Do not let it gate M1.
 
@@ -4416,15 +4582,15 @@ uploads every lecture's materials (topic pages appear minutes later).
 | 2 | Inngest wiring (`/api/inngest`, client, env, first no-op function) | S | Architecture |
 | 2b | **AI provider layer (multi-provider):** wire `@ai-sdk/google` alongside `@ai-sdk/anthropic`; evolve `packages/ai/src/models.ts` from the 3-tier `MODELS` map to the job→(provider,model) registry (`MODELS` + `JOBS` + `RANK`) with `getModel(job)`; add `GOOGLE_GENERATIVE_AI_API_KEY` through the full env checklist (`env.ts`, `.env.example`, `turbo.json`, CI, Vercel); per-provider price tables + `(provider, model)` stamp in the cost rollup. Prerequisite for **items 5, 7, 10 and 11** — every M1 item that makes an LLM call. Items 3 and 4 (CAL-1/CAL-2) are AI-free and can run in parallel with it. | S–M | AI strategy §1/§1b |
 | 3 | Calendar hub CAL-1: provider interface, ical.js parsing w/ naked-TZID IANA fallback + real-feed DST fixtures, **sync engine (dedup, tombstones — the priority: IE signals cancellation only by disappearance)**, generic RRULE support to spec (IE feed has none), feed CRUD | M–L | Deadlines & calendar hub §3.4–3.6 |
-| 4 | Calendar hub CAL-2: **§5.1b `SUMMARY` normalizer + session parser (`(Ses. N-M)`, `Extra`/`Retake`, junk stripping, pseudo-event filter) + max-session exam detection with its three guards**; course matching + matchers; weight resolution + priority score; This Week view; structured quick-add; daily cron + staleness sync | M–L | Deadlines & calendar hub §5.1b/§8 |
-| 5 | Document pipeline: upload (TUS) → validate → extract (PDF via **Gemini** vision, PPTX via XML) → route (**Gemini Flash-Lite**) → merge (**Sonnet 5**) → **cross-family merge critic (block-diff loss-detect + Gemini verify, auto-retry)** → embed → **coverage map + syllabus checklist** → status UX w/ Realtime; **opt-in Deep-review toggle** (**Opus 4.8** 2nd-reader audit) | L (the big one) | Document & notes pipeline |
+| 4 | Calendar hub CAL-2: **§5.1b `SUMMARY` normalizer + session parser (`(Ses. N-M)`, `Extra`/`Retake`, junk stripping, pseudo-event filter — 5 rows, two of which carry a real course prefix) + syllabus-first exam detection** (REVISED 2026-07-18; chain: syllabus header session-count → highest `SESSION n` heading in the program *body* plus inline exam labels → `max(sessionTo)` from the feed as fallback, with the fallback's three guards; extraction reads the whole document body, not just the header); course matching + matchers; weight resolution + priority score; This Week view; structured quick-add; daily cron + staleness sync | M–L | Deadlines & calendar hub §5.1b/§8 |
+| 5 | Document pipeline: upload (TUS) → validate (rejects >50 MB with a specific, actionable message — no splitting, no re-compression) → extract (PDF via **Gemini** vision; PPTX routed by word density at a **40 words/slide** threshold — text decks via XML, **visual decks via CloudConvert render → PDF → Gemini vision, in scope for M1** per the 2026-07-18 decision, with `CLOUDCONVERT_API_KEY` through the full env checklist) → route (**Gemini Flash-Lite**) → merge (**Sonnet 5**) → **cross-family merge critic (block-diff loss-detect + Gemini verify, auto-retry)** → embed → **coverage map + syllabus checklist** → status UX w/ Realtime; **opt-in Deep-review toggle** (**Opus 4.8** 2nd-reader audit) | L (the big one) | Document & notes pipeline |
 | 6 | Topic pages UI: rendered page, provenance chips, revision history/revert | M | Document & notes pipeline §8 |
 | 7 | Exam review v1: weight computation + Opus generation + staleness banner | S–M | Document & notes pipeline §9 |
 | 8 | `ai_generations` log + cost rollup + kill-switch env vars | S | AI strategy §5–6 |
 | 9 | Participation & Attendance Ledger (PWA manifest, 2-tap logging) | M | Additional #4 |
 | 10 | Case-brief slice (pipeline step for `case`-tagged docs) — 🟡 **descoped to opportunistic 2026-07-18**: real case studies are much rarer in this program than the plan assumed, so this must not gate M1. Build it if a case lands; otherwise slide to M2 | S–M | Additional #2 |
 | 11 | *Stretch:* NL quick-add (CAL-3), syllabus → `assessments` extraction | S+S | Calendar §6, Additional #3 |
-| 12 | ✅ **DONE** Auth v2: access-code gate (landing page + `proxy.ts` enforcement) → email+password sign-up/login (email verify + password reset via the Resend hook) → analyst-terminal `/login` redesign. Shipped Wave 1 (`eed1b12`, `8cb4c68`, `53c560c`). Single `ACCESS_CODE` env var, **not** per-invite (deferred to M4); constant-time Web Crypto comparison (Edge has no `node:crypto`); cookie derived from the code so rotation revokes. ⚠ One clause **unproven**: signup email delivery was only ever probed with `@example.com`, which Resend refuses — needs one test with a real address | M | Vision § Identity & design; Roadmap M0.5 |
+| 12 | ✅ **DONE** Auth v2: access-code gate (landing page + `proxy.ts` enforcement) → email+password sign-up/login (email verify + password reset via the Resend hook) → analyst-terminal `/login` redesign. Shipped Wave 1 (`eed1b12`, `8cb4c68`, `53c560c`). Single `ACCESS_CODE` env var, **not** per-invite (deferred to M4); constant-time Web Crypto comparison (Edge has no `node:crypto`); cookie derived from the code so rotation revokes. ✅ **All clauses met** — sign-up confirmed working end to end 2026-07-18; the earlier 500s were an `@example.com` artifact (Resend refuses that reserved domain) and a retest with a deliverable address passed. Lesson: never probe the Resend path with `example.com`; use a real `+alias` inbox or `generate_link` | M | Vision § Identity & design; Roadmap M0.5 |
 | 13 | ✅ **DONE** **Design-system migration**, split into 13a (tokens) + 13b (shell). 13a (`6603b3e`, `06ed42b`): `globals.css` ported to the azure tokens in both themes, Newsreader + JetBrains Mono, Geist Mono retired, Phosphor migrated (lucide gone, lockfile included), email button `#1c74d8`, `courses.color` → palette key. 13b (`2bfde9b`, `f404812`): `(app)` route group, collapsible sidebar + mobile tab bar, ⌘K palette, 12 shadcn components, `loading.tsx`/`error.tsx`, jsdom + RTL test infrastructure, motion + type-scale tokens. ⚠ `.reading` wrapper exists but has **no consumer** until topic pages (item 6) | M | Vision § Identity & design |
 
 **Definition of done**
@@ -4437,10 +4603,15 @@ uploads every lecture's materials (topic pages appear minutes later).
 - Upload shows a **coverage map** ("587 of 600 pages mapped · gaps clickable"); a merge
   that would silently drop content is caught by the critic and flagged, not shipped;
   toggling **Deep review** on a book adds/flags topics as revertible revisions.
-- Real university ICS feed synced; the §5.1b normalizer filters the 3 pseudo/LMS rows,
-  resolves a course name on the remaining 376 events, and resolves a session number on every
-  event carrying a `(Ses. N)` / `(Ses. N-M)` token; the max-session rule picks a real exam
-  date for 15 of 15 courses;
+- Real university ICS feed synced; the §5.1b normalizer filters the **5** pseudo/LMS rows —
+  including the two carrying a real course prefix (`…Test the download and upload of Excel
+  files`, `…Smowl Check-Test`) — resolves a course name on the remaining **374** events,
+  **collapses fragmented name variants** (`MARKETING MANAGEMENT`'s three variants → one), and
+  resolves a session number on every event carrying a `(Ses. N)` / `(Ses. N-M)` token; the
+  **syllabus-first exam chain** picks a real exam date for **7 of 7** fall courses. (⚠ These
+  acceptance numbers were corrected 2026-07-18 from "3 pseudo rows / 376 events / max-session
+  rule / 15 of 15 courses" — the old figures counted un-normalised name variants and named the
+  superseded primary algorithm.)
   This Week shows deadlines ranked by grade impact; a lecture that **disappears** from the
   feed is tombstoned (hidden at 24 h, deleted at 7 d) and restores its `course_id` and
   completion state if it reappears; events on both sides of the 27 Mar / 26 Oct DST
@@ -4569,10 +4740,10 @@ real course schedule, with weak spots feeding the same daily review queue.
 | --- | --- | --- |
 | **Topic-merge quality drift** — the LLM merge produces duplicated, mangled, or lossy topic pages over a semester of uploads | Medium / High (it's the core promise) | Deterministic duplicate guard (embedding similarity ≥ 0.85 coerces create→update) **and block-diff loss-detector** (a block dropped without a superseded flag is caught); **cross-family merge critic** (`gemini-3.1-flash-lite`, decorrelated from the Sonnet merge) with one auto-retry then a `needs_review` flag; **coverage map + syllabus checklist** so silent omissions are measured, not trusted; **opt-in deep-review second reader** for big docs; immutable `topic_revisions` with one-click revert; eval-by-diff before any prompt-version bump; conflicts surfaced as `openQuestions`, never silently resolved |
 | **Born-active AI ships a bad artifact** — the default-active flip removes the mandatory per-item approval gate | Medium / Low | Critic holds the flagged minority; every artifact is reversible (edit / suspend / revert) so a slip costs seconds; mandatory confirm retained where a wrong item is silent + expensive (grade weights, deadlines); "hardest cards today" surfaces bad cards at review time |
-| **Access-code gate is a soft secret** — a leaked code + shared provider keys (Anthropic + Gemini) let a new signup drain the global AI budget | Medium / Medium | Rotatable / per-invite codes, `proxy.ts`-enforced; the `AI_MONTHLY_BUDGET_USD` guard + kill switch bound total spend; per-user metering added before opening the code widely (tracked in M1 auth item / M4 multi-user hardening) |
+| **Access-code gate is a soft secret** — a leaked code + shared provider keys (Anthropic + Gemini) let a new signup drain the global AI budget | Medium / Medium | ⚠ Corrected 2026-07-18 to what actually shipped: a **single `ACCESS_CODE`** env value, `proxy.ts`-enforced and **rotatable** (each gate cookie is derived from the code, so changing the value revokes every issued cookie); **per-invite codes are deferred to M4** with no table planned before then. The `AI_MONTHLY_BUDGET_USD` guard + kill switch bound total spend; per-user metering added before opening the code widely (tracked in M1 auth item / M4 multi-user hardening) |
 | **Slide decks tokenize heavier than modeled** (~2K/slide assumed; image-dense decks hit 3K+, and a big deck can cross Gemini's 200K long-context surcharge, $2→$4/M in) → doc-structuring cost balloons | Medium / Medium | per-provider `ai_generations` rollup watched after first real decks; Gemini batch (−50%) on offline backfills; PPTX text path is 10× cheaper; re-point `doc-structuring` to a cheaper model in one line if needed; budget guard defers background jobs at 100% of `AI_MONTHLY_BUDGET_USD` |
 | **Vercel Hobby limits bite** (300 s function ceiling, 1 cron/day) | Medium / Low | Inngest steps are each < 300 s by design; on-demand staleness sync makes daily cron a safety net only; Pro upgrade (800 s, unlimited crons) is the escape hatch, not a re-architecture |
-| **ICS feed fidelity** — verified 2026-07-18 (§3.4–3.6, §5.1b): zero `VTIMEZONE` blocks behind 738 naked `TZID`s, zero `STATUS:CANCELLED` (cancellation shows only as disappearance), empty `DESCRIPTION` on all 379 events, and a dirty free-text `SUMMARY` grammar carrying the course + session number | **Certain / Medium** (no longer speculative — these are measured properties) | IANA fallback is the *primary* TZID path, and a non-resolvable TZID fails loudly to a processing event; the tombstone grace period (24 h hide, 7 d delete) is the **only** cancellation detector, so it carries the CAL-1 fixture effort; weights come from `assessments` (manual/syllabus-extracted) rather than the feed; the §5.1b normalizer is spec'd against real dirty samples and keeps `raw_summary` so rules can be re-run after a fix |
+| **ICS feed fidelity** — verified 2026-07-18 (§3.4–3.6, §5.1b): zero `VTIMEZONE` blocks behind 738 naked `TZID`s, zero `STATUS:CANCELLED` (cancellation shows only as disappearance), `DESCRIPTION` **present but blank** on all 379 events (literal `\n\n` on 378; the 379th holds a "Last Update Time" string — ⚠ corrected 2026-07-18 from "empty": a truthiness test sees a value, so blank-detection must `.trim()`), and a dirty free-text `SUMMARY` grammar carrying the course + session number | **Certain / Medium** (no longer speculative — these are measured properties) | IANA fallback is the *primary* TZID path, and a non-resolvable TZID fails loudly to a processing event; the tombstone grace period (24 h hide, 7 d delete) is the **only** cancellation detector, so it carries the CAL-1 fixture effort; weights come from `assessments` (manual/syllabus-extracted) rather than the feed; the §5.1b normalizer is spec'd against real dirty samples and keeps `raw_summary` so rules can be re-run after a fix |
 | **TS 7 / ecosystem gap** (already hit at scaffold: Next 16 needs the JS compiler API) | Certain / Low | Pinned to TS 5.9 with a documented revisit; no code depends on TS 7 features |
 | **Node-side Pyodide for the lesson validation gate proves brittle on Vercel** | Medium / Low | Explicit spike early in CT-2; documented fallback = validate in-browser on first open ("checking lesson…" state) |
 | **Inngest vendor dependency** | Low / Medium | Free tier is ~25–50× above a heavy month's needs (§3); functions are plain route-handler code — the step structure would port to Trigger.dev with mechanical effort; event names and job tables are ours |
@@ -4619,11 +4790,18 @@ real course schedule, with weak spots feeding the same daily review queue.
    `VOYAGE_API_KEY`. **2026-07-18:** ✅ Google Gemini `GOOGLE_GENERATIVE_AI_API_KEY`
    created + set in `.env.local` and Vercel for the two-provider AI network (AI strategy §1b),
    and ✅ all self-chosen env values set in `.env.local` + Vercel: `CRON_SECRET`,
-   `AI_KILL_SWITCH`, `AI_MAX_TIER=deep`, `AI_MONTHLY_BUDGET_USD`. **No env values remain
-   outstanding** — only their code wiring (`env.ts`, `.env.example`, `turbo.json`, CI), which
-   lands with items 2 / 2b / 4 / 5 / 8 per the mapping in the M1 progress note.
-   ⚠ **CloudConvert is missed by this "no env values outstanding" claim** — see the PPTX
-   note below; if the v1.1 visual path ships, its key needs the full checklist too.
+   `AI_KILL_SWITCH`, `AI_MAX_TIER=deep`, `AI_MONTHLY_BUDGET_USD`.
+   ⚠ **Corrected 2026-07-18 — the earlier "No env values remain outstanding" claim is false.**
+   All *previously-provisioned* values are set, but 🔴 **`CLOUDCONVERT_API_KEY` is still
+   outstanding**: DECIDED 2026-07-18, CloudConvert lands **inside item 5** (for a visual course
+   it *is* the extraction path; 4 of 5 Marketing decks measure 22–39 words/slide), so it is an
+   unconditional M1 dependency, not the hypothetical "if the v1.1 visual path ships" the
+   earlier note treated it as. It must be created and run through the full checklist with
+   item 5. Wiring status for the rest: 8 values sit in `.env.local` wired into **0 of 4**
+   checklist locations (`INNGEST_EVENT_KEY`, `INNGEST_SIGNING_KEY`, `VOYAGE_API_KEY`,
+   `GOOGLE_GENERATIVE_AI_API_KEY`, `CRON_SECRET`, `AI_KILL_SWITCH`, `AI_MAX_TIER`,
+   `AI_MONTHLY_BUDGET_USD`), landing with items 2 / 2b / 4 / 5 / 8 per the mapping in the M1
+   progress note. `DEV_ICS_URL` is local-only and deliberately excluded.
    ✅ **DECIDED 2026-07-18 — keep the Supabase Free plan and the 50 MB cap.** The real corpus
    showed one document over it (*Kotler, Principles of Marketing*, **156 MB**; *Principles of
    Corporate Finance* 42 MB and *Business in Action* 12 MB both fit). Alexander shrinks
@@ -4642,20 +4820,30 @@ real course schedule, with weak spots feeding the same daily review queue.
    Inngest step model rather than needing new infrastructure. Not required for M1 — manual
    compression covers the immediate need — but it is the right long-term shape for books.
 2. **The ICS feed URL(s)** — ✅ **resolved 2026-07-18.** URL supplied and the live feed
-   fetched and analysed (379 events, 2026-01-19 → 2026-12-18, two semesters, 15 courses).
+   fetched and analysed (379 events, 2026-01-19 → 2026-12-18, two semesters, **15 apparent
+   course-name variants** — ⚠ corrected 2026-07-18: not 15 courses; the fall term's 9 apparent
+   variants normalise to **7 real courses**, see §5.1b correction 3).
    Answers: it is **one global feed** (`X-WR-CALNAME: My IE Agenda`), not per-course; UIDs are
-   379/379 unique (clean dedup key); `DESCRIPTION` is empty on every event, confirming weights
-   must come from `assessments`, never the feed. Structural findings are written into §3.4
+   379/379 unique (clean dedup key); `DESCRIPTION` is **present but blank** on every event
+   (literal `\n\n`; one row carries a "Last Update Time" string — ⚠ corrected from "empty"),
+   confirming weights must come from `assessments`, never the feed. Structural findings are written into §3.4
    (naked TZIDs), §3.5 (no recurrence), §3.6 (cancellation by disappearance) and §5.1b
    (summary grammar + exam detection). Remaining: commit a **sanitized** fixture subset —
    the raw export contains the real schedule and stays out of git.
 3. **One real course bundle for pipeline evaluation** — 2–3 lecture decks (incl. one
    image-heavy) and one reading PDF. The merge algorithm gets tuned
-   against real material, not synthetic fixtures. 🔴 **STILL OUTSTANDING as of 2026-07-18 —
-   this is now the single largest blocker in M1.** Items 5, 6 and 7 cannot start without it.
-   Everything else on the input list has landed (see *Supplied material* below).
-4. **IE grading specifics** — 🟡 **two of three ANSWERED 2026-07-18** from the first real
-   syllabus (*Marketing Fundamentals*, in `apps/web/.local-fixtures/syllabi/`):
+   against real material, not synthetic fixtures. ✅ **RESOLVED 2026-07-18** (this entry
+   previously read "🔴 STILL OUTSTANDING — the single largest blocker in M1"; the corpus has
+   since landed). `apps/web/.local-fixtures/` holds 10 Marketing files — including the
+   consecutive `s01→s02→s03→s04` run and the `s01` .pptx/.pdf A/B pair, with 4 of 5 .pptx decks
+   measuring 22–39 words/slide (visual) — plus 3 Micro units (60–84 words/slide, text),
+   3 textbooks and 3 syllabi. **Items 5, 6 and 7 are unblocked, and no M1 item is waiting on a
+   human input.** The 40-words/slide routing threshold is well calibrated against this corpus.
+4. **IE grading specifics** — ✅ **FULLY RESOLVED 2026-07-18** (pass mark 5/10; 80 % attendance
+   required → `absence_fail_pct = 20`, confirmed universal; participation is a separate graded
+   component — never conflate the two). Answered from the first real syllabus
+   (*Marketing Fundamentals*, in `apps/web/.local-fixtures/syllabi/`) plus Alexander's
+   confirmations:
    - ✅ **Attendance-failure policy: the threshold is 80 % ATTENDANCE REQUIRED, i.e.
      `absence_fail_pct = 20`.** Quoted: *"Students who do not comply with the 80% attendance
      requirement in each subject during the semester will automatically fail both calls
@@ -4664,8 +4852,9 @@ real course schedule, with weak spots feeding the same daily review queue.
      stricter, so the at-risk maths must be rebuilt on 20 %.** Note it also fails *both*
      sittings, not just the ordinary one, which makes the warning far more consequential
      than a normal deadline miss — the Participation Ledger should treat approaching 20 %
-     as a hard alarm, not an amber nudge. Confirm this figure is university-wide rather
-     than per-syllabus before hardcoding a default.
+     as a hard alarm, not an amber nudge. ✅ **Confirmed university-wide 2026-07-18** (see
+     below) — hardcode `absence_fail_pct = 20` as the default; no IE policy-document lookup
+     needed. (This closes the earlier "confirm before hardcoding a default" action.)
    - ✅ **Participation weight is real and large: 15 %** in this syllabus, inside the plan's
      assumed 10–25 % band. Full evaluation table, which sums cleanly to 100: Final Exam 30 ·
      Group Presentation 25 · Class Participation 15 · Intermediate tests 15 (3 × 5) ·
