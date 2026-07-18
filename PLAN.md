@@ -4362,9 +4362,23 @@ uploads every lecture's materials (topic pages appear minutes later).
     28 May for BAS — do not apply. Note the 3rd-year Dual Programs carve-out will matter in
     a future year, so store the rule, not just the date.)
 
-  **Both `semesters` rows are therefore fully determined** and can be seeded as soon as the
-  owning account is named — `public.semesters` is still empty, and the production project has
-  two auth users, so which one is the real account must be stated rather than guessed.
+  ✅ **Both `semesters` rows SEEDED 2026-07-18** into production, owned by
+  `krinkk02@gmail.com` (`0092dd81-…`, the original account — the second auth user is a test
+  account and owns nothing):
+  - `2026/27 Fall` — 2026-08-31 (Mon) → 2026-12-18 (Fri), 109 days
+  - `2026/27 Spring` — 2027-01-11 (Mon) → 2027-05-21 (Fri), 130 days
+
+  Validated against the live feed: **all 154 fall events fall inside the fall bounds, none
+  outside** — so guard 2 of the exam-detection rule (candidate must sit inside term bounds)
+  now has real data to test against and passes on the whole term.
+
+  ⚠ **Gap: the 2025/26 Spring term has no `semesters` row.** The feed's other 225 events run
+  2026-01-19 → 2026-07-18 and belong to the academic year that just ended, not to
+  `2026/27 Spring`. That matters because the historical decks and syllabi in
+  `.local-fixtures/` are from that term, so any exam-detection test run against the *sample*
+  data has no term bounds to check. Seeding it needs the **2025-2026** academic calendar,
+  which is not on file — and its end date cannot be inferred from the feed, since the
+  Jun–Jul events are the retake period rather than classes.
 
   **Still outstanding, in priority order:**
   1. 🔴 **Lecture decks** — 2–3 consecutive sessions from one course, plus one reading PDF.
