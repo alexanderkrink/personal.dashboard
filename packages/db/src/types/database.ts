@@ -22,6 +22,7 @@ export type Database = {
           due_hint: string | null
           id: string
           kind: string
+          session_number: number | null
           source: string
           title: string
           updated_at: string
@@ -35,6 +36,7 @@ export type Database = {
           due_hint?: string | null
           id?: string
           kind: string
+          session_number?: number | null
           source?: string
           title: string
           updated_at?: string
@@ -48,6 +50,7 @@ export type Database = {
           due_hint?: string | null
           id?: string
           kind?: string
+          session_number?: number | null
           source?: string
           title?: string
           updated_at?: string
@@ -80,6 +83,7 @@ export type Database = {
           semester_id: string | null
           target_grade: number | null
           title: string
+          total_sessions: number | null
           updated_at: string
           user_id: string
         }
@@ -98,6 +102,7 @@ export type Database = {
           semester_id?: string | null
           target_grade?: number | null
           title: string
+          total_sessions?: number | null
           updated_at?: string
           user_id: string
         }
@@ -116,6 +121,7 @@ export type Database = {
           semester_id?: string | null
           target_grade?: number | null
           title?: string
+          total_sessions?: number | null
           updated_at?: string
           user_id?: string
         }
