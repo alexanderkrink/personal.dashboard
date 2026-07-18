@@ -1108,11 +1108,21 @@ Neither provider reads PPTX natively. Two-tier approach:
 > and matches how the decks actually look. But the consequence was under-planned: shipping
 > item 5 "text-only for v1, visual later" means the Marketing course extracts at 22–39
 > words/slide, i.e. mostly-empty topic pages from decks whose content is in the images.
-> **Therefore: either CloudConvert (or equivalent) lands inside item 5 rather than after it,
-> or item 5's acceptance corpus must be a text-rich course (Micro) and Marketing is knowingly
-> deferred.** Note also that `extraction_fidelity` stops being a rarely-used field and becomes
-> a routine UI state, so the "why does this page look thin?" explanation needs to be built,
-> not stubbed.
+> **✅ DECIDED 2026-07-18: CloudConvert lands INSIDE item 5, not after it.** Alexander's
+> requirement is explicit — images must be extracted and used properly, not skipped. So the
+> visual path is part of item 5's definition of done, not a v1.1 follow-up, and the
+> "auto-upgrade" framing above is superseded: for a course like Marketing the visual path is
+> simply *the* path. Consequences to plan for:
+> - **The CloudConvert API key is a real M1 dependency** and needs the full env checklist
+>   (`env.ts`, `.env.example`, `turbo.json`, CI, Vercel) — it is the one key the "no env
+>   values remain outstanding" claim in open question 1 misses.
+> - **Budget**: ~$0.01/deck is negligible, but every visual deck then re-enters the Gemini
+>   vision path, which is the expensive branch. Marketing's ~150 slides across five decks is
+>   the figure to price against the ~2K tokens/slide assumption.
+> - `extraction_fidelity` stops being a rarely-used field and becomes a routine UI state, so
+>   the "why does this page look thin?" explanation must be built, not stubbed.
+> - The `s01` **.pptx/.pdf pair** is the acceptance test: run both, diff the extracted
+>   content, and confirm the visual path recovers what the text path drops.
 >
 > Two useful properties of the supplied corpus: `Session 1` exists as **both `.pptx` and
 > `.pdf`** (9 MB vs 1 MB) — the same lecture through both pipelines, which is the natural
@@ -1875,15 +1885,31 @@ from the real feed drive this:
 > program runs `SESSION 1 … SESSION 30`, and its evaluation table puts `Final Exam 30%` —
 > the session count is a first-class, reliably-placed field, not something inferred.
 >
-> **⚠ Qualified 2026-07-18 after a second real syllabus landed — the session-count field is
-> NOT universal, so the fallback is load-bearing, not ceremonial.** *Marketing Fundamentals*
-> states `NUMBER OF SESSIONS: 30` in its header. The *Learning to Observe, Experiment and
-> Survey* syllabus (BDBA, first year, Fall 2025) carries **no such field at all** — it
-> declares credits, language, category and a session-by-session program, but never a total.
-> So the resolution chain is: **(1) syllabus-declared session count if the field exists →
-> (2) highest `SESSION n` heading in the syllabus program → (3) `max(sessionTo)` from the
-> feed.** Do not build as though step 1 always resolves; on this evidence it resolves for
-> roughly half of courses.
+> **✅ Confirmed against a second real syllabus 2026-07-18 — and it is stronger than first
+> assessed.** (An earlier draft of this note claimed the *Learning to Observe, Experiment and
+> Survey* syllabus lacked session data. That was wrong — it came from scraping only the
+> document header. Reading the full 420-paragraph body shows the opposite.)
+>
+> Both syllabi resolve, by two different routes:
+> - *Marketing Fundamentals* — **header field**: `NUMBER OF SESSIONS: 30`.
+> - *LOES* (BDBA, first year, Fall 2025) — **no header field**, but the program body lists
+>   `SESSION 1` … `SESSION 30`, and, decisively, **labels the exam sessions inline**:
+>   `SESSION 30 (LIVE IN-PERSON) Final Exam` and `SESSION 19 (LIVE IN-PERSON) In class
+>   Midterm Exam`.
+>
+> So the syllabus yields more than a count — it yields **which session is which assessment**.
+> That is a materially better signal than a bare total: the system learns "session 30 is the
+> final, session 19 is the midterm" and needs the calendar only to supply the *dates*.
+> Resolution chain: **(1) header session-count field → (2) highest `SESSION n` heading in the
+> program body, plus any inline `Final Exam` / `Midterm` labels → (3) `max(sessionTo)` from
+> the feed.** Steps 1–2 resolved **2 of 2** real syllabi. Step 3 remains the fallback for
+> courses with no syllabus on file.
+>
+> Implementation note: extract from the **whole document body**, not the header block. Both
+> syllabi bury load-bearing data far down — LOES puts its entire evaluation table at
+> paragraph ~293 of 420 — and a header-only parse silently produces confident nonsense.
+> Also expect combined headings (`SESSION 28 & 29`), which is why LOES shows 28 headings
+> spanning a 1..30 range.
 >
 > **Why this ordering is strictly better than max-session-first.** `max(sessionTo)` silently
 > conflates two different states: *"session N is the last one"* and *"session N is the last
@@ -4576,18 +4602,23 @@ real course schedule, with weak spots feeding the same daily review queue.
    lands with items 2 / 2b / 4 / 5 / 8 per the mapping in the M1 progress note.
    ⚠ **CloudConvert is missed by this "no env values outstanding" claim** — see the PPTX
    note below; if the v1.1 visual path ships, its key needs the full checklist too.
-   ~~The Supabase Free plan suffices — every upload fits its 50 MB per-file cap.~~
-   🔴 **DISPROVEN 2026-07-18.** The real corpus landed and the Marketing course textbook
-   (*Kotler, Principles of Marketing*) is **156 MB — 3× over Supabase's 50 MB per-file cap**,
-   and the plan's own `validate` step enforces the same 50 MB limit. Two other textbooks do
-   fit (*Principles of Corporate Finance* 42 MB, *Business in Action* 12 MB), so this is not
-   universal — but "every upload fits" is false, and the single most valuable document for
-   the Deep-review DoD clause is the one that does not. **Decision needed before item 5:**
-   raise the cap and move to a Supabase paid tier, split oversized books client-side before
-   upload (chapter ranges — probably right anyway, since a 156 MB book is far past the point
-   where one extraction call is sensible), or accept that textbook-scale documents are out of
-   scope for M1. The `validate` step must fail such a file with a *useful* message, not a
-   generic rejection.
+   ✅ **DECIDED 2026-07-18 — keep the Supabase Free plan and the 50 MB cap.** The real corpus
+   showed one document over it (*Kotler, Principles of Marketing*, **156 MB**; *Principles of
+   Corporate Finance* 42 MB and *Business in Action* 12 MB both fit). Alexander shrinks
+   oversized files with an online compressor before upload, so this does not gate item 5.
+   Requirement that follows: `validate` must reject an oversized file with a **specific,
+   actionable** message — state the actual size, the 50 MB limit, and suggest compressing or
+   splitting — never a generic failure.
+
+   **Design idea parked for books (M1 stretch or M2):** an **orchestrator + per-chapter fan-out**
+   — one agent detects chapter boundaries and spawns one extraction agent per chapter, each
+   persisting independently. This is worth building on its own merits, not just as a
+   size workaround: a 156 MB / several-hundred-page textbook is far past the point where a
+   single extraction call is sensible, chapters are the natural topic boundary the merge step
+   already wants, per-chapter jobs fit comfortably inside Vercel's 300 s Hobby ceiling, and a
+   failure costs one chapter rather than the whole book. It also composes with the existing
+   Inngest step model rather than needing new infrastructure. Not required for M1 — manual
+   compression covers the immediate need — but it is the right long-term shape for books.
 2. **The ICS feed URL(s)** — ✅ **resolved 2026-07-18.** URL supplied and the live feed
    fetched and analysed (379 events, 2026-01-19 → 2026-12-18, two semesters, 15 courses).
    Answers: it is **one global feed** (`X-WR-CALNAME: My IE Agenda`), not per-course; UIDs are
@@ -4620,15 +4651,29 @@ real course schedule, with weak spots feeding the same daily review queue.
    - ❌ **Pass mark (assumed 5/10) still unverified** — this syllabus does not state it.
      Still needed for the Bavarian conversion; check IE's academic regulations rather than
      a syllabus, since it is a university-level constant.
-   - 📄 **Where the definitive attendance rule lives**: the LOES syllabus cites an
-     **"IE Attendance Policy 2025-2026" document posted on Blackboard**. That is the
-     university-wide source; the 80 % figure should be confirmed against it before being
-     hardcoded as a default, since per-syllabus restatements may vary.
-   - ⚠ **`participation_weight` is genuinely 0 for some courses** — LOES states plainly that
-     *"attendance in class does not form part of your grade."* So the column is not merely
-     "sometimes unknown", it is sometimes legitimately zero, and the Participation Ledger
-     must render a course with no participation component without implying the user is
-     failing to log. Do not treat null and zero as the same state.
+   - ✅ **80 % is universal — confirmed by Alexander 2026-07-18.** It applies to every course;
+     no need to consult the IE policy document. Hardcode `absence_fail_pct = 20` as the
+     default. The LOES syllabus states the consequence precisely: *"Each student has 4
+     chances to pass any given course distributed in two consecutive academic years… Students
+     who do not attend 80% of each class will lose their 1st and 2nd chance and go directly
+     to the 3rd."* So breaching it burns **two of four attempts at once** — materially worse
+     than "fails this sitting", and the strongest argument for the ledger treating approach
+     to 20 % as an alarm rather than a nudge.
+   - 🔴 **ATTENDANCE AND PARTICIPATION ARE DIFFERENT THINGS. Never conflate them.**
+     (An earlier draft of this plan did, and concluded `participation_weight = 0` for LOES.
+     That was wrong.) They are orthogonal axes:
+     - **Attendance** is a **pass/fail gate**, not a grade component. LOES: *"your attendance
+       in class does not form part of your grade."* It contributes 0 points and yet can fail
+       the course outright.
+     - **Participation** is a **graded component**. LOES grades it at **10 %**
+       (`Participation in Activities/Discussions, Labs/Workshops`), inside a table summing to
+       exactly 100: Midterm Exam 30 · Final Exam 25 · Short Quizzes 15 · Participation 10 ·
+       Group Research Presentation 10 · Experiment Participation 5 · Online Discussions 5.
+     So `participation_weight` and `absence_fail_pct` are independent columns and must be
+     extracted independently — a course can grade participation heavily while attendance
+     carries no points, which is exactly the LOES case. A parser keying on the word
+     "attendance" to find the participation weight will return the wrong number with high
+     confidence.
 5. **Budget comfort** — ✅ `AI_MONTHLY_BUDGET_USD` set in `.env.local` + Vercel (2026-07-18).
    The cost model assumes ≈ $35–60/month AI spend at full usage against a $75 soft cap
    (two-provider network, AI strategy §4); if the value set differs from 75, the guard
