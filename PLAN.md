@@ -1789,6 +1789,44 @@ event can cover two sessions); classify `Extra` / `Retake` / `Final Exam` descri
 the room from the `LOCATION` field, never from `SUMMARY` (it is duplicated there). Drop the
 `**Last Update (IE Calendar)**` pseudo-event and the two LMS-style `BBADBA SEP-2025…` rows.
 
+> **✅ Re-fetched and re-verified 2026-07-18 against the live feed** (URL now in
+> `apps/web/.env.local` as `DEV_ICS_URL`; export saved to the gitignored
+> `apps/web/.local-fixtures/calendar/`). Confirmed **exactly**: 379 VEVENTs · 0 `VTIMEZONE`
+> · 738 naked `TZID=Europe/Madrid` · 0 `STATUS:CANCELLED` · 0 `RRULE` · range
+> 2026-01-19 → 2026-12-18. The measured properties this plan is built on all hold.
+>
+> **Three corrections the re-fetch produced:**
+> 1. **`DESCRIPTION` is present-but-blank, not absent.** 378 of 379 events carry the literal
+>    two-character value `\n\n`; the 379th carries `Last Update Time for this calendar was at:
+>    …`. The plan's "empty `DESCRIPTION` on all 379 events" is substantively right but a
+>    parser testing `if (description)` will see **truthy** on every event. Test
+>    `description.trim()`, and treat the `Last Update` row as the pseudo-event it is.
+> 2. **There are 5 pseudo/LMS rows, not 3.** Beyond `**Last Update (IE Calendar)**` and the
+>    two `BBADBA SEP-2025…` rows, the feed also carries
+>    `APPLIED BUSINESS MATHEMATICS   Test the download and upload of Excel files` and
+>    `APPLIED BUSINESS MATHEMATICS   Smowl Check-Test: Multiattempt…`. These are proctoring
+>    and file-upload checks, not classes — note they carry a **real course prefix**, so a
+>    filter keyed on "no course name" will not catch them. The M1 DoD's "filters the 3
+>    pseudo/LMS rows" is understated; the correct figure is **5**.
+> 3. **Name fragmentation is worse than the samples suggest, and it splits real courses.**
+>    Before normalisation the fall term appears to hold 9 courses; after stripping `|` and
+>    `, null` it is **7**. `MARKETING MANAGEMENT` alone fragments across three variants
+>    (`MARKETING MANAGEMENT`, `… |`, `… | | , null`) holding 10 + 3 + 2 events — so an
+>    un-normalised group-by loses 5 of its 15 events **and** understates its max session.
+>    The normalizer is therefore not cosmetic: exam detection is wrong without it.
+>
+> **Fall 2026 term, after normalisation** (7 courses — the set to build against):
+> `ALGORITHMS & DATA STRUCTURES` (30 evts, maxSes 30, final 12-10) ·
+> `MATHEMATICS FOR DATA MANAGEMENT AND ANALYSIS` (30/30, 12-18) ·
+> `PROGRAMMING FOR DATA MANAGEMENT & ANALYSIS` (30/30, 12-16) ·
+> `PROBABILITY & STATISTICS FOR DATA MANAGEMENT AND ANALYSIS` (34 evts/35, 12-11) ·
+> `MARKETING MANAGEMENT` (15/20, 12-17) · `BUILDING POWERFUL RELATIONSHIPS` (13/25, 12-09) ·
+> `ATTENTION MANAGEMENT FOR LEARNING` (2/2, 09-25).
+> Note the last three have far fewer events than sessions because they use `(Ses. N-M)`
+> **ranged** rows (one calendar event covering two sessions) — confirmed in the raw data,
+> e.g. `BUILDING POWERFUL RELATIONSHIPS  (Ses. 24-25)`. Any per-session logic must expand
+> ranges, or it will undercount taught sessions by nearly half on these courses.
+
 **Exam detection — max session number, not keyword, not chronology.** Two observations
 from the real feed drive this:
 
@@ -1796,7 +1834,24 @@ from the real feed drive this:
 - Exams are the **last regular session** of a course; max session lands on clean values
   (35 / 30 / 25 / 20 / 6) and resolves **15 of 15** courses to a real date.
 
-So: `examCandidate(course) = the event holding max(sessionTo)` among regular sessions.
+> **⚠ REVISED 2026-07-18 (Alexander's decision) — the syllabus session count is the PRIMARY
+> oracle, and max-session becomes the fallback.** The rule is now:
+> **the syllabus declares a total session count `N` → find the calendar event carrying
+> session `N` → that is the exam date.** Confirmed against the real material: the
+> *Marketing Fundamentals* syllabus states `NUMBER OF SESSIONS: 30` in its header, its
+> program runs `SESSION 1 … SESSION 30`, and its evaluation table puts `Final Exam 30%` —
+> the session count is a first-class, reliably-placed field, not something inferred.
+>
+> **Why this ordering is strictly better than max-session-first.** `max(sessionTo)` silently
+> conflates two different states: *"session N is the last one"* and *"session N is the last
+> one **published so far**"*. The 2026-07-18 re-fetch shows the second state is real — the
+> fall term has courses whose feed rows are incomplete relative to their true session count.
+> With the syllabus number in hand the system can distinguish **"exam found"** from
+> **"exam not yet published, expect session N"** and say so, instead of confidently naming
+> the wrong date. Max-session is retained as the fallback for any course with no syllabus
+> on file, and the two disagreeing remains a surfaced conflict (below), not a silent pick.
+
+So (fallback path): `examCandidate(course) = the event holding max(sessionTo)` among regular sessions.
 **Retakes cannot be selected by this rule** — verified: every retake/exam-labeled event in
 the feed carries *no* `(Ses. N)` token at all (IE writes it in prose: "Session 30", "ABM30"),
 so retakes are structurally outside the session-number domain. Guards nonetheless, because
@@ -3218,8 +3273,13 @@ live from #4; workload sparkline reads #9's `study_events` (degrades gracefully 
 ### 4. Participation & Attendance Ledger
 
 **(a) What it is & why it matters.** Participation is a *graded component* at IE — often
-10–25% of the course grade (verify per syllabus) — and IE enforces an attendance threshold
-where excessive absences (~30%) can fail the course (verify exact policy). Participation
+10–25% of the course grade (**verified 2026-07-18: 15 % in the first real syllabus**) — and
+IE enforces an attendance threshold where excessive absences fail the course.
+**⚠ Corrected 2026-07-18: the threshold is an 80 % attendance requirement, i.e. failure at
+20 % absences — not the "~30%" previously assumed here.** Missing it "automatically fail[s]
+both calls (ordinary and extraordinary) for that Academic Year", so the consequence is a
+forced re-take, not a lost sitting. Default `absence_fail_pct = 20`, and surface approach to
+that line as a hard alarm. Participation
 grades die from unmeasured drift: three quiet weeks in one course and the component is gone.
 This is a phone-first ledger: log every comment/cold-call in under two taps during or right
 after class, track absences against the failure threshold, and walk into each session with
@@ -4210,6 +4270,42 @@ uploads every lecture's materials (topic pages appear minutes later).
   - A **cross-tenant foreign-key hole RLS cannot express** — see *RLS strategy* rule 7.
     Closed structurally in `20260718140050`.
 
+- **✅ Supplied material & remaining human inputs (recorded 2026-07-18).** Everything real
+  now lives in the **gitignored** `apps/web/.local-fixtures/` (copyrighted and personal —
+  only sanitized derivations may ever be committed; see its `README.md`).
+
+  | Supplied | Where | Unblocks |
+  | --- | --- | --- |
+  | **Live ICS feed URL** (embeds a capability token) | `DEV_ICS_URL` in `apps/web/.env.local`, gitignored. Production stores it per-user in `calendar_feeds.config`, never as an env var | 3, 4 |
+  | **ICS export**, re-fetched and re-verified | `.local-fixtures/calendar/` | 3, 4 |
+  | **Marketing Fundamentals syllabus** | `.local-fixtures/syllabi/` | 4, 9, 11 |
+  | **IE Academic Calendar 2026-2027** | `.local-fixtures/reference/` | 4 (term bounds) |
+  | **Email sign-up verified end to end** | Confirmed working 2026-07-18 | closes the last Wave 1 auth clause |
+
+  **Semester bounds, read off the official academic calendar** — these are the `semesters`
+  rows to create, and they reconcile exactly with the feed (term 1 ends 18 Dec; the feed's
+  last fall event is `MATHEMATICS … (Ses. 30)` on 2026-12-18):
+  - **Term 1 (Fall 2026): 2026-08-31 → 2026-12-18.** Winter break 19 Dec–10 Jan.
+  - **Term 2 (Spring 2027): 2027-01-11 → 2027-05-21** for 1st/2nd-year and 3rd-year Dual
+    Programs students. Spring break 20–29 Mar. Retake period 31 May–30 Jun.
+    ⚠ End-of-classes is **program-dependent** (7 May for 3rd/4th/5th year, 21 May for
+    1st/2nd year and 3rd-year Dual Programs, 28 May for BAS) — confirm which line applies
+    before seeding the row.
+
+  **Still outstanding, in priority order:**
+  1. 🔴 **Lecture decks** — 2–3 consecutive sessions from one course, plus one reading PDF.
+     **Blocks items 5, 6, 7.** Nothing else in M1 is waiting on a human.
+  2. 🟡 **A book-length document** for the Deep-review path (item 5 DoD clause).
+  3. 🟡 **Syllabi for the fall courses** — the one on file is from a past term and does not
+     correspond to a fall-2026 calendar course, so syllabus→calendar matching cannot yet be
+     exercised on real pairs.
+  4. 🟡 **IE's pass mark** (assumed 5/10) — a university regulation, not a syllabus field.
+  5. 🟡 **Inngest app sync** — only possible once `/api/inngest` is deployed; needs the
+     production hostname, which appears nowhere in the repo.
+  6. 🟢 **Favicon / PWA icons** — or approval to generate them from the wordmark and accent.
+  7. 🟢 **Case PDFs** — **descoped 2026-07-18: real cases are rarer in this program than the
+     plan assumed, so item 10 drops to opportunistic.** Do not let it gate M1.
+
   **Known gaps carried out of Wave 1** (none blocking, all deliberate): the `.reading`
   register has no consumer surface until topic pages; no sync-status chip (nothing to report
   on until ICS feeds exist — a chip that always reads "ok" is a lie in waiting); ⌘K has
@@ -4235,7 +4331,7 @@ uploads every lecture's materials (topic pages appear minutes later).
 | 7 | Exam review v1: weight computation + Opus generation + staleness banner | S–M | Document & notes pipeline §9 |
 | 8 | `ai_generations` log + cost rollup + kill-switch env vars | S | AI strategy §5–6 |
 | 9 | Participation & Attendance Ledger (PWA manifest, 2-tap logging) | M | Additional #4 |
-| 10 | Case-brief slice (pipeline step for `case`-tagged docs) | S–M | Additional #2 |
+| 10 | Case-brief slice (pipeline step for `case`-tagged docs) — 🟡 **descoped to opportunistic 2026-07-18**: real case studies are much rarer in this program than the plan assumed, so this must not gate M1. Build it if a case lands; otherwise slide to M2 | S–M | Additional #2 |
 | 11 | *Stretch:* NL quick-add (CAL-3), syllabus → `assessments` extraction | S+S | Calendar §6, Additional #3 |
 | 12 | ✅ **DONE** Auth v2: access-code gate (landing page + `proxy.ts` enforcement) → email+password sign-up/login (email verify + password reset via the Resend hook) → analyst-terminal `/login` redesign. Shipped Wave 1 (`eed1b12`, `8cb4c68`, `53c560c`). Single `ACCESS_CODE` env var, **not** per-invite (deferred to M4); constant-time Web Crypto comparison (Edge has no `node:crypto`); cookie derived from the code so rotation revokes. ⚠ One clause **unproven**: signup email delivery was only ever probed with `@example.com`, which Resend refuses — needs one test with a real address | M | Vision § Identity & design; Roadmap M0.5 |
 | 13 | ✅ **DONE** **Design-system migration**, split into 13a (tokens) + 13b (shell). 13a (`6603b3e`, `06ed42b`): `globals.css` ported to the azure tokens in both themes, Newsreader + JetBrains Mono, Geist Mono retired, Phosphor migrated (lucide gone, lockfile included), email button `#1c74d8`, `courses.color` → palette key. 13b (`2bfde9b`, `f404812`): `(app)` route group, collapsible sidebar + mobile tab bar, ⌘K palette, 12 shadcn components, `loading.tsx`/`error.tsx`, jsdom + RTL test infrastructure, motion + type-scale tokens. ⚠ `.reading` wrapper exists but has **no consumer** until topic pages (item 6) | M | Vision § Identity & design |
@@ -4269,10 +4365,11 @@ uploads every lecture's materials (topic pages appear minutes later).
     gaps) all blocked, plus 28 e2e tests.
   - ✅ Login, password reset and email verification each round-tripped live with real tokens;
     `/login` matches the system in both themes.
-  - ⚠ **Sign-up end-to-end is unproven, not broken.** Every 500 observed came from
-    `@example.com` probe addresses, which Resend refuses to deliver to (reserved domain), so
-    the hook 500s and GoTrue rolls the signup back. No real address was ever tested.
-    **Close this with one signup using a deliverable address.**
+  - ✅ **Sign-up confirmed working end to end 2026-07-18.** The earlier 500s were an
+    artifact of probing with `@example.com`, a reserved domain Resend refuses to deliver to —
+    the hook 500s and GoTrue rolls the signup back. Retested with a deliverable address:
+    works. **This clause is now fully met.** Lesson for future email testing: never probe
+    the Resend path with `example.com`; use a real `+alias` inbox or `generate_link`.
 - **🟡 PARTIALLY MET (Wave 1, 2026-07-18)** Every M1 UI surface renders in the azure
   analyst-terminal system (item 13): tokens ported, Newsreader/JetBrains Mono loaded, Phosphor
   icons, sidebar + ⌘K shell, reading register live on topic pages.
@@ -4446,10 +4543,28 @@ real course schedule, with weak spots feeding the same daily review queue.
    the raw export contains the real schedule and stays out of git.
 3. **One real course bundle for pipeline evaluation** — 2–3 lecture decks (incl. one
    image-heavy) and one reading PDF. The merge algorithm gets tuned
-   against real material, not synthetic fixtures.
-4. **IE grading specifics to verify**: pass mark (assumed 5/10) for the Bavarian-formula
-   conversion; typical participation weight ranges; the exact attendance-failure policy.
-   Syllabi PDFs answer all three (and feed the `assessments` extractor).
+   against real material, not synthetic fixtures. 🔴 **STILL OUTSTANDING as of 2026-07-18 —
+   this is now the single largest blocker in M1.** Items 5, 6 and 7 cannot start without it.
+   Everything else on the input list has landed (see *Supplied material* below).
+4. **IE grading specifics** — 🟡 **two of three ANSWERED 2026-07-18** from the first real
+   syllabus (*Marketing Fundamentals*, in `apps/web/.local-fixtures/syllabi/`):
+   - ✅ **Attendance-failure policy: the threshold is 80 % ATTENDANCE REQUIRED, i.e.
+     `absence_fail_pct = 20`.** Quoted: *"Students who do not comply with the 80% attendance
+     requirement in each subject during the semester will automatically fail both calls
+     (ordinary and extraordinary) for that Academic Year and have to re-take the course."*
+     **This corrects the plan's assumed "~30%" at line 3277 — the real limit is materially
+     stricter, so the at-risk maths must be rebuilt on 20 %.** Note it also fails *both*
+     sittings, not just the ordinary one, which makes the warning far more consequential
+     than a normal deadline miss — the Participation Ledger should treat approaching 20 %
+     as a hard alarm, not an amber nudge. Confirm this figure is university-wide rather
+     than per-syllabus before hardcoding a default.
+   - ✅ **Participation weight is real and large: 15 %** in this syllabus, inside the plan's
+     assumed 10–25 % band. Full evaluation table, which sums cleanly to 100: Final Exam 30 ·
+     Group Presentation 25 · Class Participation 15 · Intermediate tests 15 (3 × 5) ·
+     Individual presentation 10 · Other 5. Course is 6 ECTS, 30 sessions.
+   - ❌ **Pass mark (assumed 5/10) still unverified** — this syllabus does not state it.
+     Still needed for the Bavarian conversion; check IE's academic regulations rather than
+     a syllabus, since it is a university-level constant.
 5. **Budget comfort** — ✅ `AI_MONTHLY_BUDGET_USD` set in `.env.local` + Vercel (2026-07-18).
    The cost model assumes ≈ $35–60/month AI spend at full usage against a $75 soft cap
    (two-provider network, AI strategy §4); if the value set differs from 75, the guard

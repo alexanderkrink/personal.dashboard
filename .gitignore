@@ -30,3 +30,6 @@ blob-report/
 # OS / editor
 .DS_Store
 *.log
+
+# Real course material used for pipeline tuning — never commit
+apps/web/.local-fixtures/
