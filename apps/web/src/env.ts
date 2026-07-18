@@ -15,6 +15,13 @@ export const env = createEnv({
     // every issued gate cookie is derived from it and dies with it.
     ACCESS_CODE: z.string().min(8),
     ANTHROPIC_API_KEY: z.string().min(1).optional(),
+    // Shared secret for the daily calendar-sync cron (§3.1). REQUIRED, and a
+    // long one: `/api/cron/calendar-sync` is the one route reachable without a
+    // session or the access-code gate, so this string is the entire thing
+    // standing in front of it. Vercel Cron sends it as `Authorization: Bearer`.
+    // Minimum 16 characters — a short shared secret on a public endpoint is a
+    // guessable one, and failing the build beats discovering that in production.
+    CRON_SECRET: z.string().min(16),
     // Auth emails via Resend (Supabase Send Email Hook). Optional so local dev
     // and CI build without them; the hook route 500s with a clear message if unset.
     RESEND_API_KEY: z.string().min(1).optional(),
@@ -29,6 +36,7 @@ export const env = createEnv({
     SUPABASE_SECRET_KEY: process.env.SUPABASE_SECRET_KEY,
     ACCESS_CODE: process.env.ACCESS_CODE,
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+    CRON_SECRET: process.env.CRON_SECRET,
     RESEND_API_KEY: process.env.RESEND_API_KEY,
     SEND_EMAIL_HOOK_SECRET: process.env.SEND_EMAIL_HOOK_SECRET,
     EMAIL_FROM: process.env.EMAIL_FROM,

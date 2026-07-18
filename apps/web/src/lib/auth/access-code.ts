@@ -58,11 +58,21 @@ export function constantTimeEqual(a: string, b: string): boolean {
  * have to bail out early on a length mismatch, telling an attacker how long the
  * real value is. Digests are always the same width, so the comparison loop runs
  * the full 64 characters no matter what was submitted.
+ *
+ * Exported because the calendar-sync cron route needs exactly this comparison
+ * for its bearer token, and it must not reach for `node:crypto`'s
+ * `timingSafeEqual` — see the RUNTIME CONSTRAINT note at the top of this file.
  */
-async function digestEqual(a: string, b: string): Promise<boolean> {
+export async function secretEqual(a: string, b: string): Promise<boolean> {
   const [digestA, digestB] = await Promise.all([sha256Hex(a), sha256Hex(b)]);
   return constantTimeEqual(digestA, digestB);
 }
+
+/**
+ * Kept as a module-local alias so the gate's own call sites still read the way
+ * they did before `secretEqual` was exported for the cron route.
+ */
+const digestEqual = secretEqual;
 
 /** The cookie value proving the gate was cleared for this exact access code. */
 export function gateCookieToken(accessCode: string): Promise<string> {

@@ -14,6 +14,7 @@ import { redactSecrets } from "@/lib/calendar/secret";
 import { type FormState, formError, toFormState } from "@/lib/forms/form-state";
 import { readFormValues } from "@/lib/forms/form-values";
 import { createClient } from "@/lib/supabase/server";
+import { formatRetryAfter, rateLimitRemainingMs } from "@/server/calendar/staleness";
 import { createSupabaseCalendarStore } from "@/server/calendar/store-supabase";
 import { syncFeed } from "@/server/calendar/sync";
 
@@ -187,13 +188,29 @@ async function syncNow(id: string): Promise<FormState> {
 
   const owned = await supabase
     .from("calendar_feeds")
-    .select("id, active")
+    .select("id, active, last_synced_at")
     .eq("id", id)
     .maybeSingle();
   if (owned.error) return formError(SAVE_FAILED);
   if (!owned.data) return formError(NOT_FOUND);
   if (!owned.data.active) {
     return formError("That feed is paused. Resume it first.");
+  }
+
+  // §3.1: "Sync now" is rate-limited to 1/min per user. The limiter's state is
+  // `last_synced_at`, a column that already exists, is written by every run, and
+  // is already per-user by RLS — so there is no counter table to maintain and no
+  // in-memory map to lose on the next serverless invocation.
+  //
+  // This is a different guard from the engine's lease, which stops two runs
+  // OVERLAPPING. Nothing overlaps if a user clicks once a second for a minute,
+  // and without this that is sixty full fetches of the university's feed.
+  const remainingMs = rateLimitRemainingMs(owned.data.last_synced_at, new Date());
+  if (remainingMs > 0) {
+    return {
+      status: "info",
+      message: `Just synced. Try again in ${formatRetryAfter(remainingMs)}.`,
+    };
   }
 
   const store = createSupabaseCalendarStore(
