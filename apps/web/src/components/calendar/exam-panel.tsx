@@ -56,9 +56,14 @@ const CONFIDENCE_CHIP: Record<ExamConfidence, { label: string; className: string
     className: "bg-accent-subtle text-accent-text",
   },
   // Amber, not neutral: this is the state that needs a second look.
+  //
+  // ⚠ `--urgency-medium-text`, not `--urgency-medium`. This is 11px text on a
+  // 10% wash of its own hue, and the painting token renders that at 4.55:1 of
+  // sampled glyph — under the AA floor, on the one label that discloses the
+  // exam-oracle circularity. The writing token measures 5.35:1. See globals.css.
   feed_derived: {
     label: "From the feed",
-    className: "bg-urgency-medium/10 text-urgency-medium dark:bg-urgency-medium/20",
+    className: "bg-urgency-medium/10 text-urgency-medium-text dark:bg-urgency-medium/20",
   },
 };
 

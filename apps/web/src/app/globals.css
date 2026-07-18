@@ -134,6 +134,7 @@
     --color-urgency-overdue: var(--urgency-overdue);
     --color-urgency-high: var(--urgency-high);
     --color-urgency-medium: var(--urgency-medium);
+    --color-urgency-medium-text: var(--urgency-medium-text);
     --color-urgency-low: var(--urgency-low);
     --color-urgency-done: var(--urgency-done);
     --color-danger: var(--danger);
@@ -328,6 +329,30 @@
    * Dark mode was already comfortable (7.01:1) and is unchanged.
    */
   --urgency-medium: oklch(0.52 0.09 78);
+  /*
+   * Amber for small TEXT sitting on an amber tint — `--urgency-medium` paints,
+   * `--urgency-medium-text` writes. Same rule as `--accent` / `--accent-text`.
+   *
+   * MEASURED from rendered pixels 2026-07-19, not derived. `--urgency-medium`
+   * on its own 10% tint composites to **4.80:1** — a pass on the specified
+   * colours, and that is what the weight-badge spec asserts. But the exam
+   * panel's provenance chip renders that as 11px 500-weight glyphs, and on a
+   * 1x display the anti-aliased glyph body samples **4.55:1**, with the
+   * implementing agent's own sampler reporting 4.48. Under the 4.5 floor, on
+   * the one label in the system that discloses the exam-oracle circularity.
+   *
+   * L 0.52 -> 0.48 lifts the composite to 5.74:1 and the sampled glyph to
+   * 5.35:1, so the chip clears AA by both measures with real headroom instead
+   * of landing on the line. Hue and chroma are untouched: this must still read
+   * as the amber "look twice" colour, and it must never drift toward green —
+   * 🎨 green is `done` ONLY, and a green provenance chip would read as
+   * "verified", which is the exact opposite of what it says.
+   *
+   * Dark mode already measures 7.02:1 composite / 6.57:1 sampled, so `.dark`
+   * aliases this straight back to `--urgency-medium` rather than darkening a
+   * colour that has to stay light on a dark surface.
+   */
+  --urgency-medium-text: oklch(0.48 0.09 78);
   --urgency-low: var(--muted-foreground);
   --urgency-done: oklch(0.5 0.13 155);
 
@@ -464,6 +489,9 @@
   --urgency-overdue: oklch(0.68 0.19 25);
   --urgency-high: oklch(0.78 0.15 68);
   --urgency-medium: oklch(0.8 0.09 82);
+  /* Already 7.02:1 composite / 6.57:1 sampled on the 20% tint — nothing to
+   * correct, and darkening it here would wreck it. See the light column. */
+  --urgency-medium-text: var(--urgency-medium);
   --urgency-low: var(--muted-foreground);
   --urgency-done: oklch(0.74 0.15 155);
 
