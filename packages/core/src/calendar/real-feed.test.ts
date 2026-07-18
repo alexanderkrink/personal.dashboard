@@ -294,11 +294,21 @@ describe.skipIf(!hasFeed)("the real IE export — Tier 2 (local only)", () => {
   });
 
   /**
-   * The live exam-detection path, end to end on real data. All 7 fall courses
-   * resolve through step 3 (`max(sessionTo)`) because no fall-2026 syllabus
-   * exists — `total_sessions` is unseeded for them and `assessments` is empty.
+   * Step 3 in isolation, end to end on real data.
+   *
+   * ⚠ CORRECTED 2026-07-18 (Gate 2). The previous docstring claimed
+   * "`total_sessions` is unseeded for them", which is **false** — verified
+   * against the live database, all 7 fall courses carry a seeded
+   * `total_sessions` (ADS 30, MDMA 30, PDMA 30, P&S 35, MM 20, BPR 25, AML 2).
+   * `assessments` really is 0 rows, so step 2 is genuinely dead.
+   *
+   * This test therefore does not describe production behaviour: it pins step 3
+   * by **deliberately withholding** the oracle, which is a valid unit of
+   * coverage but is not "what the app does". A caller that passes the seeded
+   * column — as the sync engine will — resolves through step 1 instead. What
+   * the two paths return is asserted directly in the next test.
    */
-  it("resolves all 7 fall courses through the max-session fallback", () => {
+  it("resolves all 7 fall courses through the max-session fallback when no oracle is passed", () => {
     const { events } = parseRealFeed();
     const grouped = groupFallByCourse(events);
 
@@ -321,7 +331,8 @@ describe.skipIf(!hasFeed)("the real IE export — Tier 2 (local only)", () => {
             : [];
         });
 
-      // No syllabus on file for any fall course → no totalSessions, no assessments.
+      // Oracle deliberately withheld to pin step 3 — NOT a claim that the
+      // column is empty. See the docstring above.
       const detection = detectExam({ events: courseEvents });
       expect(detection.outcome).toBe("found");
       if (detection.outcome === "found") {
@@ -331,6 +342,105 @@ describe.skipIf(!hasFeed)("the real IE export — Tier 2 (local only)", () => {
         // rather than discarded (guard 2's skip-and-flag form).
         expect(detection.flags.unbounded).toBe(true);
       }
+    }
+  });
+
+  /**
+   * 🚨 THE CIRCULARITY, made explicit and executable.
+   *
+   * Recorded 2026-07-18 (Gate 2). `courses.total_sessions` IS seeded for all 7
+   * fall courses — but Agent 0 seeded it **from feed-derived session counts**
+   * (`packages/db/supabase/seed/fall-2026-courses.sql` states its source as "the
+   * live IE ICS feed by the §5.1b normalizer"), not from any syllabus. All 3
+   * syllabi on disk are 2025-26 documents matching none of these 7 courses.
+   *
+   * So step 1 (the "syllabus oracle") and step 3 (the feed fallback) are reading
+   * **the same underlying number by two different routes**, and this test proves
+   * it: the seeded values are byte-identical to `max(sessionTo)` for 7 of 7.
+   *
+   * The consequence for the M1 DoD clause "the syllabus-first exam chain picks a
+   * real exam date for 7 of 7 fall courses": it is satisfied **circularly**.
+   * Routing through step 1 yields the same date as step 3 by construction, so it
+   * is not evidence that the syllabus path works. That path stays unproven until
+   * a real fall-2026 syllabus — a number with independent provenance — exists.
+   * `courses` has no `source` column, so the provenance is not distinguishable
+   * at runtime either.
+   *
+   * This test must KEEP PASSING as long as the seed is feed-derived. If a real
+   * syllabus later disagrees with the feed, it will fail — and that failure is
+   * the signal that the oracle has finally become independent. Update it then.
+   */
+  it("proves step 1 and step 3 are the same number by two routes (seed is feed-derived)", () => {
+    // Verbatim from the live database, 2026-07-18.
+    const SEEDED_TOTAL_SESSIONS: Readonly<Record<string, number>> = {
+      "ALGORITHMS & DATA STRUCTURES": 30,
+      "MATHEMATICS FOR DATA MANAGEMENT AND ANALYSIS": 30,
+      "PROGRAMMING FOR DATA MANAGEMENT & ANALYSIS": 30,
+      "PROBABILITY & STATISTICS FOR DATA MANAGEMENT AND ANALYSIS": 35,
+      "MARKETING MANAGEMENT": 20,
+      "BUILDING POWERFUL RELATIONSHIPS": 25,
+      "ATTENTION MANAGEMENT FOR LEARNING": 2,
+    };
+
+    const { events } = parseRealFeed();
+    const grouped = groupFallByCourse(events);
+
+    for (const [courseName, entry] of grouped) {
+      const seeded = SEEDED_TOTAL_SESSIONS[courseName];
+      expect(seeded, `no seeded total_sessions recorded for ${courseName}`).toBeDefined();
+      // The whole point: the "syllabus" oracle equals the feed's max session.
+      expect(seeded, `${courseName}: seeded total_sessions vs feed max(sessionTo)`).toBe(
+        entry.maxSession,
+      );
+    }
+    expect(Object.keys(SEEDED_TOTAL_SESSIONS).sort()).toEqual([...grouped.keys()].sort());
+  });
+
+  /**
+   * The same 7 courses run through the chain WITH the seeded oracle — i.e. what
+   * the sync engine will actually do. Every course resolves `found` via step 1,
+   * on the identical date step 3 produced above.
+   *
+   * Read together with the previous test, this is the honest statement of the
+   * DoD: 7 of 7 do resolve through the syllabus-first path, and that fact
+   * carries no independent information, because the oracle was seeded from the
+   * feed it is being checked against.
+   */
+  it("resolves 7 of 7 via step 1 — on the same dates step 3 picked", () => {
+    const { events } = parseRealFeed();
+    const grouped = groupFallByCourse(events);
+
+    for (const [courseName, entry] of grouped) {
+      const courseEvents: ExamCandidateEvent[] = events
+        .filter((event) => {
+          const startsAt = event.occurrences[0]?.startsAtUtc ?? "";
+          return event.courseHint === courseName && startsAt >= FALL_FROM && startsAt <= FALL_TO;
+        })
+        .flatMap((event) => {
+          const normalized = normalizeSummary(event.rawSummary);
+          return normalized
+            ? [
+                {
+                  uid: event.uid,
+                  startsAtUtc: event.occurrences[0]?.startsAtUtc ?? "",
+                  summary: normalized,
+                },
+              ]
+            : [];
+        });
+
+      const viaSyllabus = detectExam({ events: courseEvents, totalSessions: entry.maxSession });
+      const viaFallback = detectExam({ events: courseEvents });
+
+      expect(viaSyllabus.outcome, courseName).toBe("found");
+      if (viaSyllabus.outcome !== "found" || viaFallback.outcome !== "found") continue;
+
+      expect(viaSyllabus.source).toBe("syllabus_total_sessions");
+      expect(viaFallback.source).toBe("feed_max_session");
+      // Different source, identical answer — that is the circularity.
+      expect(viaSyllabus.sessionNumber).toBe(viaFallback.sessionNumber);
+      expect(viaSyllabus.uid).toBe(viaFallback.uid);
+      expect(viaSyllabus.startsAtUtc).toBe(viaFallback.startsAtUtc);
     }
   });
 });

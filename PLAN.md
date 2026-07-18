@@ -2200,6 +2200,45 @@ two oracles:
 >    mapping is 1:1 but the names differ. The calendar migration has **not been written yet**,
 >    so nothing is broken today — whoever writes it must reconcile the two, and this note is
 >    the record that the divergence is known rather than accidental.
+>
+> **RESOLVED 2026-07-18 (Gate 2) — use the core's vocabulary.** Agent 2's calendar migration
+> must write the check constraint as
+> `('syllabus_total_sessions','assessment_session_number','feed_max_session','manual')`.
+> Rationale: the PLAN's original four names describe *where in a syllabus document* a number was
+> found (`syllabus_header` vs `syllabus_body`), which is a document-extraction concern from the
+> pre-revision design. The implemented chain distinguishes *which oracle answered*, which is what
+> the UI actually needs in order to label confidence, and `syllabus_header`/`syllabus_body` have
+> no distinct producer in the code. Keep `manual` (user override; no core equivalent because
+> `detectExam` is never consulted for one). Do **not** add a `pending` value — that outcome
+> produces no row, only an expected session number. If document-level provenance is ever wanted,
+> it belongs in a separate `assessments.source`-style column, not multiplexed into this one.
+
+> **⚠ TRUTH-IN-REPORTING, recorded 2026-07-18 (Gate 2) — the M1 DoD clause "the syllabus-first
+> exam chain picks a real exam date for 7 of 7 fall courses" is met CIRCULARLY, not genuinely.**
+> `courses.total_sessions` is seeded for all 7 fall courses, so the chain does resolve 7 of 7
+> through step 1 and does pick a real date. But Agent 0 seeded that column **from feed-derived
+> session counts** — `packages/db/supabase/seed/fall-2026-courses.sql` states its source as the
+> live IE ICS export normalized by §5.1b — and all 3 syllabi on disk are 2025-26 documents
+> matching none of these 7 courses. Verified against the live database: the seeded totals are
+> **identical to `max(sessionTo)` for 7 of 7** (ADS 30, MDMA 30, PDMA 30, P&S 35, MM 20, BPR 25,
+> AML 2). Steps 1 and 3 are therefore reading the same number by two routes, and agreement
+> between them is a tautology, not evidence.
+>
+> Consequences, all deliberate:
+> - The **syllabus oracle has never been exercised against real syllabus data.** Its only honest
+>   validation is the unit tests in `exam-detection.test.ts`, which feed it totals that
+>   deliberately disagree with the feed (the `pending` cases).
+> - Provenance is **not distinguishable at runtime**: `courses` has no `source` column for
+>   `total_sessions`, unlike `assessments.source ('manual','syllabus_extract')`.
+> - The data was **left as-is on purpose** — the seeded counts are correct, and rewriting them to
+>   manufacture an independent-looking oracle would be worse. This is a reporting correction.
+> - `real-feed.test.ts` now asserts the equality outright, so the circularity is a tested fact.
+>   When a real fall-2026 syllabus disagrees with the feed, that test fails — and that failure is
+>   the signal the oracle has finally become independent.
+>
+> **Do not report this DoD clause as satisfied evidence that syllabus-first detection works.**
+> It demonstrates that the chain runs end to end on real data and picks correct dates; it does
+> not demonstrate the syllabus path is right.
 
 Either way the result passes the
 **mandatory human confirm** gate — exam dates are both date-critical *and* grade-critical, the

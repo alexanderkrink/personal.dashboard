@@ -9,14 +9,19 @@
  * courses — the feed carries both). `assessments` is deliberately 0 rows, while
  * `courses.total_sessions` is seeded. So:
  *
- * - step 1 (`courses.total_sessions`) — live wherever the column is populated;
+ * - step 1 (`courses.total_sessions`) — **live**, the column is seeded for all 7;
  * - step 2 (`assessments.session_number`) — **currently dead**, no rows exist;
- * - step 3 (`max(sessionTo)`) — **the live path for all 7 fall courses.**
+ * - step 3 (`max(sessionTo)`) — reached only where no oracle names a session.
  *
- * Step 3 and its three guards are therefore not a rare branch, and the
- * three-outcome distinction is the whole point of the reordering. Both get the
- * most coverage here. (The end-to-end proof that all 7 fall courses really do
- * resolve through step 3 lives in `real-feed.test.ts`, against the real export.)
+ * 🚨 But the seeded totals were derived **from the feed itself**, so on real data
+ * step 1 and step 3 return the same number and neither validates the other (see
+ * `real-feed.test.ts`, which asserts that equality outright). **These unit tests
+ * are the only place the syllabus path is genuinely exercised**, because here the
+ * oracle can be given totals that deliberately disagree with the feed — which is
+ * exactly what the `pending` cases below do.
+ *
+ * Step 3 and its three guards are not a rare branch either: they determine the
+ * answer today whichever step reports it. Both get the most coverage here.
  */
 
 import { describe, expect, it } from "vitest";
@@ -226,10 +231,13 @@ describe("outcome: exam PENDING — named but not yet published", () => {
 /**
  * ## Outcome 3 of 3 — "fallback-derived"
  *
- * No syllabus on file. `max(sessionTo)` is used and the result is flagged as
- * fallback-derived (`source: "feed_max_session"`) so the UI never presents it
- * with syllabus-grade confidence. **This is the live path for all 7 fall-2026
- * courses.**
+ * No oracle named a session. `max(sessionTo)` is used and the result is flagged
+ * as fallback-derived (`source: "feed_max_session"`) so the UI never presents it
+ * with syllabus-grade confidence.
+ *
+ * For the 7 fall-2026 courses this returns the same answer step 1 does, the
+ * seeded `total_sessions` having been derived from this feed — so it is the
+ * effective source of truth today regardless of which step reports it.
  */
 describe("outcome: FALLBACK-derived — max(sessionTo), the only live path today", () => {
   it("derives the exam from the highest session number with no oracle at all", () => {

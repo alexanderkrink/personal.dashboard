@@ -28,15 +28,32 @@
  *
  * ## ⚠ What actually runs today
  *
- * 🔴 Verified 2026-07-18 (Agent 0, independently confirmed): all three syllabi
- * on disk are **2025-26 first-year** documents and map to **none** of the seven
- * fall-2026 courses. `assessments` is deliberately 0 rows. So:
- * - step 1 (`courses.total_sessions`) is live — the column IS seeded;
- * - step 2 (`assessments.session_number`) is currently **dead**, no rows;
- * - step 3 (`max(sessionTo)`) is **the live path for all 7 fall courses**.
+ * 🔴 Verified 2026-07-18 (Agent 0; re-verified against the live DB at Gate 2):
+ * all three syllabi on disk are **2025-26 first-year** documents and map to
+ * **none** of the seven fall-2026 courses. So:
+ * - step 1 (`courses.total_sessions`) is **live** — the column IS seeded for all
+ *   7 (ADS 30, MDMA 30, PDMA 30, P&S 35, MM 20, BPR 25, AML 2);
+ * - step 2 (`assessments.session_number`) is currently **dead**, 0 rows;
+ * - step 3 (`max(sessionTo)`) runs only where step 1 is absent.
  *
- * All three are built properly — fall-2026 syllabi are expected later — but the
- * fallback's three guards are not a rare path today. They are the only path.
+ * ## 🚨 …and why step 1 being live proves less than it looks like
+ *
+ * Those seeded totals were derived **from this same feed** — the seed file
+ * (`packages/db/supabase/seed/fall-2026-courses.sql`) names its source as the
+ * live ICS export normalized by §5.1b, not a syllabus. They are therefore equal
+ * to `max(sessionTo)` for all 7 courses, which `real-feed.test.ts` asserts
+ * directly.
+ *
+ * So step 1 and step 3 currently read **the same number by two routes**, and a
+ * "7 of 7 resolved via the syllabus oracle" result is **circular** — it says
+ * nothing about whether the syllabus path is correct. That path is genuinely
+ * exercised only by the unit tests here, which feed it totals that deliberately
+ * disagree with the feed. It stays unvalidated on real data until a fall-2026
+ * syllabus supplies a number with independent provenance. Nothing in the schema
+ * distinguishes the two: `courses` has no `source` column for `total_sessions`.
+ *
+ * The fallback's three guards are correspondingly not a rare path — they are
+ * what actually determines the answer today, whichever step reports it.
  */
 
 import type { NormalizedSummary } from "./summary";
@@ -326,7 +343,8 @@ export function detectExam(input: DetectExamInput): ExamDetection {
     };
   };
 
-  // Step 1 — `courses.total_sessions`. Live today: the column is seeded.
+  // Step 1 — `courses.total_sessions`. Live today: the column is seeded for all
+  // 7 fall courses (though with feed-derived values — see the header).
   if (typeof totalSessions === "number" && Number.isFinite(totalSessions) && totalSessions > 0) {
     return resolve(totalSessions, "syllabus_total_sessions");
   }
@@ -338,8 +356,9 @@ export function detectExam(input: DetectExamInput): ExamDetection {
     return resolve(finalAssessment.sessionNumber, "assessment_session_number");
   }
 
-  // Step 3 — `max(sessionTo)` from the feed. THE live path for all 7 fall
-  // courses until a fall-2026 syllabus exists.
+  // Step 3 — `max(sessionTo)` from the feed. Reached only when no oracle named a
+  // session. For the 7 fall courses it returns what step 1 already returns, the
+  // seed having been derived from this feed (see the header).
   const max = maxSessionNumber(events);
   if (max === null) {
     return { outcome: "unknown", retakes: collectRetakes(events, null) };
