@@ -92,6 +92,47 @@ test.describe("access-code gate", () => {
   });
 });
 
+/**
+ * REGRESSION: a page is a Server Action host.
+ *
+ * `UNGATED_PATHS` once read `["/auth", …]`, which exempted the
+ * `/auth/update-password` PAGE from the gate. Because Next bundles every action
+ * in the app into every page that imports one, and resolves an incoming
+ * `$ACTION_ID_…` POST against the requested page's bundle, that exemption made
+ * `signUp`, `signIn`, `sendMagicLink` and `requestPasswordReset` all callable
+ * with no gate cookie and no session — the gate was a UI curtain, not a
+ * boundary. The proxy must bounce the POST before any action runs.
+ */
+test.describe("the gate cannot be bypassed by posting a Server Action", () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  for (const path of ["/auth/update-password", "/login", "/signup", "/"]) {
+    test(`a Server Action POST to ${path} without the gate cookie never executes`, async ({
+      request,
+    }) => {
+      // A syntactically valid action-id field. The id does not need to resolve:
+      // a gated path must be redirected by the proxy BEFORE Next ever looks it
+      // up, so a 3xx away from the path is the pass condition and a 200/303
+      // carrying an action result is the failure.
+      const response = await request.post(path, {
+        maxRedirects: 0,
+        multipart: {
+          $ACTION_ID_407f8e7c9345b39d33abcb6ba4bd39998959d65634: "",
+          email: "gate-bypass-probe@example.com",
+          password: "Bypass-Probe-9xK!",
+          confirmPassword: "Bypass-Probe-9xK!",
+        },
+      });
+
+      // The action redirects land on /signup, /login or /forgot-password with a
+      // ?status=. Being sent to the gate at / is the correct, blocked outcome.
+      const location = response.headers().location ?? "";
+      expect(location).not.toContain("status=");
+      expect(response.status()).not.toBe(200);
+    });
+  }
+});
+
 test.describe("auth surface behind the gate", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
 

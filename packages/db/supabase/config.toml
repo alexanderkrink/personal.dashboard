@@ -170,7 +170,16 @@ enable_manual_linking = false
 # Pro-plan only and unavailable on this project's Free plan: since we cannot ask
 # "has this password been breached?", we raise the floor instead. Mirrored in
 # apps/web/src/lib/auth/password.ts, which validates the same policy with Zod at
-# the boundary, and in the linked project's dashboard settings.
+# the boundary.
+#
+# NOT YET APPLIED TO THE LINKED PROJECT. This file configures the LOCAL stack
+# only — `supabase db push` pushes migrations, not auth config, and nothing in
+# CI applies it. The hosted project was verified on 2026-07-18 to still enforce
+# minimum_password_length = 8 with no character-class requirement, so in
+# production this policy currently lives ONLY in the Zod schema. That is enough
+# for anything going through the app, but GoTrue's own /auth/v1 endpoints
+# enforce the weaker floor. Set both values in Dashboard -> Authentication ->
+# Sign In / Providers -> Password to close the gap.
 minimum_password_length = 12
 # Passwords that do not meet the following requirements will be rejected as weak. Supported values
 # are: `letters_digits`, `lower_upper_letters_digits`, `lower_upper_letters_digits_symbols`

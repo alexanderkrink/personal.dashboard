@@ -6,14 +6,29 @@ import { GATE_COOKIE_NAME, isGateCookieValid } from "@/lib/auth/access-code";
 /**
  * Reachable with NO session and NO gate cookie.
  *
- * `/auth` carries the email-link landing routes (`/auth/confirm`,
- * `/auth/callback`): someone clicking a confirmation link from their inbox on a
- * fresh device has no gate cookie yet, and blocking them would break sign-up
- * verification and password reset. Those routes authenticate themselves with a
- * single-use token, so they do not need the gate. `/api/hooks` is the Supabase
- * Send Email webhook, authenticated by its own signature.
+ * These are the email-link landing routes: someone clicking a confirmation link
+ * from their inbox on a fresh device has no gate cookie yet, and blocking them
+ * would break sign-up verification and password reset. Each authenticates
+ * itself with a single-use token, so none of them needs the gate. `/api/hooks`
+ * is the Supabase Send Email webhook, authenticated by its own signature.
+ *
+ * SECURITY: every entry here MUST be a route handler that exports only GET —
+ * never a page. In the App Router a page is a Server Action host: Next resolves
+ * an incoming `$ACTION_ID_…` POST against the actions bundled for the requested
+ * page, and EVERY action in the app is bundled into every page that imports one
+ * (see .next/server/server-reference-manifest.json). Exempting a page from the
+ * gate therefore exempts `signUp`, `signIn`, `sendMagicLink` and
+ * `requestPasswordReset` along with it, which is exactly the bypass this list
+ * used to have when it read `"/auth"` and so covered the
+ * `/auth/update-password` PAGE. Route handlers have no action surface and are
+ * safe; pages are not.
+ *
+ * `/auth/update-password` is deliberately NOT here. `/auth/confirm` verifies
+ * the recovery token and mints a session BEFORE redirecting there, so the
+ * legitimate reset flow always arrives carrying that session and is let through
+ * by the `hasSession` branch below — the page then guards itself.
  */
-const UNGATED_PATHS = ["/auth", "/api/hooks"];
+const UNGATED_PATHS = ["/auth/confirm", "/auth/callback", "/api/hooks"];
 
 /** Reachable with no session, but ONLY once the access-code gate is cleared. */
 const GATED_AUTH_PATHS = ["/login", "/signup", "/forgot-password"];
