@@ -21,6 +21,11 @@ catalog:
   "@supabase/supabase-js": ^2.110.6
   "@supabase/ssr": ^0.12.3
   "@phosphor-icons/react": ^2.1.10
+  # Component-test stack. Only apps/web runs jsdom; packages/* stay on node.
+  jsdom: ^29.1.1
+  "@testing-library/react": ^16.3.2
+  "@testing-library/jest-dom": ^6.9.1
+  "@testing-library/user-event": ^14.6.1
 
 minimumReleaseAgeExclude:
   - '@ai-sdk/gateway@4.0.21'

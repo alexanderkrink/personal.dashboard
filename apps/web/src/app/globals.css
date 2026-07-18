@@ -28,6 +28,68 @@
      * definition and are emitted by every `font-mono` utility. */
     --font-mono--font-feature-settings: "tnum" 1, "zero" 1;
 
+    /* ---- Type scale (PLAN.md "Typography" — fixed rem, ratio ~1.2) ----
+     * Weights: 400 body, 500 labels/buttons, 600 headings. Heading tracking
+     * -0.01em at >=20px, -0.02em on display numerals, never below -0.04em.
+     * Type floors (PLAN "Mobile / PWA & accessibility"): running/body UI >= 13px
+     * (`ui-base`), reading body >= 16px, and `ui-xs` (11px) is reserved for
+     * NON-ESSENTIAL secondary text only (badges, table meta, kbd hints). */
+    --text-ui-xs: 0.6875rem; /* 11px */
+    --text-ui-xs--line-height: 1.3;
+    --text-ui-sm: 0.75rem; /* 12px */
+    --text-ui-sm--line-height: 1.35;
+    --text-ui-base: 0.8125rem; /* 13px — default cockpit UI text */
+    --text-ui-base--line-height: 1.45;
+    --text-ui-md: 0.875rem; /* 14px */
+    --text-ui-md--line-height: 1.5;
+    --text-ui-lg: 1rem; /* 16px — section titles */
+    --text-ui-lg--line-height: 1.4;
+    --text-ui-xl: 1.25rem; /* 20px — page/panel headings */
+    --text-ui-xl--line-height: 1.3;
+    --text-ui-xl--letter-spacing: -0.01em;
+
+    --text-read-body: 1.125rem; /* 18px — Newsreader prose, measure 66-70ch */
+    --text-read-body--line-height: 1.65;
+    --text-read-h3: 1.25rem; /* 20px */
+    --text-read-h3--line-height: 1.3;
+    --text-read-h2: 1.5rem; /* 24px */
+    --text-read-h2--line-height: 1.25;
+    --text-read-h1: 1.875rem; /* 30px */
+    --text-read-h1--line-height: 1.2;
+    --text-read-h1--letter-spacing: -0.01em;
+    --text-read-cap: 0.875rem; /* 14px — captions, footnotes */
+    --text-read-cap--line-height: 1.5;
+
+    --text-mono-data: 0.8125rem; /* 13px — inline data, table numerals */
+    --text-mono-data--line-height: 1.45;
+    --text-mono-code: 0.8125rem; /* 13px, the floor of PLAN's 13-14px range */
+    --text-mono-code--line-height: 1.55;
+    /* PLAN gives `num-hero` as a 28-48px RANGE, not one size: metric tiles sit
+     * at the bottom, a drenched countdown at the top. Three stops span it. */
+    --text-num-hero: 1.75rem; /* 28px */
+    --text-num-hero--line-height: 1.05;
+    --text-num-hero--letter-spacing: -0.02em;
+    --text-num-hero-lg: 2.25rem; /* 36px */
+    --text-num-hero-lg--line-height: 1.05;
+    --text-num-hero-lg--letter-spacing: -0.02em;
+    --text-num-hero-xl: 3rem; /* 48px */
+    --text-num-hero-xl--line-height: 1.05;
+    --text-num-hero-xl--letter-spacing: -0.02em;
+    --text-wordmark: 0.9375rem; /* 15px, PLAN's 15-16px */
+    --text-wordmark--line-height: 1.2;
+    --text-wordmark--letter-spacing: -0.01em;
+
+    /* ---- Motion easing (PLAN.md "Motion") ----
+     * `--ease-*` IS a Tailwind theme namespace, so these become `ease-out-quart`
+     * / `ease-out-expo` utilities directly. No bounce/spring/elastic — do not
+     * add a `--ease-spring`. The DURATION scale cannot live here: Tailwind has
+     * no `--duration-*` namespace (only `duration-<number>`), so a `duration-fast`
+     * written against a theme entry compiles to nothing at all, silently. The
+     * durations are declared at :root below and given real utilities via
+     * `@utility`. */
+    --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+    --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1); /* larger moves */
+
     /* ---- Core surfaces & ink ---- */
     --color-background: var(--background);
     --color-foreground: var(--foreground);
@@ -54,6 +116,9 @@
     --color-accent-border: var(--accent-border);
     --color-accent-hover: var(--accent-hover);
     --color-accent-active: var(--accent-active);
+    /* e3 modal scrim (PLAN.md "Elevation & surfaces"). Declared at :root and
+     * .dark below; exposed here so a `bg-scrim` utility actually exists. */
+    --color-scrim: var(--scrim);
 
     /* ---- Reading register ---- */
     --color-reading-bg: var(--reading-bg);
@@ -165,6 +230,20 @@
 
   --radius: 0.375rem; /* 6px cockpit base */
   --radius-reading: 0.625rem; /* 10px reading cards */
+}
+
+/*
+ * Motion durations (PLAN.md "Motion"). Theme-independent, so they sit at :root
+ * once rather than in both columns. See the note in @theme inline for why these
+ * are not theme entries. Consume them as the `duration-*` utilities defined at
+ * the bottom of this file, or as `var(--duration-base)` in hand-written CSS.
+ */
+:root {
+  --duration-instant: 0ms;
+  --duration-fast: 120ms; /* hover / press */
+  --duration-base: 180ms; /* menus, tabs */
+  --duration-moderate: 240ms;
+  --duration-slow: 320ms; /* overlays */
 }
 
 /* Reading register (light) — a deliberate warm paper surface, NOT the app bg */
@@ -409,6 +488,69 @@
   pre {
     font-family: var(--font-mono), ui-monospace, monospace;
     font-feature-settings: "tnum" 1, "zero" 1;
+  }
+
+  /*
+   * Reduced motion is MANDATORY (PLAN.md "Motion"): every animation has a
+   * `prefers-reduced-motion: reduce` alternative. Per-component alternatives
+   * (hero-number roll -> instant set, sync-pulse -> static status text) are the
+   * *designed* answer and live with those components; this block is the
+   * blanket safety net so an un-audited transition can never move a user who
+   * asked it not to. Durations collapse rather than going to 0 so that
+   * transitionend/animationend listeners still fire.
+   */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/*
+ * Named duration utilities. `--tw-duration` is Tailwind's internal composition
+ * variable — set it as well as `transition-duration`, exactly as the built-in
+ * `duration-<number>` utilities do, so these compose with `transition-*`.
+ */
+@utility duration-instant {
+  --tw-duration: var(--duration-instant);
+  transition-duration: var(--duration-instant);
+}
+@utility duration-fast {
+  --tw-duration: var(--duration-fast);
+  transition-duration: var(--duration-fast);
+}
+@utility duration-base {
+  --tw-duration: var(--duration-base);
+  transition-duration: var(--duration-base);
+}
+@utility duration-moderate {
+  --tw-duration: var(--duration-moderate);
+  transition-duration: var(--duration-moderate);
+}
+@utility duration-slow {
+  --tw-duration: var(--duration-slow);
+  transition-duration: var(--duration-slow);
+}
+
+@layer components {
+  /*
+   * The dot motif (PLAN.md "Wordmark, motif & favicon") — the contained
+   * signature detail, reused for active-nav markers, status indicators and
+   * empty-state marks. A 5px azure disc; `currentColor` variants opt out by
+   * overriding `background-color`.
+   */
+  .dot-motif {
+    display: inline-block;
+    width: 0.3125rem;
+    height: 0.3125rem;
+    border-radius: 9999px;
+    background-color: var(--accent);
+    flex-shrink: 0;
   }
 }
 
