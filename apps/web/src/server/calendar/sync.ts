@@ -226,7 +226,7 @@ async function runSync(
   const storedOccurrences = await store.listOccurrences(itemIds);
   const storedByKey = new Map(
     storedOccurrences.map((occurrence) => [
-      `${occurrence.item_id} ${occurrence.recurrence_id}`,
+      `${occurrence.item_id}\u0000${occurrence.recurrence_id}`,
       occurrence,
     ]),
   );
@@ -240,7 +240,7 @@ async function runSync(
 
     for (const occurrence of event.occurrences) {
       const payload = toOccurrencePayload(occurrence);
-      const stored = storedByKey.get(`${itemId} ${occurrence.recurrenceId}`);
+      const stored = storedByKey.get(`${itemId}\u0000${occurrence.recurrenceId}`);
 
       // The point of the row diff: an unchanged payload is not written, so
       // `updated_at` keeps meaning "this row changed" rather than "a sync ran".
