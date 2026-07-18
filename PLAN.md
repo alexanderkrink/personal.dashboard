@@ -5061,8 +5061,12 @@ uploads every lecture's materials (topic pages appear minutes later).
   superseded primary algorithm.)
   This Week shows deadlines ranked by grade impact; a lecture that **disappears** from the
   feed is tombstoned (hidden at 24 h, deleted at 7 d) and restores its `course_id` and
-  completion state if it reappears; events on both sides of the 27 Mar / 26 Oct DST
+  completion state if it reappears; events on both sides of the **29 Mar / 25 Oct** DST
   transitions land at the right local time (fixture-tested from the real export).
+  (⚠ **CORRECTED 2026-07-18 (Wave 2 review)**: this clause still named "27 Mar / 26 Oct" after
+  §3.4 was corrected — the two markers contradicted each other for the length of the branch.
+  The real 2026 EU transitions are the last Sundays, **29 March** and **25 October**; the
+  committed fixtures straddle them with real events on 27 Mar / 7 Apr and 23 Oct / 26 Oct.)
 - Every new table has RLS policies; every AI call appears in `ai_generations` with cost;
   `AI_KILL_SWITCH=true` verifiably stops all spend.
 - **🟡 MOSTLY MET (Wave 1, 2026-07-18)** Auth: a visitor to the domain root hits the
