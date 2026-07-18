@@ -1706,6 +1706,34 @@ feed regenerates lazily upstream anyway — so polling every N minutes buys litt
 3. If the project moves to Vercel Pro, flip the cron to `*/30 * * * *` and drop the
    on-demand trigger — one config change, the sync route is identical.
 
+> **ℹ️ RECORDED 2026-07-18 (Wave 2, CAL-2) — Alexander upgraded to Vercel Pro, so the
+> Hobby "1 cron/day" limit no longer binds. The cadence is nonetheless kept DAILY, and
+> deliberately.** `vercel.json` ships `"30 4 * * *"`. Point 3 above is now available as a
+> genuine one-line change (`"schedule": "*/30 * * * *"`) whenever it is wanted, but it is
+> not taken today because it would mostly burn invocations: the feed regenerates lazily
+> upstream, and the on-demand 30-minute staleness check already delivers fresh data
+> whenever Alexander actually looks at the app. The cron is a safety net for the days he
+> does not.
+>
+> ⚠ Note the second half of point 3 — "and drop the on-demand trigger" — should **not** be
+> followed even if the cron goes to `*/30`. On-demand is what makes the data fresh at the
+> moment of reading; a 30-minute cron still leaves a 30-minute worst case in front of a
+> user who has the page open.
+
+> **🔴 DISPROVEN 2026-07-18 (Wave 2, CAL-2) — a sync of this feed essentially NEVER reports
+> `unchanged`, so nothing may key staleness on the provider reporting no change.**
+> Measured against the live endpoint: it sends **no `ETag` at all**, its `Last-Modified` is
+> **always the current time**, and its body is **byte-unstable** because `DTSTAMP` is
+> re-stamped on every regeneration. All three §3.2 skip layers therefore miss, and every
+> observed run — including two back-to-back runs seconds apart during verification —
+> returned `status: "ok"` with a full diff rather than `unchanged`.
+>
+> Consequence: `selectStaleFeeds` keys on **`last_synced_at` only** (§3.1 step 1's own
+> wording, and now load-bearing rather than incidental). A rule phrased as "sync again once
+> the provider says nothing changed" would re-sync on every render. The three skip layers
+> stay in the code as an optimisation that may fire for a better-behaved feed; they are not
+> a mechanism anything is allowed to depend on.
+
 Per-feed concurrency guard: the sync engine takes the feed row with
 `select ... for update skip locked`; a second overlapping run skips silently.
 
@@ -2030,6 +2058,30 @@ by the provider abstraction. Matching pipeline at sync time, first hit wins:
    the matched text, so the same feed pattern auto-links forever after. Manual
    assignment locks `course_id` against sync.
 
+> **✅ IMPLEMENTED AND PROVEN AGAINST THE LIVE FEED 2026-07-18 (Wave 2, CAL-2).**
+> The chain lives in `server/calendar/course-match.ts` and is shared by the sync path and the
+> read path, so the bucket can never show a grouping the next sync disagrees with. Two gaps
+> in the pre-existing sync matcher were closed: **step 1 (the feed-level `config.courseId`
+> pin) was not consulted at all**, and **step 3 matched `courses.title` only, never
+> `courses.code`**. Code matching is whole-word rather than substring — a two-letter code like
+> `MM` inside `SUMMER SCHOOL` would file an entire course under the wrong heading silently.
+>
+> Verified end to end on the real 220-row bucket, filing `FINANCE LAB` (32 events):
+> 1. a `course_matchers` row was written with `pattern = 'FINANCE LAB'`;
+> 2. all 32 items took the `course_id` **and** `user_locked_fields = {course_id}`;
+> 3. a **full sync afterwards left all 32 filed and locked** — the lock holds;
+> 4. with the locks and `course_id` then stripped by hand, leaving only the matcher standing,
+>    the next sync **re-linked all 32 through `course_matchers` alone** — which is the
+>    "auto-links forever after" clause, proven independently of the lock.
+>
+> (The verification assignment was deliberately wrong — `FINANCE LAB` is a 2025/26 spring
+> course, chosen only because it is the largest group — and was reverted afterwards. The
+> database is back at 154 matched / 220 unassigned / 0 matchers.)
+>
+> ⚠ Note `courses.code` is **null on all 7 seeded fall courses**, so step 3's code branch has
+> nothing to match today and every live match resolves by title. It is built and unit-tested,
+> not exercised by real data.
+
 #### 5.1b IE feed grammar, session parsing & exam detection
 
 *Verified against the real feed on 2026-07-18: 379 events, 2026-01-19 → 2026-12-18 (two
@@ -2330,9 +2382,45 @@ two oracles:
 > It demonstrates that the chain runs end to end on real data and picks correct dates; it does
 > not demonstrate the syllabus path is right.
 
+> **✅ ADDRESSED IN THE UI 2026-07-18 (Wave 2, CAL-2) — the circularity is now visible to the
+> user, not just recorded here.**
+> The truth-in-reporting note above was a warning to *readers of this document*. It is now
+> also a runtime behaviour: `buildExamStatuses` (`server/calendar/exam-status.ts`) computes a
+> **confidence** from `courses.total_sessions_source`, never from the detector's own
+> `source`, and the UI labels the answer from that.
+>
+> Concretely, a `syllabus_total_sessions` detection whose course records `feed_derived`
+> renders as **"From the feed"**, in amber, with the line *"Session count was read off this
+> feed, not a syllabus — the calendar is agreeing with itself."* On the live database that is
+> all 7 of 7 fall courses. The panel header additionally states *"7 of these were derived from
+> the calendar feed itself — the session count and the exam date come from the same place, so
+> them agreeing proves nothing."*
+>
+> The detector's vocabulary is deliberately left alone: `detectExam` still reports
+> `syllabus_total_sessions`, because that IS the step that answered. Provenance is a property
+> of the *data*, not of the step, and conflating the two is what made the circularity
+> invisible in the first place. When a real fall-2026 syllabus arrives and
+> `total_sessions_source` becomes `'syllabus'`, the same row starts reading "From the
+> syllabus" with no code change.
+>
+> ⚠ Also note the three outcomes are re-derived **at read time** rather than read back from
+> `calendar_items`. Only `found` leaves a row (`is_exam_candidate` + `detection_source`);
+> `pending` produces no row at all, just an expected session number. Reading the column alone
+> would make *"exam not yet published, expect session 30"* indistinguishable from *"no exam"*
+> — which is the exact distinction the REVISED chain exists to draw.
+
 Either way the result passes the
 **mandatory human confirm** gate — exam dates are both date-critical *and* grade-critical, the
 two gates deliberately reserved by the Human-reversible-AI principle.
+
+> **✅ IMPLEMENTED 2026-07-18 (Wave 2, CAL-2).** The gate is `confirmExamDate` in
+> `app/(app)/calendar/item-actions.ts`, surfaced as **Confirm / Not an exam** on every row of
+> the exam panel. Confirming writes `detection_source = 'manual'` and adds
+> `is_exam_candidate` to `user_locked_fields`; rejecting clears the flag and locks it the same
+> way, so a wrong guess stays rejected instead of being re-derived by the next sync. Nothing
+> is recorded as confirmed truth without that explicit action — a detected date renders as a
+> proposal until then. A syllabus/feed disagreement surfaces on the same row as a one-tap
+> conflict (`ExamStatus.conflict`), never a silent pick.
 
 #### 5.2 Grade-impact weighting
 
@@ -2397,6 +2485,29 @@ Flow:
 4. Saved as `calendar_items` with `source = 'manual'`, `feed_id = null`, generated UID,
    one occurrence row. Untouchable by sync.
 
+> **⚠ PARTIALLY IMPLEMENTED 2026-07-18 (Wave 2, CAL-2) — step 4 is done; steps 1–3, the
+> natural-language parse, are NOT BUILT and are deferred to CAL-3/M2.**
+> What ships is the structured form only (`components/calendar/quick-add-form.tsx` →
+> `createQuickAddItem`). It writes `source = 'manual'`, `feed_id = null`, a generated UID and
+> one occurrence row, and `planTombstones` skips every item with a null `feed_id`, so manual
+> entries are genuinely untouchable by sync. Local date+time convert through
+> `wallClockToUtcIso` against `profiles.timezone` — verified live: 23:59 on 18 Sept saved as
+> `21:59Z`, correct for CEST.
+>
+> The parse is out of scope because it needs the `packages/ai` provider layer and a versioned
+> `definePrompt`, neither of which exists in Wave 2 — and adding an `@ai-sdk/*` import at the
+> call site would put a model call outside `packages/ai`, which CLAUDE.md forbids outright.
+> This is not a stopgap: §6 step 3 already designates the structured card as *"the fallback,
+> not a separate feature"*, so what exists is the floor the parse will land on. `quickAddSchema`
+> is deliberately field-for-field with `quickAddParseSchema` minus `confidence`, so wiring the
+> parse in later adds a caller rather than a rewrite.
+>
+> ⚠ One schema note worth keeping: blank numeric fields must parse to **null, never 0**.
+> `z.coerce.number()` turns `""` into `0` quite happily, which would make a left-blank "Worth"
+> claim the item is worth 0% of the grade — a different and wrong statement that also changes
+> its priority tier. `blankToNull` short-circuits before coercion rather than unioning with
+> `z.literal("")`.
+
 ### 7. The "This week" view
 
 Lives as the top section of the dashboard (and standalone at `/calendar`). One RSC, one
@@ -2423,6 +2534,56 @@ items → courses, plus the trailing overdue set. Composition, top to bottom:
 
 Empty state ("no deadlines this week") explicitly shows the horizon section — the
 correct feeling is "clear this week, exam in 9 days," never false calm.
+
+> **🔴 CORRECTED 2026-07-18 (Wave 2, CAL-2) — part 3 would have been PERMANENTLY EMPTY as
+> written, because every event this feed publishes is a `class`.**
+> All 374 synced rows classify as `kind = 'class'`: the IE feed is a timetable, and a final
+> exam is simply the last *session* of a course, carrying `(Ses. 30)` like any other. Read
+> literally, §7 put all seven finals into **part 4, the week grid** — the section this spec
+> itself calls "deliberately visually secondary" — and left **part 3, the ranked deadline
+> list, empty forever**. "On the horizon" was empty too, since it filters classes out, so
+> the one promise it exists to keep ("a big exam never ambushes from just outside the
+> window") could never fire. Verified in a browser at a pinned 2026-12-07: three finals
+> that week rendered as small grey chips in the class strip and nothing at all in the
+> ranked list. **The full verify chain was green the whole time.**
+>
+> Resolution: `calendar_items.is_exam_candidate` promotes a row to `deadline` for ranking,
+> weighting and placement (`rankedKind` in `week-view.ts`). An exam is not context. It also
+> lifts the row's default weight from a class's 0% to a deadline's 5%, since a 0%-weight
+> final sorts below a 5% homework task under the §5.2 score.
+>
+> This is a **restatement of §7's own principle**, not a departure from it: *classes are
+> context, deadlines are the payload*. The feed's `kind` column describes what the
+> university scheduled; it does not describe what the student has to survive.
+
+> **⚠ CLARIFIED 2026-07-18 (Wave 2, CAL-2) — part 6 is NOT scoped to the week query.**
+> The Unassigned bucket is queried separately and unbounded. Its 220 live rows are 2025/26
+> spring events running 19 Jan → 26 Jun 2026, so scoping it to the week view's −30d/+180d
+> range showed an *empty* bucket while 220 rows sat unmatched. Filing a pattern is also
+> inherently about every event of that course, past ones included.
+>
+> It is additionally **grouped by course-name pattern and collapsed by default** (15 rows,
+> one line, one click to expand). §5.1's "surface it at the top of the calendar page" is
+> unworkable at 220 individual rows — it is a wall that pushes the actual deadlines below
+> the fold at every viewport. Grouping also makes one click worth making: assigning a
+> pattern files that course's entire history *and* writes the `course_matchers` row that
+> files all its future events automatically.
+
+> **🎨 MEASURED 2026-07-18 (Wave 2, CAL-2) — the heat-ramp badge failed WCAG AA in light
+> mode and `--urgency-medium` was retuned.**
+> The badge renders 11px text in an urgency colour on a low-alpha tint of that *same*
+> colour, which is by construction the closest possible surface to the text on it. Measured
+> through the browser's own OKLCH→sRGB gamut mapping (nine of these tokens are outside
+> sRGB, so computed OKLCH reports optimistically): at the original 12% tint,
+> `--urgency-medium` came out at **4.19:1 — an AA failure** — while overdue/high/done
+> cleared 4.5 only narrowly at 4.57–4.75.
+>
+> Fix, in two halves: `--urgency-medium` darkened `oklch(0.55 0.1 78)` → `oklch(0.52 0.09
+> 78)`, and the light-mode tint eased 12% → 10%. Every tier now measures ≥ 4.70:1 (light)
+> and ≥ 4.86:1 (dark). Chroma dropped alongside lightness because medium must still *read*
+> as dimmer than high, and after the change it is no longer meaningfully lighter than it —
+> saturation now carries that distinction. `e2e/weight-badge-contrast.spec.ts` pins both
+> halves so neither can be reverted alone.
 
 ### 8. Milestones & dependencies
 
