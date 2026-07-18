@@ -4742,7 +4742,7 @@ real course schedule, with weak spots feeding the same daily review queue.
 | **Born-active AI ships a bad artifact** — the default-active flip removes the mandatory per-item approval gate | Medium / Low | Critic holds the flagged minority; every artifact is reversible (edit / suspend / revert) so a slip costs seconds; mandatory confirm retained where a wrong item is silent + expensive (grade weights, deadlines); "hardest cards today" surfaces bad cards at review time |
 | **Access-code gate is a soft secret** — a leaked code + shared provider keys (Anthropic + Gemini) let a new signup drain the global AI budget | Medium / Medium | ⚠ Corrected 2026-07-18 to what actually shipped: a **single `ACCESS_CODE`** env value, `proxy.ts`-enforced and **rotatable** (each gate cookie is derived from the code, so changing the value revokes every issued cookie); **per-invite codes are deferred to M4** with no table planned before then. The `AI_MONTHLY_BUDGET_USD` guard + kill switch bound total spend; per-user metering added before opening the code widely (tracked in M1 auth item / M4 multi-user hardening) |
 | **Slide decks tokenize heavier than modeled** (~2K/slide assumed; image-dense decks hit 3K+, and a big deck can cross Gemini's 200K long-context surcharge, $2→$4/M in) → doc-structuring cost balloons | Medium / Medium | per-provider `ai_generations` rollup watched after first real decks; Gemini batch (−50%) on offline backfills; PPTX text path is 10× cheaper; re-point `doc-structuring` to a cheaper model in one line if needed; budget guard defers background jobs at 100% of `AI_MONTHLY_BUDGET_USD` |
-| **Vercel Hobby limits bite** (300 s function ceiling, 1 cron/day) | Medium / Low | Inngest steps are each < 300 s by design; on-demand staleness sync makes daily cron a safety net only; Pro upgrade (800 s, unlimited crons) is the escape hatch, not a re-architecture |
+| ~~**Vercel Hobby limits bite** (300 s function ceiling, 1 cron/day)~~ ✅ **RETIRED 2026-07-18 — upgraded to Pro** (open question 6). The escape hatch was taken before the risk materialised, for two reasons: item 5's visual-deck extraction is a single Inngest step against a 300 s ceiling, and CAL-2's daily sync had already consumed the whole Hobby cron allowance. | ~~Medium / Low~~ n/a | Retained for history: Inngest steps were each < 300 s by design; on-demand staleness sync made the daily cron a safety net only. Pro (800 s, frequent crons) now removes both constraints — this was always an upgrade, never a re-architecture. |
 | **ICS feed fidelity** — verified 2026-07-18 (§3.4–3.6, §5.1b): zero `VTIMEZONE` blocks behind 738 naked `TZID`s, zero `STATUS:CANCELLED` (cancellation shows only as disappearance), `DESCRIPTION` **present but blank** on all 379 events (literal `\n\n` on 378; the 379th holds a "Last Update Time" string — ⚠ corrected 2026-07-18 from "empty": a truthiness test sees a value, so blank-detection must `.trim()`), and a dirty free-text `SUMMARY` grammar carrying the course + session number | **Certain / Medium** (no longer speculative — these are measured properties) | IANA fallback is the *primary* TZID path, and a non-resolvable TZID fails loudly to a processing event; the tombstone grace period (24 h hide, 7 d delete) is the **only** cancellation detector, so it carries the CAL-1 fixture effort; weights come from `assessments` (manual/syllabus-extracted) rather than the feed; the §5.1b normalizer is spec'd against real dirty samples and keeps `raw_summary` so rules can be re-run after a fix |
 | **TS 7 / ecosystem gap** (already hit at scaffold: Next 16 needs the JS compiler API) | Certain / Low | Pinned to TS 5.9 with a documented revisit; no code depends on TS 7 features |
 | **Node-side Pyodide for the lesson validation gate proves brittle on Vercel** | Medium / Low | Explicit spike early in CT-2; documented fallback = validate in-browser on first open ("checking lesson…" state) |
@@ -4802,6 +4802,25 @@ real course schedule, with weak spots feeding the same daily review queue.
    `GOOGLE_GENERATIVE_AI_API_KEY`, `CRON_SECRET`, `AI_KILL_SWITCH`, `AI_MAX_TIER`,
    `AI_MONTHLY_BUDGET_USD`), landing with items 2 / 2b / 4 / 5 / 8 per the mapping in the M1
    progress note. `DEV_ICS_URL` is local-only and deliberately excluded.
+   ⚠ **Naming drift, resolved 2026-07-18.** The two Inngest values were stored as
+   `INGEST_SIGNING_KEY` / `INGEST_EVENT_KEY` — missing the second `n` — in **both**
+   `.env.local` and the Vercel dashboard. This plan always spelled them correctly, so the
+   drift was invisible *here* and would have surfaced only as a confusing runtime failure
+   the moment item 2 wired them. **Both sides are now renamed to `INNGEST_*` and verified.**
+   The lesson generalises to the seven values still unwired: a key's *presence* in
+   `.env.local` says nothing about its *name* matching what `env.ts` will ask for, and
+   nothing validates the pair until the item that consumes it ships.
+   ✅ **DECIDED 2026-07-18 — `CLOUDCONVERT_API_KEY` scopes: `task.read` + `task.write`,
+   nothing else.** `task.write` creates the PPTX→PDF job; `task.read` polls it and retrieves
+   the export URL. `webhook.*` is **deliberately declined**: a CloudConvert callback needs a
+   public non-GET endpoint, and the access-code gate already carries one unavoidable
+   exception (`/api/inngest`, authenticated by its signing key rather than the gate). A
+   second non-GET hole for a conversion that completes in seconds is a bad trade, so the
+   conversion is **polled inside the Inngest step**. `user.*` (account/credit info — the
+   ~$0.01/deck is noise against LLM spend) and `preset.*` (the conversion is defined inline)
+   are unused. CloudConvert's **Sandbox** offers a separate key that converts whitelisted
+   files without consuming credits — noted as an option for exercising the conversion step
+   in CI later, not adopted now.
    ✅ **DECIDED 2026-07-18 — keep the Supabase Free plan and the 50 MB cap.** The real corpus
    showed one document over it (*Kotler, Principles of Marketing*, **156 MB**; *Principles of
    Corporate Finance* 42 MB and *Business in Action* 12 MB both fit). Alexander shrinks
@@ -4891,8 +4910,19 @@ real course schedule, with weak spots feeding the same daily review queue.
    The cost model assumes ≈ $35–60/month AI spend at full usage against a $75 soft cap
    (two-provider network, AI strategy §4); if the value set differs from 75, the guard
    thresholds in §6 scale off it, and the §4 planning range is unaffected.
-6. **Vercel plan**: Hobby works for M1 by design; Pro (~$20/mo) buys 800 s functions +
-   frequent crons and removes two mitigations. Decide when M1 pipeline volume is real.
+6. **Vercel plan**: ✅ **DECIDED 2026-07-18 — upgrading to Pro.** The earlier "decide when
+   M1 pipeline volume is real" deferral is overtaken by two concrete pressures, one of which
+   was not visible when it was written:
+   - **Function duration.** Item 5's extraction step sends a CloudConvert-rendered 45-slide
+     visual deck through Gemini vision inside a *single* Inngest step. The §3 budget of
+     1–3 min sits uncomfortably close to Hobby's 300 s ceiling, and 4 of 5 Marketing decks
+     take that branch (§4.2). Pro's 800 s removes the risk instead of mitigating it.
+   - **Cron allowance — new as of Wave 2.** CAL-2's daily `/api/cron/calendar-sync`
+     consumes the *entire* Hobby daily-cron budget. Item 7's exam-review staleness check and
+     every future scheduled job would otherwise have had to share that one handler.
+   Pro additionally unblocks the `*/30 * * * *` calendar cadence §3.1 describes, demoting the
+   on-demand staleness trigger from necessity to convenience. Both Hobby mitigations recorded
+   in *Technical risks* are retired by this.
 7. **German grade conversion**: confirm the modified Bavarian formula is what IE/German
    employers expect for the dual degree, or supply the conversion table you want.
 8. **Mobile expectation check**: PWA-first (installable, offline reviews, push) — native
