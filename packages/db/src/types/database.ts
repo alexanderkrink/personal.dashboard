@@ -79,6 +79,7 @@ export type Database = {
           last_synced_at: string | null
           provider: string
           sync_cursor: Json | null
+          sync_lease_expires_at: string | null
           updated_at: string
           user_id: string
         }
@@ -93,6 +94,7 @@ export type Database = {
           last_synced_at?: string | null
           provider?: string
           sync_cursor?: Json | null
+          sync_lease_expires_at?: string | null
           updated_at?: string
           user_id: string
         }
@@ -107,6 +109,7 @@ export type Database = {
           last_synced_at?: string | null
           provider?: string
           sync_cursor?: Json | null
+          sync_lease_expires_at?: string | null
           updated_at?: string
           user_id?: string
         }
@@ -439,7 +442,30 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      claim_calendar_feed: {
+        Args: { p_feed_id: string; p_lease_seconds?: number }
+        Returns: {
+          active: boolean
+          config: Json
+          created_at: string
+          id: string
+          label: string
+          last_sync_error: string | null
+          last_sync_status: string | null
+          last_synced_at: string | null
+          provider: string
+          sync_cursor: Json | null
+          sync_lease_expires_at: string | null
+          updated_at: string
+          user_id: string
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "calendar_feeds"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
     }
     Enums: {
       [_ in never]: never

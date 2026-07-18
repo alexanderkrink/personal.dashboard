@@ -1,0 +1,365 @@
+/**
+ * The pure decision layer of the sync engine (§3.2 row diff, §3.3 lifecycle,
+ * §3.6 cancellations).
+ *
+ * Everything here is a pure function over plain data: no Supabase, no clock, no
+ * `Date.now()` — `nowIso` is always a parameter. That is deliberate. The
+ * tombstone flow is the highest-risk correctness path in this feature, because
+ * the IE feed emits **zero** `STATUS:CANCELLED` (379/379 CONFIRMED, verified
+ * 2026-07-18): a cancelled lecture simply vanishes, so this diff is the only
+ * thing standing between "the professor cancelled Thursday" and "Thursday
+ * silently disappeared, along with the fact that it was ever there". Making the
+ * decisions pure is what lets them be tested exhaustively without a database.
+ *
+ * It does NOT live in `packages/core`, despite being pure, because it is
+ * expressed in this application's persisted row shapes (`calendar_items`
+ * columns, `user_locked_fields`). Core owns the parsing; the shape of our
+ * tables is ours.
+ */
+
+import type { NormalizedEvent, NormalizedOccurrence } from "@study/core";
+
+/* -------------------------------------------------------------------------- */
+/* Grace periods                                                              */
+/* -------------------------------------------------------------------------- */
+
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+
+/**
+ * How long a vanished item stays fully visible before it is treated as
+ * cancelled (§3.3). ICS feeds are windowed and occasionally truncated, so a
+ * single bad generation upstream must not wipe the calendar.
+ */
+export const TOMBSTONE_HIDE_AFTER_MS = 24 * HOUR_MS;
+
+/** How long a vanished item survives before it is actually deleted (§3.3). */
+export const TOMBSTONE_DELETE_AFTER_MS = 7 * DAY_MS;
+
+/** How long a cancelled occurrence is rendered struck through before it is hidden (§3.6). */
+export const CANCELLED_VISIBLE_MS = 7 * DAY_MS;
+
+/* -------------------------------------------------------------------------- */
+/* Field ownership and locking                                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Columns on `calendar_items` that a sync writes from feed data.
+ *
+ * Anything not on this list is ours or the user's and is never touched by a
+ * sync — `completed_at`, `weight_override`, `created_at`, and the identity
+ * columns themselves.
+ */
+export const SYNCED_ITEM_FIELDS = [
+  "title",
+  "kind",
+  "raw_summary",
+  "description",
+  "location",
+  "rrule",
+  "original_tzid",
+  "sequence",
+  "session_from",
+  "session_to",
+  "descriptor",
+  "course_id",
+] as const;
+
+export type SyncedItemField = (typeof SYNCED_ITEM_FIELDS)[number];
+
+/**
+ * Columns the user may take ownership of.
+ *
+ * A superset of `SYNCED_ITEM_FIELDS`: `hidden`, `is_exam_candidate` and
+ * `weight_override` are written by the engine's own derivation (retake hiding,
+ * §5.1b exam detection) rather than copied from the feed, but a user override
+ * has to win over a derivation exactly as it wins over a feed value.
+ *
+ * A field name that is not on this list is rejected when locking, so a typo
+ * cannot create a lock that silently protects nothing.
+ */
+export const LOCKABLE_ITEM_FIELDS = [
+  ...SYNCED_ITEM_FIELDS,
+  "assessment_id",
+  "hidden",
+  "is_exam_candidate",
+  "weight_override",
+] as const;
+
+export type LockableItemField = (typeof LOCKABLE_ITEM_FIELDS)[number];
+
+const LOCKABLE = new Set<string>(LOCKABLE_ITEM_FIELDS);
+
+export function isLockableItemField(field: string): field is LockableItemField {
+  return LOCKABLE.has(field);
+}
+
+/**
+ * Drops every locked key from an update payload (§3.3).
+ *
+ * The single rule this enforces: **if the user edited it, sync never writes it
+ * again.** Not "writes it unless the feed changed", not "writes it if the
+ * SEQUENCE bumped" — never. A user who renames an event and finds the feed's
+ * title back the next morning has learned that their edits are worthless.
+ *
+ * Unknown lock names are ignored rather than throwing: `user_locked_fields` is
+ * plain `text[]` and a stale name from an older schema must not break a sync.
+ */
+// `T extends object`, not `T extends Record<string, unknown>`: an interface has
+// no implicit index signature, so `SyncedItemPayload` — the only thing this is
+// ever called with — fails the stricter constraint.
+export function applyLocks<T extends object>(
+  payload: T,
+  lockedFields: readonly string[],
+): Partial<T> {
+  if (lockedFields.length === 0) return payload;
+
+  const locked = new Set(lockedFields);
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(payload)) {
+    if (!locked.has(key)) result[key] = value;
+  }
+  return result as Partial<T>;
+}
+
+/** Adds a field to a lock list, keeping it unique and sorted (stable diffs). */
+export function withLockedField(lockedFields: readonly string[], field: string): string[] {
+  return [...new Set([...lockedFields, field])].sort();
+}
+
+/* -------------------------------------------------------------------------- */
+/* Row-level diff (§3.2 layer 3)                                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The occurrence columns a sync owns.
+ *
+ * `completed_at` is conspicuously absent, and that absence is the point: it is
+ * the user's record that they did the thing, and no upstream edit may clear it.
+ */
+export interface OccurrencePayload {
+  starts_at: string;
+  ends_at: string | null;
+  all_day: boolean;
+  status: NormalizedOccurrence["status"];
+  overridden: boolean;
+}
+
+/**
+ * A stable string identity for an occurrence payload.
+ *
+ * Used to skip writes that would change nothing (§3.2 layer 3), so `updated_at`
+ * keeps meaning "this row actually changed" rather than "a sync ran". Field
+ * order is fixed by the literal below, not by `Object.keys`, so two equal
+ * payloads always produce the same string.
+ */
+export function occurrenceFingerprint(payload: OccurrencePayload): string {
+  return [
+    payload.starts_at,
+    // A sentinel, not `""`. Mapping null onto the empty string would make
+    // "no end time" and "an end time of empty string" the same fingerprint —
+    // unreachable through the current schema, but the whole job of this
+    // function is to be a faithful identity, and a lossy encoding in a
+    // change-detector is how a real change silently stops being written.
+    payload.ends_at === null ? "∅" : payload.ends_at,
+    payload.all_day ? "1" : "0",
+    payload.status,
+    payload.overridden ? "1" : "0",
+  ].join("|");
+}
+
+/** Normalizes a parsed occurrence into the row shape we persist. */
+export function toOccurrencePayload(occurrence: NormalizedOccurrence): OccurrencePayload {
+  return {
+    starts_at: occurrence.startsAtUtc,
+    ends_at: occurrence.endsAtUtc ?? null,
+    all_day: occurrence.allDay,
+    status: occurrence.status,
+    overridden: occurrence.overridden,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Tombstones (§3.3) and cancellations (§3.6)                                 */
+/* -------------------------------------------------------------------------- */
+
+/** The subset of a persisted `calendar_items` row the tombstone planner reads. */
+export interface TombstoneCandidate {
+  id: string;
+  ics_uid: string;
+  /** Null = manual quick-add. Sync must never touch these. */
+  feed_id: string | null;
+  missing_since: string | null;
+}
+
+export type TombstoneAction =
+  /** Present in the snapshot and previously tombstoned — the item came back. */
+  | { action: "clear"; id: string }
+  /** Absent for the first time; start the grace period. */
+  | { action: "mark"; id: string; missingSince: string }
+  /** Absent, still inside the 7-day grace period. Left exactly as it is. */
+  | { action: "keep"; id: string; missingSince: string }
+  /** Absent for more than 7 continuous days. Now it really is gone. */
+  | { action: "delete"; id: string };
+
+/**
+ * Decides what happens to every stored item of one feed, given the set of UIDs
+ * the feed just returned.
+ *
+ * The three rules, in the order they matter:
+ *
+ *  1. **Reappearance clears the tombstone.** A UID that comes back is the same
+ *     item it always was — same row, same id, so its `course_id`, its
+ *     `completed_at` and every occurrence hanging off it survive untouched.
+ *     Nothing is re-created, because nothing was destroyed.
+ *  2. **Absence starts a clock, it does not delete.** `missing_since` is only
+ *     set when it was null, so a row absent for three days keeps its ORIGINAL
+ *     timestamp instead of having the clock reset by every sync — otherwise the
+ *     7-day deadline would never arrive and nothing would ever be cleaned up.
+ *  3. **Only continuous absence deletes.** Any reappearance in between resets
+ *     the clock via rule 1, which is exactly the intent.
+ *
+ * Manual items (`feed_id === null`) are filtered out before any of this. They
+ * are not in any feed's snapshot, so without this guard every single one would
+ * be tombstoned on the first sync and deleted a week later.
+ */
+export function planTombstones(
+  storedItems: readonly TombstoneCandidate[],
+  presentUids: ReadonlySet<string>,
+  nowIso: string,
+  options: { deleteAfterMs?: number } = {},
+): TombstoneAction[] {
+  const deleteAfterMs = options.deleteAfterMs ?? TOMBSTONE_DELETE_AFTER_MS;
+  const nowMs = Date.parse(nowIso);
+  const actions: TombstoneAction[] = [];
+
+  for (const item of storedItems) {
+    // Manual items are never touched by sync (§3.3). Not "usually" — never.
+    if (item.feed_id === null) continue;
+
+    if (presentUids.has(item.ics_uid)) {
+      if (item.missing_since !== null) actions.push({ action: "clear", id: item.id });
+      continue;
+    }
+
+    if (item.missing_since === null) {
+      actions.push({ action: "mark", id: item.id, missingSince: nowIso });
+      continue;
+    }
+
+    const absentForMs = nowMs - Date.parse(item.missing_since);
+    if (absentForMs >= deleteAfterMs) {
+      actions.push({ action: "delete", id: item.id });
+    } else {
+      actions.push({ action: "keep", id: item.id, missingSince: item.missing_since });
+    }
+  }
+
+  return actions;
+}
+
+/**
+ * Whether a tombstoned item should still be shown (§3.3: hidden at 24 h).
+ *
+ * Read-time, not write-time. The row keeps existing for a week either way; this
+ * only decides whether a view renders it, so the grace period can be tuned
+ * without a migration and without losing data already tombstoned.
+ */
+export function isTombstoneVisible(
+  missingSince: string | null,
+  nowIso: string,
+  hideAfterMs: number = TOMBSTONE_HIDE_AFTER_MS,
+): boolean {
+  if (missingSince === null) return true;
+  return Date.parse(nowIso) - Date.parse(missingSince) < hideAfterMs;
+}
+
+/**
+ * Whether a cancelled occurrence should still be rendered struck through
+ * (§3.6: kept visible for 7 days, then hidden).
+ *
+ * A cancelled lecture is *information* — "this is not happening" is something
+ * the user needs to see, and a silent gap in the week is not the same message.
+ * After a week it stops being news.
+ *
+ * `cancelledAt` is the occurrence's `updated_at`, which the row-level diff (see
+ * `occurrenceFingerprint`) only advances when the payload genuinely changed —
+ * so for a cancelled row it is the moment the status flipped. There is no
+ * dedicated `cancelled_at` column, and this is why one is not needed.
+ */
+export function isCancelledOccurrenceVisible(
+  cancelledAt: string,
+  nowIso: string,
+  visibleMs: number = CANCELLED_VISIBLE_MS,
+): boolean {
+  return Date.parse(nowIso) - Date.parse(cancelledAt) < visibleMs;
+}
+
+/**
+ * Occurrence rows of a still-present item whose instance is gone from the
+ * snapshot — §3.6 form 2 (an `EXDATE` added upstream, or `METHOD:CANCEL`).
+ *
+ * These are marked cancelled rather than deleted, for the same reason as form 1:
+ * a lecture that was on the calendar and now is not is something the user is
+ * entitled to see. Rows already cancelled are skipped so the diff stays a no-op
+ * and `updated_at` — which is what dates the strike-through — is not reset on
+ * every sync.
+ */
+export function planOrphanedOccurrences(
+  storedOccurrences: readonly { id: string; recurrence_id: string; status: string }[],
+  snapshotOccurrences: readonly NormalizedOccurrence[],
+): string[] {
+  const present = new Set(snapshotOccurrences.map((occurrence) => occurrence.recurrenceId));
+  return storedOccurrences
+    .filter(
+      (occurrence) => !present.has(occurrence.recurrence_id) && occurrence.status !== "cancelled",
+    )
+    .map((occurrence) => occurrence.id);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Event → row                                                                */
+/* -------------------------------------------------------------------------- */
+
+/** The feed-derived half of a `calendar_items` row. */
+export interface SyncedItemPayload {
+  title: string;
+  kind: NormalizedEvent["kind"];
+  raw_summary: string;
+  description: string | null;
+  location: string | null;
+  rrule: string | null;
+  original_tzid: string | null;
+  sequence: number;
+  session_from: number | null;
+  session_to: number | null;
+  descriptor: NonNullable<NormalizedEvent["descriptor"]> | null;
+  course_id: string | null;
+}
+
+/**
+ * Turns a parsed event plus a resolved course into the columns sync owns.
+ *
+ * `courseId` is passed in rather than derived here because course matching is a
+ * per-user lookup against `courses` and `course_matchers` — I/O, and therefore
+ * the engine's job, not this module's.
+ */
+export function toSyncedItemPayload(
+  event: NormalizedEvent,
+  courseId: string | null,
+): SyncedItemPayload {
+  return {
+    title: event.title,
+    kind: event.kind,
+    raw_summary: event.rawSummary,
+    description: event.description ?? null,
+    location: event.location ?? null,
+    rrule: event.rrule ?? null,
+    original_tzid: event.originalTzid ?? null,
+    sequence: event.sequence,
+    session_from: event.sessionFrom ?? null,
+    session_to: event.sessionTo ?? null,
+    descriptor: event.descriptor ?? null,
+    course_id: courseId,
+  };
+}
