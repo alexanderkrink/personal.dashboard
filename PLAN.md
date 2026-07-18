@@ -1714,14 +1714,50 @@ Rules, in order:
    a naked TZID that is *not* IANA-resolvable must fail loudly to a processing event rather
    than silently floating. This is what makes a class at "10:00 Europe/Madrid" stay at 10:00 local
    across the March/October DST transitions while its UTC representation shifts (the feed has
-   real events on both sides of both 2026 transitions — 27 Mar and 26 Oct — so the fixtures
+   real events on both sides of both 2026 transitions — ⚠ **CORRECTED 2026-07-18 (Wave 2): the
+   2026 transitions are 29 March and 25 October, not "27 Mar and 26 Oct"** — so the fixtures
    come from real data).
+
+   > **⚠ CORRECTED 2026-07-18 (Wave 2) — the transition dates in this section were wrong.**
+   > EU DST changes on the **last Sunday** of March and October. In 2026 those are **Sunday
+   > 29 March** (CET→CEST) and **Sunday 25 October** (CEST→CET), both at 01:00 UTC — verified
+   > against the platform IANA database. The previously-named "27 Mar / 26 Oct" are a Friday
+   > and a Monday respectively, and **26 Oct is already on the winter side of the change**, so
+   > a fixture pair built on those two dates would have straddled nothing in October and
+   > proved nothing. The committed fixtures now use event-bearing weekdays that genuinely
+   > straddle the real Sundays (27 Mar / 7 Apr, and 23 Oct / 26 Oct), and the tests assert the
+   > **local** time is unchanged on both sides — not just the UTC instant, which a
+   > UTC-pinning parser would also satisfy.
+   >
+   > Direction, for the record, since it is easy to invert: a 10:00 Madrid class is **09:00Z
+   > in winter (CET, +01)** and **08:00Z in summer (CEST, +02)**.
 3. UTC times (`...Z` suffix — the usual output for due dates) pass through.
 4. **Floating times** (no TZID, no Z) are interpreted in `profiles.timezone`
    (default `Europe/Madrid` — already in the schema).
 5. All-day events (`VALUE=DATE`) set `all_day = true` and are anchored to midnight in
    the profile timezone; views render them as dates, never times, so they can't drift
    across midnight for users who travel.
+
+   > **🔴 DISPROVEN 2026-07-18 (Wave 2) — the IE feed emits ZERO `VALUE=DATE`, and its
+   > actual all-day shape crashes ical.js.** Verified against the real export: `VALUE=DATE`
+   > appears **0 times**. All **20** all-day rows are written as a *date-only* `DTSTART`
+   > carrying a `TZID` and a `DURATION:P1D`, with no `VALUE=DATE` parameter at all —
+   > `DTSTART;TZID=Europe/Madrid:20260120`.
+   >
+   > Because the parameter is absent, ical.js's design layer types the property `date-time`,
+   > decodes it to the malformed jCal value `"2026-01-20T::"`, and **throws
+   > `invalid date-time value`**. This is not a mis-parse of one row: the throw propagates and
+   > fails the *entire feed*. Detecting all-day by testing for the `VALUE=DATE` parameter —
+   > the reading this rule invites — never even gets the chance to run.
+   >
+   > `parseIcsToNormalizedEvents` therefore repairs the value from the raw jCal **before**
+   > decoding (`readTime()`), and detects all-day from `isDate` as well as the parameter.
+   > Both shapes are covered by fixtures; the real-export test asserts all 20 rows parse.
+   >
+   > One clarification the rule already implies but is worth stating: the TZID on these rows
+   > is **ignored** when anchoring. RFC 5545 forbids a TZID on a DATE value, and honouring
+   > IE's would re-anchor the day in Madrid for a travelling user — the exact midnight drift
+   > this rule exists to prevent. Anchoring is always in `profiles.timezone`.
 6. Rendering always formats in `profiles.timezone`, so the stored UTC never leaks.
 
 #### 3.5 Recurring events (RRULE) — expand at sync, store occurrences
@@ -2142,6 +2178,28 @@ two oracles:
 - No syllabus on file → use `max(sessionTo)` and mark the result fallback-derived.
 - Syllabus and feed genuinely disagree → surface as a conflict for one-tap resolution, never
   a silent pick.
+
+> **⚠ CORRECTED 2026-07-18 (Wave 2) — step 2 cannot key on `assessments.kind`, and the
+> `detection_source` enum above does not match the implemented chain.** Two findings from
+> building the detector:
+>
+> 1. **`kind` cannot identify the final.** `assessments.kind` is constrained to
+>    `('exam','quiz','project','participation','paper','other')` (migration `20260717161053`),
+>    so a final and a midterm are **both** stored as `'exam'` — no legal value contains the
+>    word "final". A step-2 predicate matching on `kind` is not merely dormant for want of
+>    rows; it is **structurally dead** and would silently fall through to the max-session
+>    fallback even after fall-2026 syllabi are loaded. The discriminator is
+>    **`assessments.title`** ("Final Exam", "In class Midterm Exam" — exactly as the real
+>    syllabi write it), gated on an exam-like `kind`. Where several exams carry session
+>    numbers and none is titled "final", the **highest session number** wins: the final is the
+>    last exam.
+> 2. **The `calendar_items.detection_source` check constraint predates the REVISED chain.**
+>    It allows `('syllabus_header','syllabus_body','max_session','manual')`, while the
+>    implemented chain reports `syllabus_total_sessions` (← `courses.total_sessions`),
+>    `assessment_session_number` (← `assessments.session_number`) and `feed_max_session`. The
+>    mapping is 1:1 but the names differ. The calendar migration has **not been written yet**,
+>    so nothing is broken today — whoever writes it must reconcile the two, and this note is
+>    the record that the divergence is known rather than accidental.
 
 Either way the result passes the
 **mandatory human confirm** gate — exam dates are both date-critical *and* grade-critical, the

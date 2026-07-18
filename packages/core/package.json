@@ -11,6 +11,10 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
+  "dependencies": {
+    "ical.js": "catalog:",
+    "zod": "catalog:"
+  },
   "devDependencies": {
     "@study/typescript-config": "workspace:*",
     "typescript": "catalog:",
