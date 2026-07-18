@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
+    "@phosphor-icons/react": "catalog:",
     "@study/ai": "workspace:*",
     "@study/core": "workspace:*",
     "@study/db": "workspace:*",
@@ -21,7 +22,6 @@
     "@t3-oss/env-nextjs": "^0.13.11",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "lucide-react": "^1.24.0",
     "next": "16.2.10",
     "next-themes": "^0.4.6",
     "react": "catalog:",

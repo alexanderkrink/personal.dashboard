@@ -4,40 +4,118 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * Alex's Study Dashboard — "analyst terminal that reads like a book".
+ * Token values are transcribed verbatim from PLAN.md "Identity & design"
+ * (Color tokens — OKLCH — both themes fully specified). Do not re-derive.
+ *
+ * Two registers: the cockpit (dense, cool, hue ~237 azure) is the default;
+ * the reading register is the `.reading` wrapper class near the bottom of
+ * this file — a surface treatment inside either theme, not a third theme.
+ */
+
 @theme inline {
+    /* ---- Type ---- */
     --font-heading: var(--font-sans);
     --font-sans: var(--font-sans);
-    --color-sidebar-ring: var(--sidebar-ring);
-    --color-sidebar-border: var(--sidebar-border);
-    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-    --color-sidebar-accent: var(--sidebar-accent);
-    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-    --color-sidebar-primary: var(--sidebar-primary);
-    --color-sidebar-foreground: var(--sidebar-foreground);
-    --color-sidebar: var(--sidebar);
-    --color-chart-5: var(--chart-5);
-    --color-chart-4: var(--chart-4);
-    --color-chart-3: var(--chart-3);
-    --color-chart-2: var(--chart-2);
-    --color-chart-1: var(--chart-1);
-    --color-ring: var(--ring);
-    --color-input: var(--input);
-    --color-border: var(--border);
-    --color-destructive: var(--destructive);
-    --color-accent-foreground: var(--accent-foreground);
-    --color-accent: var(--accent);
-    --color-muted-foreground: var(--muted-foreground);
-    --color-muted: var(--muted);
-    --color-secondary-foreground: var(--secondary-foreground);
-    --color-secondary: var(--secondary);
-    --color-primary-foreground: var(--primary-foreground);
-    --color-primary: var(--primary);
-    --color-popover-foreground: var(--popover-foreground);
-    --color-popover: var(--popover);
-    --color-card-foreground: var(--card-foreground);
-    --color-card: var(--card);
-    --color-foreground: var(--foreground);
+    --font-serif: var(--font-serif);
+    --font-mono: var(--font-mono);
+    /* JetBrains Mono needs tabular figures + slashed zero; the next/font
+     * loader cannot set OpenType features, so they ride on the theme font
+     * definition and are emitted by every `font-mono` utility. */
+    --font-mono--font-feature-settings: "tnum" 1, "zero" 1;
+
+    /* ---- Core surfaces & ink ---- */
     --color-background: var(--background);
+    --color-foreground: var(--foreground);
+    --color-surface: var(--surface);
+    --color-card: var(--card);
+    --color-card-foreground: var(--card-foreground);
+    --color-popover: var(--popover);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-muted: var(--muted);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-secondary: var(--secondary);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-border: var(--border);
+    --color-input: var(--input);
+    --color-ring: var(--ring);
+
+    /* ---- Azure accent ---- */
+    --color-primary: var(--primary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-accent: var(--accent);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent-text: var(--accent-text);
+    --color-accent-subtle: var(--accent-subtle);
+    --color-accent-border: var(--accent-border);
+    --color-accent-hover: var(--accent-hover);
+    --color-accent-active: var(--accent-active);
+
+    /* ---- Reading register ---- */
+    --color-reading-bg: var(--reading-bg);
+    --color-reading-foreground: var(--reading-foreground);
+    --color-reading-muted: var(--reading-muted);
+
+    /* ---- Urgency heat ramp + semantics ---- */
+    --color-destructive: var(--destructive);
+    --color-destructive-foreground: var(--destructive-foreground);
+    --color-destructive-button: var(--destructive-button);
+    --color-urgency-overdue: var(--urgency-overdue);
+    --color-urgency-high: var(--urgency-high);
+    --color-urgency-medium: var(--urgency-medium);
+    --color-urgency-low: var(--urgency-low);
+    --color-urgency-done: var(--urgency-done);
+    --color-danger: var(--danger);
+    --color-warning: var(--warning);
+    --color-success: var(--success);
+    --color-info: var(--info);
+
+    /* ---- Course palette (curated 8-hue categorical) ---- */
+    --color-course-indigo: var(--course-indigo);
+    --color-course-violet: var(--course-violet);
+    --color-course-pink: var(--course-pink);
+    --color-course-gold: var(--course-gold);
+    --color-course-green: var(--course-green);
+    --color-course-teal: var(--course-teal);
+    --color-course-cyan: var(--course-cyan);
+    --color-course-rust: var(--course-rust);
+
+    /* ---- Persona palette (weekly ritual time-blocks) ---- */
+    --color-persona-student: var(--persona-student);
+    --color-persona-founder: var(--persona-founder);
+    --color-persona-life: var(--persona-life);
+
+    /* ---- Data-viz ---- */
+    --color-chart-1: var(--chart-1);
+    --color-chart-2: var(--chart-2);
+    --color-chart-3: var(--chart-3);
+    --color-chart-4: var(--chart-4);
+    --color-chart-5: var(--chart-5);
+    --color-chart-6: var(--chart-6);
+    --color-chart-7: var(--chart-7);
+    --color-chart-8: var(--chart-8);
+    --color-seq-1: var(--seq-1);
+    --color-seq-2: var(--seq-2);
+    --color-seq-3: var(--seq-3);
+    --color-seq-4: var(--seq-4);
+    --color-seq-5: var(--seq-5);
+    --color-seq-6: var(--seq-6);
+    --color-div-low: var(--div-low);
+    --color-div-mid: var(--div-mid);
+    --color-div-high: var(--div-high);
+
+    /* ---- Sidebar (shadcn slots) ---- */
+    --color-sidebar: var(--sidebar);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-ring: var(--sidebar-ring);
+
+    /* ---- Radius: dual scale, sharp cockpit / soft reading ---- */
     --radius-sm: calc(var(--radius) * 0.6);
     --radius-md: calc(var(--radius) * 0.8);
     --radius-lg: var(--radius);
@@ -45,80 +123,254 @@
     --radius-2xl: calc(var(--radius) * 1.8);
     --radius-3xl: calc(var(--radius) * 2.2);
     --radius-4xl: calc(var(--radius) * 2.6);
+    --radius-reading: var(--radius-reading);
+}
+
+/* ======================================================================
+ * Light (cockpit)
+ * ==================================================================== */
+:root {
+  --background: oklch(0.98 0.004 237); /* app canvas  ~#f6f8fa */
+  --surface: oklch(0.995 0.002 237); /* raised card ~#fdfdff */
+  --card: oklch(0.995 0.002 237);
+  --card-foreground: oklch(0.21 0.02 237);
+  --popover: oklch(1 0 0); /* overlay     ~#ffffff */
+  --popover-foreground: oklch(0.21 0.02 237);
+  --muted: oklch(0.965 0.006 237); /* subtle bg   ~#eef1f5 */
+  --secondary: oklch(0.965 0.006 237);
+  --secondary-foreground: oklch(0.21 0.02 237);
+  --foreground: oklch(0.21 0.02 237); /* primary ink ~#1c2531 */
+  --muted-foreground: oklch(0.45 0.02 237); /* AA on canvas ~#5b6675 */
+  --border: oklch(0.9 0.008 237); /* hairline    ~#dde1e8 */
+  --input: oklch(0.9 0.008 237);
+
+  --primary: oklch(0.52 0.16 237); /* azure btn fill; white text ~5.0:1 (AA) */
+  --primary-foreground: oklch(0.99 0.005 237);
+  --accent: oklch(0.58 0.17 237); /* bright azure: focus ring, wordmark dot, hover/selected bg */
+  --accent-foreground: oklch(0.2 0.02 237); /* DARK ink on solid --accent chips */
+  --accent-text: oklch(0.5 0.15 237); /* AA-safe azure for link/interactive TEXT */
+  --ring: oklch(0.58 0.17 237); /* = --accent; focus rings are non-text, 3:1 suffices */
+
+  --radius: 0.375rem; /* 6px cockpit base */
+  --radius-reading: 0.625rem; /* 10px reading cards */
+}
+
+/* Reading register (light) — a deliberate warm paper surface, NOT the app bg */
+:root {
+  --reading-bg: oklch(0.985 0.006 80); /* warm off-white paper ~#f9f6f0 */
+  --reading-foreground: oklch(0.24 0.012 60); /* warm dark ink ~#2a2620 */
+  --reading-muted: oklch(0.46 0.012 60); /* captions, meta */
 }
 
 /*
- * Cockpit theme (see PLAN.md "Identity & design"): dark-first, cool blue-tinted
- * neutrals (hue ~258), electric-blue accent, sharp 0.375rem radius. Red/amber/green
- * stay reserved for deadline-urgency semantics — never decorative.
+ * Accent tint ramp — single accent + ramp, no second hue.
+ * "primary +/-5% L" is read as +/-0.05 absolute OKLCH lightness.
+ * Rule of thumb: --accent paints, --accent-text writes.
  */
 :root {
-  --background: oklch(0.98 0.003 255);
-  --foreground: oklch(0.17 0.012 255);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.17 0.012 255);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.17 0.012 255);
-  --primary: oklch(0.55 0.2 259);
-  --primary-foreground: oklch(0.985 0.005 255);
-  --secondary: oklch(0.955 0.006 255);
-  --secondary-foreground: oklch(0.25 0.015 255);
-  --muted: oklch(0.955 0.006 255);
-  --muted-foreground: oklch(0.5 0.02 255);
-  --accent: oklch(0.94 0.015 255);
-  --accent-foreground: oklch(0.25 0.015 255);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.91 0.008 255);
-  --input: oklch(0.91 0.008 255);
-  --ring: oklch(0.55 0.2 259);
-  --chart-1: oklch(0.55 0.2 259);
-  --chart-2: oklch(0.6 0.13 215);
-  --chart-3: oklch(0.55 0.18 295);
-  --chart-4: oklch(0.68 0.15 75);
-  --chart-5: oklch(0.6 0.13 165);
-  --radius: 0.375rem;
-  --sidebar: oklch(0.965 0.005 255);
-  --sidebar-foreground: oklch(0.17 0.012 255);
-  --sidebar-primary: oklch(0.55 0.2 259);
-  --sidebar-primary-foreground: oklch(0.985 0.005 255);
-  --sidebar-accent: oklch(0.94 0.015 255);
-  --sidebar-accent-foreground: oklch(0.25 0.015 255);
-  --sidebar-border: oklch(0.91 0.008 255);
-  --sidebar-ring: oklch(0.55 0.2 259);
+  --accent-subtle: color-mix(in oklab, var(--accent) 10%, var(--surface));
+  --accent-border: color-mix(in oklab, var(--accent) 32%, transparent);
+  --accent-hover: oklch(0.57 0.16 237);
+  --accent-active: oklch(0.47 0.16 237);
+  --scrim: oklch(0 0 0 / 55%);
 }
 
+/*
+ * Urgency heat ramp (light column — tuned for colored TEXT/numerals on the
+ * near-white canvas; bright amber/green fail 4.5:1 as small text).
+ * green = done ONLY, in the status lane.
+ */
+:root {
+  --urgency-overdue: oklch(0.53 0.2 27);
+  --urgency-high: oklch(0.55 0.14 65);
+  --urgency-medium: oklch(0.55 0.1 78);
+  --urgency-low: var(--muted-foreground);
+  --urgency-done: oklch(0.5 0.13 155);
+
+  --danger: var(--urgency-overdue);
+  --warning: var(--urgency-high);
+  --success: var(--urgency-done);
+  --info: var(--muted-foreground);
+
+  /* --destructive is the danger red for text/borders/icons; destructive
+   * BUTTONS deepen to --destructive-button so white text clears AA. */
+  --destructive: oklch(0.53 0.2 27);
+  --destructive-button: oklch(0.5 0.2 27);
+  --destructive-foreground: oklch(0.99 0.005 237);
+}
+
+/* Course palette — curated 8-hue categorical (light column). Default = indigo. */
+:root {
+  --course-indigo: oklch(0.55 0.16 265);
+  --course-violet: oklch(0.55 0.18 300);
+  --course-pink: oklch(0.58 0.17 350);
+  --course-gold: oklch(0.65 0.13 85);
+  --course-green: oklch(0.55 0.14 150);
+  --course-teal: oklch(0.58 0.11 195);
+  --course-cyan: oklch(0.58 0.13 225);
+  --course-rust: oklch(0.58 0.15 40);
+}
+
+/* Persona palette (light) — student / founder / life. */
+:root {
+  --persona-student: oklch(0.52 0.16 262);
+  --persona-founder: oklch(0.53 0.18 300);
+  --persona-life: oklch(0.52 0.14 160);
+}
+
+/*
+ * Data-viz (light). Categorical reuses seven course hues + accent azure
+ * (course-cyan dropped to avoid an azure/cyan clash), maximally-distinct order.
+ * Sequential light: low end is light, so value order flips vs dark.
+ */
+:root {
+  --chart-1: oklch(0.55 0.16 237); /* azure (accent) */
+  --chart-2: var(--course-gold);
+  --chart-3: var(--course-violet);
+  --chart-4: var(--course-teal);
+  --chart-5: var(--course-pink);
+  --chart-6: var(--course-green);
+  --chart-7: var(--course-indigo);
+  --chart-8: var(--course-rust);
+
+  --seq-1: oklch(0.95 0.02 237);
+  --seq-2: oklch(0.86 0.06 237);
+  --seq-3: oklch(0.74 0.11 237);
+  --seq-4: oklch(0.62 0.15 237);
+  --seq-5: oklch(0.5 0.15 237);
+  --seq-6: oklch(0.4 0.12 237);
+
+  --div-low: oklch(0.52 0.19 27);
+  --div-mid: oklch(0.92 0.005 237);
+  --div-high: oklch(0.5 0.14 150);
+}
+
+/* Sidebar (light) — not specified in PLAN; derived from the surface stack.
+ * Active item = accent-subtle bg + azure dot + 500 weight. */
+:root {
+  --sidebar: oklch(0.965 0.006 237);
+  --sidebar-foreground: oklch(0.21 0.02 237);
+  --sidebar-primary: oklch(0.52 0.16 237);
+  --sidebar-primary-foreground: oklch(0.99 0.005 237);
+  --sidebar-accent: var(--accent-subtle);
+  --sidebar-accent-foreground: oklch(0.21 0.02 237);
+  --sidebar-border: oklch(0.9 0.008 237);
+  --sidebar-ring: oklch(0.58 0.17 237);
+}
+
+/* ======================================================================
+ * Dark (cockpit) — default theme
+ * ==================================================================== */
 .dark {
-  --background: oklch(0.14 0.012 258);
-  --foreground: oklch(0.93 0.008 255);
-  --card: oklch(0.17 0.014 258);
-  --card-foreground: oklch(0.93 0.008 255);
-  --popover: oklch(0.17 0.014 258);
-  --popover-foreground: oklch(0.93 0.008 255);
-  --primary: oklch(0.62 0.21 259);
-  --primary-foreground: oklch(0.985 0.005 255);
-  --secondary: oklch(0.22 0.016 258);
-  --secondary-foreground: oklch(0.93 0.008 255);
-  --muted: oklch(0.22 0.016 258);
-  --muted-foreground: oklch(0.68 0.015 255);
-  --accent: oklch(0.24 0.02 258);
-  --accent-foreground: oklch(0.93 0.008 255);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(0.93 0.01 255 / 12%);
-  --input: oklch(0.93 0.01 255 / 16%);
-  --ring: oklch(0.62 0.21 259);
-  --chart-1: oklch(0.62 0.21 259);
-  --chart-2: oklch(0.72 0.13 215);
-  --chart-3: oklch(0.65 0.19 295);
-  --chart-4: oklch(0.78 0.14 80);
-  --chart-5: oklch(0.72 0.14 165);
-  --sidebar: oklch(0.16 0.013 258);
-  --sidebar-foreground: oklch(0.93 0.008 255);
-  --sidebar-primary: oklch(0.62 0.21 259);
-  --sidebar-primary-foreground: oklch(0.985 0.005 255);
-  --sidebar-accent: oklch(0.24 0.02 258);
-  --sidebar-accent-foreground: oklch(0.93 0.008 255);
-  --sidebar-border: oklch(0.93 0.01 255 / 12%);
-  --sidebar-ring: oklch(0.62 0.21 259);
+  --background: oklch(0.13 0.012 237); /* canvas   ~#0b0e14 (e0) */
+  --surface: oklch(0.16 0.014 237); /* raised   ~#10141c (e1) */
+  --card: oklch(0.16 0.014 237);
+  --card-foreground: oklch(0.94 0.006 237);
+  --popover: oklch(0.19 0.016 237); /* overlay  ~#151b25 (e2) */
+  --popover-foreground: oklch(0.94 0.006 237);
+  --muted: oklch(0.22 0.016 237); /* subtle bg ~#1a212c */
+  --secondary: oklch(0.22 0.016 237);
+  --secondary-foreground: oklch(0.94 0.006 237);
+  --foreground: oklch(0.94 0.006 237); /* primary ink ~#e9ecf1 */
+  --muted-foreground: oklch(0.7 0.012 237); /* AA on card ~#9aa4b2 */
+  --border: oklch(0.94 0.01 237 / 10%); /* hairline */
+  --input: oklch(0.94 0.01 237 / 14%);
+
+  --primary: oklch(0.54 0.15 237); /* white text ~4.8:1 (AA, tight — do not brighten) */
+  --primary-foreground: oklch(0.99 0.005 237);
+  --accent: oklch(0.68 0.16 237); /* bright azure (NOT link text — use --accent-text) */
+  --accent-foreground: oklch(0.15 0.02 237); /* on solid --accent chips/highlights */
+  --accent-text: oklch(0.72 0.15 237); /* azure link/interactive TEXT on dark (AA-safe) */
+  --ring: oklch(0.68 0.16 237);
+}
+
+/* Reading register (dark) — a warm, slightly lifted panel inside the dark app */
+.dark {
+  --reading-bg: oklch(0.17 0.006 70); /* warm graphite ~#1a1713 */
+  --reading-foreground: oklch(0.9 0.008 70); /* warm off-white ink ~#e6ded2 */
+  --reading-muted: oklch(0.66 0.01 70);
+}
+
+/* Accent tint ramp (dark). */
+.dark {
+  --accent-subtle: color-mix(in oklab, var(--accent) 10%, var(--surface));
+  --accent-border: color-mix(in oklab, var(--accent) 32%, transparent);
+  --accent-hover: oklch(0.59 0.15 237);
+  --accent-active: oklch(0.49 0.15 237);
+  --scrim: oklch(0 0 0 / 55%);
+}
+
+/* Urgency heat ramp (dark column). green = done ONLY, in the status lane. */
+.dark {
+  --urgency-overdue: oklch(0.68 0.19 25);
+  --urgency-high: oklch(0.78 0.15 68);
+  --urgency-medium: oklch(0.8 0.09 82);
+  --urgency-low: var(--muted-foreground);
+  --urgency-done: oklch(0.74 0.15 155);
+
+  --danger: var(--urgency-overdue);
+  --warning: var(--urgency-high);
+  --success: var(--urgency-done);
+  --info: var(--muted-foreground);
+
+  --destructive: oklch(0.68 0.19 25);
+  --destructive-button: oklch(0.55 0.2 25);
+  --destructive-foreground: oklch(0.99 0.005 237);
+}
+
+/* Course palette — curated 8-hue categorical (dark column). */
+.dark {
+  --course-indigo: oklch(0.68 0.14 265);
+  --course-violet: oklch(0.68 0.16 300);
+  --course-pink: oklch(0.72 0.15 350);
+  --course-gold: oklch(0.8 0.12 85);
+  --course-green: oklch(0.74 0.14 150);
+  --course-teal: oklch(0.75 0.11 195);
+  --course-cyan: oklch(0.74 0.12 225);
+  --course-rust: oklch(0.7 0.14 40);
+}
+
+/* Persona palette (dark). Life emerald ~160 sits deliberately just off
+ * status-green ~155 — identity color, never a status. */
+.dark {
+  --persona-student: oklch(0.66 0.15 262);
+  --persona-founder: oklch(0.62 0.17 300);
+  --persona-life: oklch(0.7 0.14 160);
+}
+
+/* Data-viz (dark). */
+.dark {
+  --chart-1: oklch(0.68 0.16 237); /* azure (accent) */
+  --chart-2: var(--course-gold);
+  --chart-3: var(--course-violet);
+  --chart-4: var(--course-teal);
+  --chart-5: var(--course-pink);
+  --chart-6: var(--course-green);
+  --chart-7: var(--course-indigo);
+  --chart-8: var(--course-rust);
+
+  --seq-1: oklch(0.28 0.05 237);
+  --seq-2: oklch(0.4 0.09 237);
+  --seq-3: oklch(0.52 0.13 237);
+  --seq-4: oklch(0.62 0.16 237);
+  --seq-5: oklch(0.72 0.15 237);
+  --seq-6: oklch(0.82 0.12 237);
+
+  --div-low: oklch(0.62 0.18 25);
+  --div-mid: oklch(0.72 0.01 237);
+  --div-high: oklch(0.68 0.15 150);
+}
+
+/* Sidebar (dark) — derived from the surface stack, between e0 and e1. */
+.dark {
+  --sidebar: oklch(0.15 0.013 237);
+  --sidebar-foreground: oklch(0.94 0.006 237);
+  --sidebar-primary: oklch(0.54 0.15 237);
+  --sidebar-primary-foreground: oklch(0.99 0.005 237);
+  --sidebar-accent: var(--accent-subtle);
+  --sidebar-accent-foreground: oklch(0.94 0.006 237);
+  --sidebar-border: oklch(0.94 0.01 237 / 10%);
+  --sidebar-ring: oklch(0.68 0.16 237);
 }
 
 @layer base {
@@ -131,5 +383,35 @@
   }
   html {
     @apply font-sans;
+  }
+  /* Mono elements that never carry the `font-mono` utility still need the
+   * signature tabular figures + slashed zero. */
+  code,
+  kbd,
+  samp,
+  pre {
+    font-family: var(--font-mono), ui-monospace, monospace;
+    font-feature-settings: "tnum" 1, "zero" 1;
+  }
+}
+
+/*
+ * The reading register: a wrapper CLASS, not a theme variant. It nests inside
+ * either `.dark` or the light default and remaps four things (PLAN.md
+ * "The two registers, explicitly"). Declared in `components` so Tailwind
+ * utilities — notably `font-mono` on provenance chips, locators, KaTeX and
+ * inline data — still override it.
+ */
+@layer components {
+  .reading {
+    --background: var(--reading-bg);
+    --foreground: var(--reading-foreground);
+    /* --reading-muted is the register's captions/meta ink; it has no other route. */
+    --muted-foreground: var(--reading-muted);
+    --radius: var(--radius-reading);
+
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-serif), ui-serif, Georgia, serif;
   }
 }
