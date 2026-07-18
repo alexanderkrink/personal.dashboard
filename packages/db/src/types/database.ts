@@ -67,6 +67,242 @@ export type Database = {
           },
         ]
       }
+      calendar_feeds: {
+        Row: {
+          active: boolean
+          config: Json
+          created_at: string
+          id: string
+          label: string
+          last_sync_error: string | null
+          last_sync_status: string | null
+          last_synced_at: string | null
+          provider: string
+          sync_cursor: Json | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          active?: boolean
+          config: Json
+          created_at?: string
+          id?: string
+          label: string
+          last_sync_error?: string | null
+          last_sync_status?: string | null
+          last_synced_at?: string | null
+          provider?: string
+          sync_cursor?: Json | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          active?: boolean
+          config?: Json
+          created_at?: string
+          id?: string
+          label?: string
+          last_sync_error?: string | null
+          last_sync_status?: string | null
+          last_synced_at?: string | null
+          provider?: string
+          sync_cursor?: Json | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      calendar_items: {
+        Row: {
+          assessment_id: string | null
+          course_id: string | null
+          created_at: string
+          description: string | null
+          descriptor: string | null
+          detection_source: string | null
+          feed_id: string | null
+          hidden: boolean
+          ics_uid: string
+          id: string
+          is_exam_candidate: boolean
+          kind: string
+          location: string | null
+          missing_since: string | null
+          original_tzid: string | null
+          raw_summary: string | null
+          rrule: string | null
+          sequence: number
+          session_from: number | null
+          session_to: number | null
+          source: string
+          title: string
+          updated_at: string
+          user_id: string
+          user_locked_fields: string[]
+          weight_override: number | null
+        }
+        Insert: {
+          assessment_id?: string | null
+          course_id?: string | null
+          created_at?: string
+          description?: string | null
+          descriptor?: string | null
+          detection_source?: string | null
+          feed_id?: string | null
+          hidden?: boolean
+          ics_uid: string
+          id?: string
+          is_exam_candidate?: boolean
+          kind: string
+          location?: string | null
+          missing_since?: string | null
+          original_tzid?: string | null
+          raw_summary?: string | null
+          rrule?: string | null
+          sequence?: number
+          session_from?: number | null
+          session_to?: number | null
+          source: string
+          title: string
+          updated_at?: string
+          user_id: string
+          user_locked_fields?: string[]
+          weight_override?: number | null
+        }
+        Update: {
+          assessment_id?: string | null
+          course_id?: string | null
+          created_at?: string
+          description?: string | null
+          descriptor?: string | null
+          detection_source?: string | null
+          feed_id?: string | null
+          hidden?: boolean
+          ics_uid?: string
+          id?: string
+          is_exam_candidate?: boolean
+          kind?: string
+          location?: string | null
+          missing_since?: string | null
+          original_tzid?: string | null
+          raw_summary?: string | null
+          rrule?: string | null
+          sequence?: number
+          session_from?: number | null
+          session_to?: number | null
+          source?: string
+          title?: string
+          updated_at?: string
+          user_id?: string
+          user_locked_fields?: string[]
+          weight_override?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "calendar_items_assessment_id_fkey"
+            columns: ["assessment_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "assessments"
+            referencedColumns: ["id", "user_id"]
+          },
+          {
+            foreignKeyName: "calendar_items_course_id_fkey"
+            columns: ["course_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "courses"
+            referencedColumns: ["id", "user_id"]
+          },
+          {
+            foreignKeyName: "calendar_items_feed_id_fkey"
+            columns: ["feed_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "calendar_feeds"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
+      calendar_occurrences: {
+        Row: {
+          all_day: boolean
+          completed_at: string | null
+          ends_at: string | null
+          id: string
+          item_id: string
+          overridden: boolean
+          recurrence_id: string
+          starts_at: string
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          all_day?: boolean
+          completed_at?: string | null
+          ends_at?: string | null
+          id?: string
+          item_id: string
+          overridden?: boolean
+          recurrence_id?: string
+          starts_at: string
+          status?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          all_day?: boolean
+          completed_at?: string | null
+          ends_at?: string | null
+          id?: string
+          item_id?: string
+          overridden?: boolean
+          recurrence_id?: string
+          starts_at?: string
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "calendar_occurrences_item_id_fkey"
+            columns: ["item_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "calendar_items"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
+      course_matchers: {
+        Row: {
+          course_id: string
+          created_at: string
+          id: string
+          pattern: string
+          user_id: string
+        }
+        Insert: {
+          course_id: string
+          created_at?: string
+          id?: string
+          pattern: string
+          user_id: string
+        }
+        Update: {
+          course_id?: string
+          created_at?: string
+          id?: string
+          pattern?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "course_matchers_course_id_fkey"
+            columns: ["course_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "courses"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
       courses: {
         Row: {
           absence_fail_pct: number | null
@@ -84,6 +320,7 @@ export type Database = {
           target_grade: number | null
           title: string
           total_sessions: number | null
+          total_sessions_source: string | null
           updated_at: string
           user_id: string
         }
@@ -103,6 +340,7 @@ export type Database = {
           target_grade?: number | null
           title: string
           total_sessions?: number | null
+          total_sessions_source?: string | null
           updated_at?: string
           user_id: string
         }
@@ -122,6 +360,7 @@ export type Database = {
           target_grade?: number | null
           title?: string
           total_sessions?: number | null
+          total_sessions_source?: string | null
           updated_at?: string
           user_id?: string
         }

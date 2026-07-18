@@ -1533,7 +1533,7 @@ create table public.calendar_feeds (
   config jsonb not null,               -- { url, courseId? } — validated by the provider's Zod configSchema; courseId pins a per-course feed (§5.1 step 1)
   sync_cursor jsonb,                   -- { etag, lastModified, contentHash }
   last_synced_at timestamptz,
-  last_sync_status text,               -- 'ok' | 'unchanged' | 'error'
+  last_sync_status text check (last_sync_status in ('ok','unchanged','error')),  -- ⚠ check added 2026-07-18 (Wave 2)
   last_sync_error text,
   active boolean not null default true,
   created_at timestamptz not null default now(),
@@ -1566,7 +1566,8 @@ create table public.calendar_items (
   session_to int,                      -- the M of (Ses. N-M); = session_from for a single session
   descriptor text check (descriptor in ('regular','extra','retake','final_exam')),
   is_exam_candidate boolean not null default false,  -- exam candidate per the §5.1b resolution chain
-  detection_source text check (detection_source in ('syllabus_header','syllabus_body','max_session','manual')),
+  detection_source text check (detection_source in ('syllabus_total_sessions','assessment_session_number','feed_max_session','manual')),
+                                       -- ⚠ CORRECTED 2026-07-18 (Wave 2) — see the marker below
                                        -- which step of the §5.1b chain resolved it; lets
                                        -- "exam not yet published" be distinguished from "exam found"
   hidden boolean not null default false,             -- retakes are hidden by default, never deleted (§5.1b)
@@ -1637,6 +1638,48 @@ create table public.course_matchers (
 > 15+ feature and is **required** here, because the bare `on delete set null` would try to null
 > `user_id` too, which is `not null`. Nullable FK columns keep `match simple` semantics, so an
 > unmatched calendar item (no course assigned) correctly skips the check.
+
+> **⚠ CORRECTED 2026-07-18 (Wave 2) — `detection_source` names the ORACLE, not the place in a
+> document.** This spec originally listed
+> `('syllabus_header','syllabus_body','max_session','manual')`. Two of those four are wrong in
+> kind, not just in spelling: `syllabus_header` and `syllabus_body` describe *where inside a
+> syllabus document* a number was found. That is a document-extraction concern from before the
+> §5.1b chain was revised, and **no code anywhere produces the distinction** — nothing between
+> the parser and the database can tell a header number from a body number, so the two values
+> could never be populated differently.
+>
+> The applied schema (`20260718174222_calendar_tables`) uses `packages/core`'s
+> `ExamDetectionSource` instead:
+> `('syllabus_total_sessions','assessment_session_number','feed_max_session','manual')`. These
+> distinguish **which oracle answered** — step 1 (`courses.total_sessions`), step 2 (an
+> `assessments.session_number` match), step 3 (`max(sessionTo)` across the feed) — which is
+> both what the code actually branches on and what the UI must label, since a user needs to
+> know whether an exam date came from their syllabus or from a guess about the feed.
+> `manual` survives unchanged: it is the user setting the flag by hand, which no oracle
+> produces. `max_session` is renamed to `feed_max_session` for the same reason — the old name
+> did not say *whose* max.
+>
+> **There is deliberately no `pending` value.** `detectExam()`'s `pending` outcome produces no
+> calendar row at all — only an expected session number the feed has not published yet — so a
+> row carrying a `detection_source` is by construction a *resolved* one. Adding `pending` here
+> would create a state the writer can never write.
+
+> **⚠ Two schema additions beyond this spec — applied 2026-07-18 (Wave 2).**
+>
+> 1. **`calendar_feeds.last_sync_status` gained a check constraint.** It was specified as a
+>    bare `text` with the allowed values in a trailing comment. The data-model *Conventions*
+>    require "enums as text + check constraints", and `20260718140050` already closed exactly
+>    this omission once, for `courses.grading_scale`. A comment is not a constraint.
+>
+> 2. **`courses.total_sessions_source text check in ('syllabus','feed_derived','manual')`** —
+>    new column, nullable, backfilled to `'feed_derived'` on all 7 seeded rows.
+>    **Why it had to exist before any exam detection ships:** the seeded `total_sessions`
+>    values were computed *from the feed*, so exam-detection step 1 (the "syllabus oracle")
+>    and step 3 (`max(sessionTo)`) are currently reading the same number by two different
+>    routes. Their agreement is a tautology, not corroboration. Without provenance nothing in
+>    the system can distinguish a syllabus-declared 30 from a feed-derived 30 — which is
+>    precisely how that circularity stayed invisible. A row only becomes a genuine step-1
+>    oracle when its source reads `'syllabus'`.
 
 All four tables: RLS enabled, per-operation policies on `(select auth.uid()) = user_id` —
 the `init_profiles` pattern. `set_updated_at()` triggers on feeds, items, and occurrences;

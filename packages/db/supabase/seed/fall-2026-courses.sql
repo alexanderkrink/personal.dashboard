@@ -44,10 +44,20 @@ end $$;
 -- color: distinct keys from the curated 8-hue palette (courses_color_palette_key).
 -- 7 courses over 8 hues, so all-distinct is achievable; 'rust' stays free.
 --
--- total_sessions: the declared session count per course, the primary §5.1b exam
--- oracle. grading_scale is left at its 'ie_10' default — all seven are IE courses.
-insert into public.courses (user_id, semester_id, title, total_sessions, absence_fail_pct, color)
-select v.user_id, v.semester_id, v.title, v.total_sessions, v.absence_fail_pct, v.color
+-- total_sessions: the session count per course. grading_scale is left at its
+-- 'ie_10' default — all seven are IE courses.
+--
+-- ⚠ total_sessions_source = 'feed_derived' on every row, and that matters more
+-- than it looks. These counts were computed from the live ICS feed (the maximum
+-- session number the §5.1b normalizer saw per course), NOT read off a syllabus.
+-- Exam detection treats courses.total_sessions as the *syllabus oracle* (step 1)
+-- and max(sessionTo) over the feed as the *fallback* (step 3) — so with these
+-- values the two steps are reading the same number by two routes, and their
+-- agreement proves nothing. The provenance column (added by 20260718174222)
+-- exists so that circularity is visible instead of silent. Flip a row to
+-- 'syllabus' only when a real syllabus document has been transcribed.
+insert into public.courses (user_id, semester_id, title, total_sessions, total_sessions_source, absence_fail_pct, color)
+select v.user_id, v.semester_id, v.title, v.total_sessions, 'feed_derived', v.absence_fail_pct, v.color
 from (
   values
     ('0092dd81-4436-452f-9517-235cc8ea4cf2'::uuid, 'c91b9b1f-8908-4fa2-a62c-7835affb4b19'::uuid, 'ALGORITHMS & DATA STRUCTURES',                              30, 20::numeric, 'indigo'),
