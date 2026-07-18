@@ -21,6 +21,7 @@ import {
 } from "@study/core";
 import type { Json } from "@study/db";
 import { redactSecrets } from "@/lib/calendar/secret";
+import { createCourseMatcher } from "./course-match";
 import {
   applyLocks,
   changedFields,
@@ -151,7 +152,7 @@ async function runSync(
   }
 
   const events = result.value.events;
-  const matchCourse = courseMatcher(context);
+  const matchCourse = courseMatcher(context, feed.config);
 
   /* ---- items ---------------------------------------------------------- */
 
@@ -317,7 +318,7 @@ async function runSync(
   /* ---- §5.1b exam candidacy ------------------------------------------- */
 
   const cancelled = orphanIds.length;
-  await markExamCandidates(store, context, events, itemIdByUid, allUserItems);
+  await markExamCandidates(store, context, events, itemIdByUid, allUserItems, feed.config);
 
   await store.finishFeed(feed.id, {
     status: "ok",
@@ -344,42 +345,29 @@ async function runSync(
 /* -------------------------------------------------------------------------- */
 
 /**
- * Builds the course resolver for one sync run: learned matchers first, then an
- * exact course-title match, then a containment match.
+ * The §5.1 chain for one sync run, reduced to the id the row needs.
  *
- * Learned rules win because they exist precisely to correct what inference got
- * wrong — a user who filed an event under a course is not asking to be
- * second-guessed by a substring.
+ * The chain itself lives in `course-match.ts` because the **read** path runs the
+ * identical logic — the Unassigned bucket groups by the hint that failed to
+ * match, and a second implementation there would show a bucket whose contents
+ * disagree with what the next sync does.
+ *
+ * `config.courseId` is read here rather than inside the matcher so the feed row
+ * stays the only thing that knows about feed configuration.
  */
-function courseMatcher(context: SyncContext): (hint: string) => string | null {
-  const matchers = context.matchers.map((matcher) => ({
-    courseId: matcher.course_id,
-    pattern: matcher.pattern.toLowerCase(),
-  }));
-  const courses = context.courses.map((course) => ({
-    id: course.id,
-    title: course.title.toLowerCase(),
-  }));
+function courseMatcher(context: SyncContext, config: unknown): (hint: string) => string | null {
+  const pinnedCourseId =
+    typeof config === "object" && config !== null && "courseId" in config
+      ? ((config as { courseId?: unknown }).courseId ?? null)
+      : null;
 
-  return (hint: string) => {
-    const needle = hint.trim().toLowerCase();
-    if (needle === "") return null;
+  const match = createCourseMatcher({
+    pinnedCourseId: typeof pinnedCourseId === "string" ? pinnedCourseId : null,
+    matchers: context.matchers,
+    courses: context.courses,
+  });
 
-    for (const matcher of matchers) {
-      if (matcher.pattern !== "" && needle.includes(matcher.pattern)) return matcher.courseId;
-    }
-    for (const course of courses) {
-      if (course.title === needle) return course.id;
-    }
-    // Containment both ways: the feed truncates long course names, and it also
-    // appends room text that survived normalization.
-    for (const course of courses) {
-      if (course.title !== "" && (needle.includes(course.title) || course.title.includes(needle))) {
-        return course.id;
-      }
-    }
-    return null;
-  };
+  return (hint: string) => match(hint)?.courseId ?? null;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -412,10 +400,11 @@ async function markExamCandidates(
   events: readonly NormalizedEvent[],
   itemIdByUid: ReadonlyMap<string, string>,
   storedItems: readonly StoredItem[],
+  feedConfig: unknown,
 ): Promise<void> {
   const locksById = new Map(storedItems.map((item) => [item.id, item.user_locked_fields]));
   const storedById = new Map(storedItems.map((item) => [item.id, item]));
-  const matchCourse = courseMatcher(context);
+  const matchCourse = courseMatcher(context, feedConfig);
 
   const byCourse = new Map<string, ExamCandidateEvent[]>();
   const retakeUids = new Set<string>();

@@ -82,7 +82,7 @@ export function createSupabaseCalendarStore(supabase: SupabaseAdminClient): Cale
     async loadContext(userId): Promise<SyncContext> {
       const [profile, courses, matchers, assessments, semesters] = await Promise.all([
         supabase.from("profiles").select("timezone").eq("id", userId).maybeSingle(),
-        supabase.from("courses").select("id, title, total_sessions").eq("user_id", userId),
+        supabase.from("courses").select("id, code, title, total_sessions").eq("user_id", userId),
         supabase.from("course_matchers").select("course_id, pattern").eq("user_id", userId),
         supabase
           .from("assessments")

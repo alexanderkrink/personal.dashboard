@@ -79,7 +79,9 @@ describe("tombstones — the drop-and-restore round trip (§3.3)", () => {
     const { store, state } = createMemoryStore({
       context: {
         timezone: "Europe/Madrid",
-        courses: [{ id: "course-1", title: "ALGORITHMS & DATA STRUCTURES", total_sessions: 30 }],
+        courses: [
+          { id: "course-1", code: null, title: "ALGORITHMS & DATA STRUCTURES", total_sessions: 30 },
+        ],
         matchers: [],
         assessments: [],
         semesters: [],
@@ -282,8 +284,13 @@ describe("user_locked_fields (§3.3)", () => {
       context: {
         timezone: "Europe/Madrid",
         courses: [
-          { id: "course-algo", title: "ALGORITHMS & DATA STRUCTURES", total_sessions: 30 },
-          { id: "course-mkt", title: "MARKETING MANAGEMENT", total_sessions: 20 },
+          {
+            id: "course-algo",
+            code: null,
+            title: "ALGORITHMS & DATA STRUCTURES",
+            total_sessions: 30,
+          },
+          { id: "course-mkt", code: null, title: "MARKETING MANAGEMENT", total_sessions: 20 },
         ],
         matchers: [],
         assessments: [],

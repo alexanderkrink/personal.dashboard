@@ -74,7 +74,7 @@ export interface StoredOccurrence {
 export interface SyncContext {
   /** `profiles.timezone` — how floating times are interpreted (§3.4 rule 4). */
   timezone: string;
-  courses: { id: string; title: string; total_sessions: number | null }[];
+  courses: { id: string; code: string | null; title: string; total_sessions: number | null }[];
   matchers: { course_id: string; pattern: string }[];
   assessments: {
     id: string;
