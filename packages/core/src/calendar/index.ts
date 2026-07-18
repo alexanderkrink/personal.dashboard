@@ -67,6 +67,8 @@ export {
   timezoneOffsetMs,
   UnknownTimezoneError,
   type WallClock,
+  wallClockAt,
   wallClockToUtcIso,
   wallClockToUtcMs,
 } from "./timezone";
+export { HORIZON_DAYS, type WeekWindow, weekWindow } from "./week";

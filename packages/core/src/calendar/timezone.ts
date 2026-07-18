@@ -98,8 +98,13 @@ export function isKnownTimezone(tzid: string): boolean {
  * `Intl` is the only tz-aware primitive available to a dependency-free package,
  * and `formatToParts` is the only way to read its output without parsing a
  * localized string.
+ *
+ * Exported because §7's week window is defined in `profiles.timezone` — "which
+ * Monday is it *there*" is a question about the local wall clock, and answering
+ * it by subtracting a fixed offset from UTC puts the boundary an hour out on
+ * DST weekends.
  */
-function wallClockAt(utcMs: number, tzid: string): WallClock {
+export function wallClockAt(utcMs: number, tzid: string): WallClock {
   const parts = formatterFor(tzid).formatToParts(new Date(utcMs));
   const field = (type: Intl.DateTimeFormatPartTypes): number => {
     const part = parts.find((candidate) => candidate.type === type);
