@@ -14,7 +14,22 @@ export type FieldControlProps = {
   id: string;
   name: string;
   value: string;
-  onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => void;
+  /**
+   * Accepts either a DOM change event or a bare value.
+   *
+   * Native controls (`Input`, `Textarea`, `<select>`) hand over an event; Base
+   * UI's value-based controls hand over the value itself — `Select`'s
+   * `onValueChange` is `(value: string | null, eventDetails)`, where `null` is
+   * "cleared", and the extra argument is harmless. Taking the union here means
+   * `control.onChange` can be passed straight to either without a call site
+   * inventing a fake event object.
+   */
+  onChange: (
+    event:
+      | React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
+      | string
+      | null,
+  ) => void;
   "aria-invalid"?: true;
   "aria-describedby"?: string;
 };
@@ -98,7 +113,10 @@ export function FormField({
           id,
           name,
           value,
-          onChange: (event) => setValue(event.target.value),
+          onChange: (event) => {
+            if (event === null) return setValue("");
+            setValue(typeof event === "string" ? event : event.target.value);
+          },
           ...(error ? { "aria-invalid": true as const } : {}),
           ...(describedByIds ? { "aria-describedby": describedByIds } : {}),
         },

@@ -40,12 +40,23 @@ export function Form({
   action,
   children,
   className,
+  initialState = IDLE_FORM_STATE,
   ...props
 }: Omit<React.ComponentProps<"form">, "action" | "children"> & {
   action: FormAction;
   children: (state: FormState) => React.ReactNode;
+  /**
+   * What the form starts out holding. An **edit** form passes the row's current
+   * values here — `{ status: "idle", values: { title: "…" } }` — and every
+   * field seeds itself from `state.values` exactly as it already does after a
+   * failed submit, so nothing below this component needs to know the difference
+   * between "the server sent this back" and "this is what is on file".
+   *
+   * Leave it out for a create form. Never put a secret in `values`.
+   */
+  initialState?: FormState;
 }) {
-  const [state, formAction] = useActionState(action, IDLE_FORM_STATE);
+  const [state, formAction] = useActionState(action, initialState);
   const ref = useRef<HTMLFormElement>(null);
 
   useEffect(() => {

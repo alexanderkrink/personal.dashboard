@@ -37,7 +37,15 @@ export function EmptyState({
   points?: readonly EmptyStatePoint[];
   /** The honest status line: what has to happen before this surface fills up. */
   note?: string;
-  cta?: { href: "/" | "/courses" | "/calendar" | "/documents"; label: string };
+  /**
+   * A literal union rather than `string` so `typedRoutes` proves the
+   * destination exists at build time. Extend it when a new empty state needs a
+   * new target — the compile error is the point.
+   */
+  cta?: {
+    href: "/" | "/courses" | "/calendar" | "/documents" | "/courses/new" | "/courses/semesters";
+    label: string;
+  };
 }) {
   return (
     <section className="rounded-lg border border-border bg-surface p-6 md:p-8">
