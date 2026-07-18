@@ -25,16 +25,8 @@ import type {
 } from "./store";
 
 export interface MemoryItem extends StoredItem {
-  title: string;
-  kind: string;
-  descriptor: string | null;
-  session_from: number | null;
-  session_to: number | null;
-  hidden: boolean;
-  is_exam_candidate: boolean;
-  detection_source: string | null;
+  /** Not a synced column — the user's own override, so sync must never write it. */
   weight_override: number | null;
-  sequence: number;
 }
 
 export interface MemoryOccurrence extends StoredOccurrence {
@@ -118,38 +110,45 @@ export function createMemoryStore(overrides: Partial<MemoryStoreState> = {}): {
         .map((occurrence) => ({ ...occurrence }));
     },
 
-    async upsertItem(row: ItemUpsert) {
-      const existing = state.items.find(
-        (item) => item.feed_id === row.feed_id && item.ics_uid === row.ics_uid,
-      );
-      if (existing) {
-        // An upsert writes exactly the columns handed to it. The engine has
-        // already removed the locked ones, so they simply are not in `row` —
-        // which is what makes a lock hold rather than being re-applied after.
-        Object.assign(existing, row);
-        return existing.id;
+    async upsertItems(rows: readonly ItemUpsert[]) {
+      const ids = new Map<string, string>();
+      for (const row of rows) {
+        const existing = state.items.find(
+          (item) => item.feed_id === row.feed_id && item.ics_uid === row.ics_uid,
+        );
+        if (existing) {
+          Object.assign(existing, row);
+          ids.set(row.ics_uid, existing.id);
+          continue;
+        }
+        const created: MemoryItem = {
+          id: id("item"),
+          user_id: row.user_id,
+          feed_id: row.feed_id,
+          ics_uid: row.ics_uid,
+          course_id: row.course_id,
+          user_locked_fields: [],
+          missing_since: null,
+          title: row.title,
+          kind: row.kind,
+          raw_summary: row.raw_summary,
+          description: row.description,
+          location: row.location,
+          rrule: row.rrule,
+          original_tzid: row.original_tzid,
+          descriptor: row.descriptor,
+          session_from: row.session_from,
+          session_to: row.session_to,
+          hidden: false,
+          is_exam_candidate: false,
+          detection_source: null,
+          weight_override: null,
+          sequence: row.sequence,
+        };
+        state.items.push(created);
+        ids.set(row.ics_uid, created.id);
       }
-      const created: MemoryItem = {
-        id: id("item"),
-        user_id: row.user_id,
-        feed_id: row.feed_id,
-        ics_uid: row.ics_uid,
-        course_id: row.course_id,
-        user_locked_fields: [],
-        missing_since: null,
-        title: row.title,
-        kind: row.kind,
-        descriptor: row.descriptor,
-        session_from: row.session_from,
-        session_to: row.session_to,
-        hidden: false,
-        is_exam_candidate: false,
-        detection_source: null,
-        weight_override: null,
-        sequence: row.sequence,
-      };
-      state.items.push(created);
-      return created.id;
+      return ids;
     },
 
     async patchItem(itemId, patch) {

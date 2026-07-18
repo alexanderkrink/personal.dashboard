@@ -27,7 +27,13 @@ export interface FeedRow {
   sync_cursor: Json;
 }
 
-/** The `calendar_items` columns the engine reads back when diffing. */
+/**
+ * The `calendar_items` columns the engine reads back when diffing.
+ *
+ * Carries every column a sync can write, not just the identity ones, because
+ * the engine compares before it patches. Reading eleven extra columns in one
+ * query is free; writing 374 rows that did not change is not.
+ */
 export interface StoredItem {
   id: string;
   user_id: string;
@@ -36,6 +42,20 @@ export interface StoredItem {
   course_id: string | null;
   user_locked_fields: string[];
   missing_since: string | null;
+  title: string;
+  kind: string;
+  raw_summary: string | null;
+  description: string | null;
+  location: string | null;
+  rrule: string | null;
+  original_tzid: string | null;
+  sequence: number;
+  session_from: number | null;
+  session_to: number | null;
+  descriptor: string | null;
+  hidden: boolean;
+  is_exam_candidate: boolean;
+  detection_source: string | null;
 }
 
 /** The `calendar_occurrences` columns the engine reads back when diffing. */
@@ -131,8 +151,16 @@ export interface CalendarStore {
 
   listOccurrences(itemIds: readonly string[]): Promise<StoredOccurrence[]>;
 
-  /** Upserts on the `(feed_id, ics_uid)` identity and returns the row id. */
-  upsertItem(row: ItemUpsert): Promise<string>;
+  /**
+   * Upserts on the `(feed_id, ics_uid)` identity, returning each row's id keyed
+   * by its UID.
+   *
+   * Batched rather than one-at-a-time because the real feed is 374 events and
+   * each round trip to Supabase costs a few hundred milliseconds — sequentially
+   * that was three minutes of wall clock, comfortably past a serverless
+   * function's ceiling.
+   */
+  upsertItems(rows: readonly ItemUpsert[]): Promise<Map<string, string>>;
 
   /**
    * Writes a named subset of columns. `object` rather than a column union

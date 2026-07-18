@@ -155,17 +155,70 @@ export interface OccurrencePayload {
  */
 export function occurrenceFingerprint(payload: OccurrencePayload): string {
   return [
-    payload.starts_at,
+    instant(payload.starts_at),
     // A sentinel, not `""`. Mapping null onto the empty string would make
     // "no end time" and "an end time of empty string" the same fingerprint —
     // unreachable through the current schema, but the whole job of this
     // function is to be a faithful identity, and a lossy encoding in a
     // change-detector is how a real change silently stops being written.
-    payload.ends_at === null ? "∅" : payload.ends_at,
+    payload.ends_at === null ? "∅" : instant(payload.ends_at),
     payload.all_day ? "1" : "0",
     payload.status,
     payload.overridden ? "1" : "0",
   ].join("|");
+}
+
+/**
+ * A timestamp reduced to the instant it denotes.
+ *
+ * **This is not defensive tidying — without it the row diff does not work at
+ * all.** The parser produces `2026-06-12T08:00:00.000Z`; PostgREST returns the
+ * same `timestamptz` as `2026-06-12T08:00:00+00:00`. Those are different
+ * strings and the same moment, so a naive string fingerprint reported every
+ * single row as changed on every sync. Verified against the real feed: 374
+ * occurrences, 374 pointless rewrites on an otherwise no-op second run.
+ *
+ * Comparing epoch milliseconds makes the fingerprint mean what it is supposed
+ * to mean — "is this the same instant?" — rather than "did two systems agree on
+ * how to spell it?". An unparseable value falls back to the raw string, since
+ * treating garbage as `NaN` would make all garbage equal.
+ */
+function instant(value: string): string {
+  const ms = Date.parse(value);
+  return Number.isNaN(ms) ? value : String(ms);
+}
+
+/**
+ * The subset of `payload` that actually differs from what is stored.
+ *
+ * The item-level counterpart of `occurrenceFingerprint`, and it exists for the
+ * same reason: a patch containing only unchanged values still fires the
+ * `updated_at` trigger, still writes a WAL record, and still costs a network
+ * round trip per row. On the real feed that was 374 needless UPDATEs per sync.
+ *
+ * Timestamps are compared as instants, everything else by value.
+ */
+export function changedFields<T extends object>(
+  payload: T,
+  current: Record<string, unknown>,
+): Partial<T> {
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(payload)) {
+    const stored = current[key];
+    if (stored === value) continue;
+    // Postgres hands back `numeric` as a string and dates in its own spelling;
+    // neither difference is a change.
+    if (
+      typeof value === "string" &&
+      typeof stored === "string" &&
+      instant(value) === instant(stored) &&
+      Number.isNaN(Date.parse(value)) === false
+    ) {
+      continue;
+    }
+    result[key] = value;
+  }
+  return result as Partial<T>;
 }
 
 /** Normalizes a parsed occurrence into the row shape we persist. */

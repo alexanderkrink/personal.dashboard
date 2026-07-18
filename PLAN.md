@@ -1709,6 +1709,24 @@ feed regenerates lazily upstream anyway — so polling every N minutes buys litt
 Per-feed concurrency guard: the sync engine takes the feed row with
 `select ... for update skip locked`; a second overlapping run skips silently.
 
+> **⚠ CORRECTED 2026-07-18 (Wave 2) — the guard is a LEASE; `for update skip locked` alone
+> would guard nothing here.** A row lock lives and dies with its transaction. This sync runs
+> over supabase-js/PostgREST, where **every statement is its own transaction**, and it spends
+> almost all of its wall-clock time inside an HTTP fetch of the ICS feed — outside the database
+> entirely. A `for update skip locked` issued from that client releases the instant the
+> statement returns, so a second run would take it a millisecond later and both would proceed.
+> It would read exactly like this spec and deliver none of its behaviour.
+>
+> The applied design (`claim_calendar_feed()`, migration `20260718175554`) keeps
+> `for update skip locked` for the job it genuinely does — making two *simultaneous claims*
+> serialise, with the loser skipping immediately rather than blocking — and adds
+> `calendar_feeds.sync_lease_expires_at`, a timestamp that outlives the transaction so the
+> claim still holds while the run is off fetching a URL. The lease **expires**, so a run that
+> crashes without releasing does not lock its feed out forever; that expiry is the whole
+> difference between a lease and a lock.
+>
+> The observable contract is unchanged: a second overlapping run skips silently.
+
 #### 3.2 Incremental sync (as incremental as ICS allows)
 
 ICS is a full-snapshot format — there is no delta protocol. "Incremental" therefore means
@@ -1722,6 +1740,35 @@ skipping work, in three layers:
 3. **Row-level diff**: parse, normalize, then upsert only occurrences whose payload
    actually changed (compare a per-row hash), so `updated_at` stays meaningful and
    triggers/realtime don't fire on no-ops.
+
+> **⚠ MEASURED 2026-07-18 (Wave 2) — for the IE feed, layers 1 and 2 never fire, and layer 3
+> is doing all of the work.** Two consecutive syncs seconds apart, against the live feed:
+>
+> - **Layer 1 never engaged.** The response carries **no `ETag`** — only `Last-Modified` — and
+>   the endpoint answered the conditional `If-Modified-Since` with a full `200`, not a `304`.
+> - **Layer 2 never engaged either.** The two bodies hashed **differently** despite describing
+>   an identical calendar. The feed regenerates content per request (its `Last Update`
+>   pseudo-row is a timestamp), so the SHA-256 of the body is effectively a nonce. This is not
+>   a bug to fix by hashing the parsed events instead: that would require parsing first, which
+>   is the only cost layer 2 exists to avoid.
+>
+> So on the real feed **every sync parses, and layer 3 is the only thing standing between a
+> no-op run and a full rewrite**. Layers 1 and 2 stay in the code — they are cheap, correct,
+> and a different feed will honour them — but the fixture effort belongs on layer 3.
+>
+> **This made a latent bug load-bearing.** The first implementation fingerprinted timestamps
+> as raw strings. The parser emits `2026-06-12T08:00:00.000Z`; PostgREST returns the same
+> `timestamptz` as `2026-06-12T08:00:00+00:00`. Same instant, different spelling — so **every
+> row compared as changed, and an idempotent re-run rewrote all 374 occurrences and all 374
+> items.** Only an end-to-end run against the real database exposed it; the in-memory tests
+> passed throughout, because they never round-tripped through Postgres's formatting.
+> Fingerprints now compare epoch milliseconds. Measured effect on a no-op second sync:
+> **374 writes → 0, and 190 s → 6.5 s** (a run that would have exceeded a serverless
+> function's time limit as the calendar grew).
+>
+> Item rows get the same treatment, which the spec above does not mention — it says
+> "occurrences". Restating an unchanged item still fires the `updated_at` trigger and still
+> costs a round trip, and there are as many items as occurrences.
 
 #### 3.3 UID-based dedup and the update/delete lifecycle
 

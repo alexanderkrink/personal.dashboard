@@ -104,9 +104,14 @@ export function createSupabaseCalendarStore(supabase: SupabaseAdminClient): Cale
     },
 
     async listUserItems(userId): Promise<StoredItem[]> {
+      // Every column a sync can write, so the engine can compare before it
+      // patches. Eleven extra columns in one query is free; 374 no-op UPDATEs
+      // per sync is not.
       const { data, error } = await supabase
         .from("calendar_items")
-        .select("id, user_id, feed_id, ics_uid, course_id, user_locked_fields, missing_since")
+        .select(
+          "id, user_id, feed_id, ics_uid, course_id, user_locked_fields, missing_since, title, kind, raw_summary, description, location, rrule, original_tzid, sequence, session_from, session_to, descriptor, hidden, is_exam_candidate, detection_source",
+        )
         .eq("user_id", userId);
       if (error) throw new Error(`Could not load calendar items: ${error.message}`);
       return data ?? [];
@@ -126,14 +131,17 @@ export function createSupabaseCalendarStore(supabase: SupabaseAdminClient): Cale
       return results;
     },
 
-    async upsertItem(row: ItemUpsert): Promise<string> {
-      const { data, error } = await supabase
-        .from("calendar_items")
-        .upsert(row, { onConflict: "feed_id,ics_uid" })
-        .select("id")
-        .single();
-      if (error) throw new Error(`Could not upsert calendar item: ${error.message}`);
-      return data.id;
+    async upsertItems(rows: readonly ItemUpsert[]): Promise<Map<string, string>> {
+      const ids = new Map<string, string>();
+      for (const batch of chunk(rows, IN_CHUNK)) {
+        const { data, error } = await supabase
+          .from("calendar_items")
+          .upsert(batch as never, { onConflict: "feed_id,ics_uid" })
+          .select("id, ics_uid");
+        if (error) throw new Error(`Could not upsert calendar items: ${error.message}`);
+        for (const row of data ?? []) ids.set(row.ics_uid, row.id);
+      }
+      return ids;
     },
 
     async patchItem(id, patch): Promise<void> {
