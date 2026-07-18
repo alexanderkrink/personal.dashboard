@@ -57,10 +57,10 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "assessments_course_id_fkey"
-            columns: ["course_id"]
+            columns: ["course_id", "user_id"]
             isOneToOne: false
             referencedRelation: "courses"
-            referencedColumns: ["id"]
+            referencedColumns: ["id", "user_id"]
           },
         ]
       }
@@ -122,10 +122,10 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "courses_semester_id_fkey"
-            columns: ["semester_id"]
+            columns: ["semester_id", "user_id"]
             isOneToOne: false
             referencedRelation: "semesters"
-            referencedColumns: ["id"]
+            referencedColumns: ["id", "user_id"]
           },
         ]
       }
