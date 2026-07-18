@@ -8,6 +8,9 @@
  * Alex's Study Dashboard — "analyst terminal that reads like a book".
  * Token values are transcribed verbatim from PLAN.md "Identity & design"
  * (Color tokens — OKLCH — both themes fully specified). Do not re-derive.
+ * One deliberate exception, documented inline at its declaration: light
+ * --accent-foreground is L 0.15, not PLAN's L 0.20, because PLAN's value
+ * fails WCAG AA once --accent is gamut-mapped into sRGB.
  *
  * Two registers: the cockpit (dense, cool, hue ~237 azure) is the default;
  * the reading register is the `.reading` wrapper class near the bottom of
@@ -147,7 +150,16 @@
   --primary: oklch(0.52 0.16 237); /* azure btn fill; white text ~5.0:1 (AA) */
   --primary-foreground: oklch(0.99 0.005 237);
   --accent: oklch(0.58 0.17 237); /* bright azure: focus ring, wordmark dot, hover/selected bg */
-  --accent-foreground: oklch(0.2 0.02 237); /* DARK ink on solid --accent chips */
+  /* DARK ink on solid --accent chips.
+   * DEVIATION from PLAN.md, which specifies oklch(0.20 0.02 237): that value
+   * fails WCAG AA on --accent. oklch(0.58 0.17 237) is OUTSIDE the sRGB gamut,
+   * so browsers gamut-map it (CSS Color 4 §13.2: reduce chroma, hold L and hue)
+   * to ~#0084bc rather than naively clipping the negative red channel to
+   * ~#0084d1. Against the mapped colour, L 0.20 ink measures 4.31:1 — under
+   * 4.5:1. (A naive-clip contrast checker reports 4.51:1 and hides this.)
+   * L 0.15 measures 4.68:1 and matches the dark theme's value. See PLAN.md
+   * line 177, which needs the same correction. */
+  --accent-foreground: oklch(0.15 0.02 237);
   --accent-text: oklch(0.5 0.15 237); /* AA-safe azure for link/interactive TEXT */
   --ring: oklch(0.58 0.17 237); /* = --accent; focus rings are non-text, 3:1 suffices */
 
@@ -379,13 +391,18 @@
   }
   body {
     @apply bg-background text-foreground;
-    font-variant-numeric: tabular-nums;
   }
   html {
     @apply font-sans;
   }
-  /* Mono elements that never carry the `font-mono` utility still need the
-   * signature tabular figures + slashed zero. */
+  /* Tabular figures + slashed zero belong to JetBrains Mono only (PLAN.md
+   * "Typography"), NOT to body text: they ride on the `font-mono` utility via
+   * --font-mono--font-feature-settings and on the rule below. Do not put
+   * `font-variant-numeric: tabular-nums` on `body` — that forces tabular
+   * figures onto Geist Sans UI prose and onto the Newsreader reading register,
+   * where a book-like proportional figure is the whole point, and (per CSS
+   * Fonts 4) a font-variant-numeric value that omits `slashed-zero` can also
+   * cancel the "zero" 1 feature set here. */
   code,
   kbd,
   samp,
