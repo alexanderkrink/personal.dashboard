@@ -27,7 +27,13 @@ export function TopBar({ onOpenCommandPalette }: { onOpenCommandPalette: () => v
       {/* The wordmark lives in the sidebar on desktop; below `md` the sidebar is
           gone, so the top bar carries it. */}
       <Wordmark className="md:hidden" />
-      <h1 className="hidden font-medium text-foreground text-ui-lg md:block">{title}</h1>
+      {/* Below `md` the wordmark takes the bar's visual slot, but the document
+          still needs its h1: `hidden` removes it from the accessibility tree
+          entirely, which left mobile with no h1 and a heading order starting at
+          h2. `sr-only` keeps it announced without painting it. */}
+      <h1 className="sr-only font-medium text-foreground text-ui-lg md:not-sr-only md:block">
+        {title}
+      </h1>
 
       <div className="ml-auto flex items-center gap-2">
         <button
