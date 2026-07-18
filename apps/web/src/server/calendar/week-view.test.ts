@@ -428,4 +428,70 @@ describe("buildWeekView — §7 composition", () => {
     expect(view.isEmpty).toBe(false);
     expect(view.deadlines[0]?.course?.color).toBe("indigo");
   });
+
+  /**
+   * REGRESSION (Review Gate 4). Measured on the real feed at 2026-12-21: the
+   * week after finals opened with SIX exams pinned in danger red under
+   * "Overdue", each reading "3 days ago" / "11 days ago", directly above the
+   * line "Nothing scheduled this week".
+   *
+   * The exam promotion is meant to push an exam *forward* into the ranked list
+   * and the horizon. Carrying it backwards into the overdue pin asserts the
+   * user failed to do something — but an exam is a session you sit, and the
+   * feed cannot know whether you attended. A real deadline must still carry
+   * forward, which is the second half of this test.
+   */
+  it("never pins an already-sat exam as overdue, but still carries real deadlines forward", () => {
+    const view = buildWeekView({
+      occurrences: [
+        // Class-derived exams, all in the past — the December finals.
+        occurrence({
+          startsAt: "2026-12-09T09:30:00.000Z",
+          kind: "class",
+          isExamCandidate: true,
+          title: "BPR final",
+        }),
+        occurrence({
+          startsAt: "2026-12-18T09:00:00.000Z",
+          kind: "class",
+          isExamCandidate: true,
+          title: "MDMA final",
+        }),
+        // A genuine deadline, also in the past. This one IS still owed.
+        occurrence({
+          startsAt: "2026-12-15T23:00:00.000Z",
+          kind: "deadline",
+          weightOverride: 30,
+          title: "Term paper",
+        }),
+      ],
+      now: new Date("2026-12-21T09:00:00.000Z"),
+      timezone: MADRID,
+    });
+
+    expect(view.overdue.map((row) => row.label)).toEqual(["Term paper"]);
+    expect(view.overdue.every((row) => !row.isExamCandidate)).toBe(true);
+    // The sat exams are gone from every section, not relocated into the grid.
+    expect(view.deadlines).toEqual([]);
+    expect(view.classDays.every((day) => day.rows.length === 0)).toBe(true);
+  });
+
+  it("still promotes a FUTURE exam out of the grid and into the ranked list", () => {
+    const view = buildWeekView({
+      occurrences: [
+        occurrence({
+          startsAt: "2026-12-09T09:30:00.000Z",
+          kind: "class",
+          isExamCandidate: true,
+          title: "BPR final",
+        }),
+      ],
+      now: EXAM_WEEK,
+      timezone: MADRID,
+    });
+
+    expect(view.deadlines.map((row) => row.label)).toEqual(["BPR final"]);
+    expect(view.deadlines[0]?.promotedFromClass).toBe(true);
+    expect(view.classDays.every((day) => day.rows.length === 0)).toBe(true);
+  });
 });

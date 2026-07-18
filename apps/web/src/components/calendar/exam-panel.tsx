@@ -105,7 +105,16 @@ function ExamRow({ status, timeZone }: { status: ExamStatus; timeZone: string })
 
   return (
     <li className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
-      <span className="flex min-w-0 flex-1 items-center gap-2">
+      {/* The basis is load-bearing, and it is spelled out rather than written
+          `flex-1` on purpose. `flex-1` is `flex: 1 1 0%`, so on a wrapping row
+          this span claims NO intrinsic width and every `shrink-0` sibling — the
+          date, the chip, the buttons — takes its full size first. At 375px that
+          left the course title and its provenance sentence a few pixels wide,
+          rendering one word per line down a 250px-tall column that overlapped
+          the date. A `w-full` here does nothing to fix it: `flex-basis` beats
+          `width` on a flex item, which is why the basis itself has to change.
+          Full line below `sm`, shared row above it. */}
+      <span className="flex min-w-0 shrink grow basis-full items-center gap-2 sm:basis-0">
         <CourseDot color={status.course.color} />
         <span className="min-w-0">
           <span className="block truncate text-foreground text-ui-base">{status.course.title}</span>

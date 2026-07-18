@@ -79,6 +79,14 @@ export interface WeekViewRow {
   cancelled: boolean;
   completed: boolean;
   isExamCandidate: boolean;
+  /**
+   * This row's `kind` came from `rankedKind`'s exam promotion, not from the feed.
+   *
+   * Load-bearing for the overdue rule: a promoted row is a *timetabled session*
+   * the calendar believes is an exam. Once it is in the past it is something
+   * that happened, not something left undone.
+   */
+  promotedFromClass: boolean;
   detectionSource: string | null;
   location: string | null;
   course: { id: string; title: string; color: string } | null;
@@ -250,6 +258,7 @@ function toRows(
       cancelled: occurrence.status === "cancelled",
       completed: occurrence.completed_at !== null,
       isExamCandidate: item.is_exam_candidate,
+      promotedFromClass: asKind(item.kind) === "class" && kind === "deadline",
       detectionSource: item.detection_source,
       location: item.location,
       course: item.course,
@@ -302,7 +311,22 @@ export function buildWeekView(input: BuildWeekViewInput): WeekView {
     // past-due deadlines are carried forward until completed or dismissed, so a
     // thing missed three weeks ago still surfaces today. Completed and cancelled
     // rows drop out — a done item competing for attention is noise.
-    if (row.kind === "deadline" && startsMs < nowMs) {
+    //
+    // 🔴 **A promoted exam is exempt.** `rankedKind` lifts an exam candidate to
+    // `deadline` so it ranks and warns ahead of time — that is the whole point
+    // of the promotion. Carrying it *backwards* into the overdue pin is a
+    // different claim entirely: it says the user failed to do something. An exam
+    // is a session you sit, not a task you submit, and the feed cannot know
+    // whether it was attended. Without this exemption the week after finals
+    // opens with six exams pinned in danger red reading "3 days ago" — measured
+    // on the real feed at 2026-12-21 — directly beneath the line "Nothing
+    // scheduled this week". False alarms at that volume teach the user to
+    // ignore the colour that matters most.
+    //
+    // A genuine `kind = 'deadline'` row — quick-added by hand, or a real
+    // deadline once the feed carries one — is unaffected and still carries
+    // forward.
+    if (row.kind === "deadline" && startsMs < nowMs && !row.promotedFromClass) {
       if (!row.completed && !row.cancelled) overdue.push(row);
       continue;
     }

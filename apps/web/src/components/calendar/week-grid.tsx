@@ -41,10 +41,15 @@ export function WeekGrid({
 
   return (
     <section className="mb-6 rounded-lg border border-border bg-surface">
-      <h2 className="border-border border-b px-4 py-2.5 font-medium text-muted-foreground text-ui-sm">
+      {/* h3, not h2: this section is a peer of "Deadlines" and "On the horizon"
+          underneath the "This week" h2 — not a sibling of it. As an h2 the grid
+          §7 calls "deliberately visually secondary" outranked the ranked
+          deadline list in the document outline, so a screen-reader user
+          navigating by heading met the context before the payload. */}
+      <h3 className="border-border border-b px-4 py-2.5 font-medium text-muted-foreground text-ui-sm">
         Classes this week
         <span className="ml-2 font-mono tabular-nums">{total}</span>
-      </h2>
+      </h3>
 
       <div className="grid grid-cols-1 divide-y divide-border sm:grid-cols-7 sm:divide-x sm:divide-y-0">
         {days.map((day, index) => {
