@@ -26,9 +26,14 @@ const buttonVariants = cva(
         // `border-input-border`, not the decorative `border-border`: an outline
         // button's edge is the only visual boundary of a non-text UI component,
         // so WCAG 2.2 SC 1.4.11 requires 3:1 against the adjacent surface. Same
-        // split Wave 1 made for inputs; the button was left behind. Measured
-        // from rendered pixels: 3.44:1 (light) and 3.27:1 (dark) against the
-        // tighter of the page and the button's own fill. Locked by
+        // split Wave 1 made for inputs; the button was left behind.
+        //
+        // Measured from real screenshot pixels, worst case of the two adjacent
+        // surfaces: 3.44:1 light, 3.08:1 dark. The dark figure is the edge
+        // against the button's OWN FILL; against the page it is the roomier
+        // 3.27:1. Quote the 3.08 — it is the one that governs, and it leaves
+        // only 0.08 of headroom, so darkening --input-border or lightening the
+        // dark `bg-input/30` fill will break SC 1.4.11. Locked by
         // e2e/control-border-contrast.spec.ts.
         outline:
           "border-input-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:bg-input/30 dark:hover:bg-input/50",

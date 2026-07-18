@@ -27,10 +27,24 @@ import { buttonVariants } from "@/components/ui/button";
  *    optimistically and would pass a failing border.
  *
  * Alpha compositing is load-bearing here. On dark, `--input-border` is an alpha
- * token and the outline button carries its own `bg-input/30` fill, so the edge
- * composites over the fill, not over the page. Measuring it flat is exactly the
- * mistake that let a 2.83:1 edge be annotated as 4.12:1 — each probe is
- * therefore painted onto its actual backdrop.
+ * token, so the edge must be painted onto its real backdrop rather than read
+ * flat — measuring it flat is exactly the mistake that let a 2.83:1 edge be
+ * annotated as 4.12:1.
+ *
+ * ⚠ CORRECTED 2026-07-18 (Wave 2 review gate 1). This test used to composite the
+ * edge over the button's own `bg-input/30` fill. It does not sit on that fill:
+ * the cva base carries `bg-clip-padding`, which clips the background to the
+ * PADDING box, so no fill is painted under the border at all. The edge
+ * composites over the page. Verified against real screenshot pixels — the dark
+ * border rasterises to rgb(94,99,102), which is the token at 40% over the page
+ * rgb(4,8,11); over the fill rgb(14,18,21) it would be rgb(100,105,108), a pixel
+ * that never appears on screen. The old model therefore reported ~3.39:1 where
+ * the rendered edge is 3.09:1 against the fill — an optimistic bias of ~0.3 in
+ * the one test written to prevent optimistic bias, blind to any regression
+ * landing between 3.0 and 3.3.
+ *
+ * The edge is painted over the page, once; that single real pixel is then
+ * compared against BOTH adjacent surfaces, which is what SC 1.4.11 asks.
  *
  * `--input-border` is shared with `Input`, so this also transitively pins the
  * input edge that Wave 1 introduced.
@@ -110,13 +124,15 @@ test.describe("control border contrast", () => {
 
           const onPage = paint([pageColor]);
           const onFill = paint([pageColor, fillColor]);
-          const edgeOverFill = paint([pageColor, fillColor, edgeColor]);
-          const edgeOverPage = paint([pageColor, edgeColor]);
+          // `bg-clip-padding` keeps the fill out from under the border, so the
+          // edge has exactly one backdrop: the page. This is the pixel that
+          // actually rasterises; it is then held against both neighbours.
+          const edge = paint([pageColor, edgeColor]);
 
           host.remove();
           return {
-            "edge vs the button's own fill": contrast(edgeOverFill, onFill),
-            "edge vs the page behind it": contrast(edgeOverPage, onPage),
+            "edge vs the button's own fill": contrast(edge, onFill),
+            "edge vs the page behind it": contrast(edge, onPage),
           };
         },
         { buttonClass: buttonVariants({ variant: "outline" }) },
