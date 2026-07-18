@@ -1,4 +1,4 @@
-import { CheckCircle, Info, Question, Warning } from "@phosphor-icons/react/dist/ssr";
+import { CheckCircle, Info, Prohibit, Question, Warning } from "@phosphor-icons/react/dist/ssr";
 import { CourseDot } from "@/components/courses/course-dot";
 import { cn } from "@/lib/utils";
 import type { ExamConfidence, ExamStatus } from "@/server/calendar/exam-status";
@@ -32,6 +32,18 @@ import { ExamConfirmButtons } from "./exam-confirm";
  * Nothing on this panel is confirmed truth until the user presses Confirm: an
  * exam date is date-critical AND grade-critical, the two gates reserved by the
  * Human-reversible-AI principle.
+ *
+ * ## …and every state on it is reversible (2026-07-19)
+ *
+ * A **rejected** course keeps its row, saying so, with an undo and a session
+ * picker beside it — it does not drop out of the panel. That matters more than
+ * it sounds: this list is the only place a course's exam state is visible, so a
+ * row that disappears is a decision that cannot be found again, let alone
+ * changed. See `ExamConfirmButtons` for the full state table.
+ *
+ * The confidence chip is computed upstream from `courses.total_sessions_source`
+ * and no control on this panel can reach it. Confirming a date is a statement
+ * about *which session*, never about where the session count came from.
  */
 
 const CONFIDENCE_CHIP: Record<ExamConfidence, { label: string; className: string }> = {
@@ -65,9 +77,11 @@ export function ExamPanel({
     <section className="mb-6 rounded-lg border border-border bg-surface">
       <h2 className="flex flex-wrap items-baseline gap-x-2 border-border border-b px-4 py-2.5 font-medium text-foreground text-ui-base">
         Exam dates
+        {/* Counts what the panel actually SHOWS a date for, not what the
+            detector found. A course the user rejected is not resolved, and
+            counting it would restate the detector's opinion over the user's. */}
         <span className="font-mono text-muted-foreground text-ui-sm tabular-nums">
-          {statuses.filter((status) => status.detection.outcome === "found").length} of{" "}
-          {statuses.length} resolved
+          {statuses.filter((status) => status.exam !== null).length} of {statuses.length} resolved
         </span>
       </h2>
 
@@ -141,17 +155,32 @@ function ExamRow({ status, timeZone }: { status: ExamStatus; timeZone: string })
         </span>
       ) : null}
 
-      {status.itemId !== null ? (
-        <ExamConfirmButtons itemId={status.itemId} confirmed={status.confirmed} />
-      ) : null}
+      <ExamConfirmButtons status={status} timeZone={timeZone} />
     </li>
   );
 }
 
 function ExamOutcome({ status, timeZone }: { status: ExamStatus; timeZone: string }) {
-  const { detection } = status;
+  const { detection, exam } = status;
 
-  if (detection.outcome === "found") {
+  /**
+   * ⚠ A rejected course keeps its row and says so, rather than vanishing.
+   *
+   * A course that disappears from this panel is a course the user cannot get
+   * back — and "I clicked the wrong button" is the single most likely reason a
+   * row would be rejected in the first place. The state is named, and the
+   * controls beside it offer both a session picker and an undo.
+   */
+  if (status.decision === "rejected") {
+    return (
+      <span className="flex shrink-0 items-center gap-1.5 text-ui-sm">
+        <Prohibit weight="bold" aria-hidden="true" className="size-3.5 text-muted-foreground" />
+        <span className="text-muted-foreground">You said this course has no exam</span>
+      </span>
+    );
+  }
+
+  if (exam !== null) {
     const when = new Intl.DateTimeFormat("en-GB", {
       weekday: "short",
       day: "numeric",
@@ -160,7 +189,7 @@ function ExamOutcome({ status, timeZone }: { status: ExamStatus; timeZone: strin
       minute: "2-digit",
       hourCycle: "h23",
       timeZone,
-    }).format(new Date(detection.startsAtUtc));
+    }).format(new Date(exam.startsAtUtc));
 
     return (
       <span className="flex shrink-0 items-center gap-1.5 font-mono text-ui-sm tabular-nums">
@@ -168,7 +197,9 @@ function ExamOutcome({ status, timeZone }: { status: ExamStatus; timeZone: strin
           <CheckCircle weight="fill" aria-hidden="true" className="size-3.5 text-urgency-done" />
         ) : null}
         <span className="text-foreground">{when}</span>
-        <span className="text-muted-foreground">· Ses. {detection.sessionNumber}</span>
+        {exam.sessionNumber > 0 ? (
+          <span className="text-muted-foreground">· Ses. {exam.sessionNumber}</span>
+        ) : null}
       </span>
     );
   }

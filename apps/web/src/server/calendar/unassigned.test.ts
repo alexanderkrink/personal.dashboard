@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { groupUnassigned, type UnassignedItem } from "./unassigned";
+import {
+  countUnassigned,
+  groupUnassigned,
+  partitionUnassigned,
+  type UnassignedItem,
+} from "./unassigned";
 
 let seq = 0;
 function row(rawSummary: string, startsAt = "2026-01-19T08:00:00.000Z"): UnassignedItem {
@@ -92,5 +97,69 @@ describe("groupUnassigned", () => {
     expect(groups).toHaveLength(8);
     expect(groups.reduce((total, group) => total + group.count, 0)).toBe(200);
     expect(groups[0]?.pattern).toBe("FINANCE LAB");
+  });
+});
+
+describe("partitionUnassigned", () => {
+  const NOW = new Date("2026-07-19T00:00:00.000Z");
+
+  /**
+   * ⚠ The live shape on 2026-07-19: every unmatched row is 2025/26 spring, a
+   * term that is over. Nothing here is actionable, and a bucket that shouts
+   * "217!" about it forever is a bucket the reader learns to ignore.
+   */
+  it("finds nothing actionable in a finished term", () => {
+    const groups = groupUnassigned([
+      row("FINANCE LAB   (Ses. 1)", "2026-01-19T08:00:00.000Z"),
+      row("FINANCE LAB   (Ses. 2)", "2026-06-26T08:00:00.000Z"),
+      row("MICROECONOMICS   (Ses. 1)", "2026-03-02T08:00:00.000Z"),
+    ]);
+
+    const { actionable, historical } = partitionUnassigned(groups, NOW);
+
+    expect(actionable).toEqual([]);
+    expect(historical.map((group) => group.pattern)).toEqual(["FINANCE LAB", "MICROECONOMICS"]);
+    // Nothing is discarded: it is a display decision, not a data one.
+    expect(countUnassigned(historical)).toBe(3);
+  });
+
+  it("surfaces a group with anything still to come", () => {
+    const groups = groupUnassigned([
+      row("FINANCE LAB   (Ses. 1)", "2026-01-19T08:00:00.000Z"),
+      row("NEW SEMINAR   (Ses. 1)", "2026-09-15T08:00:00.000Z"),
+    ]);
+
+    const { actionable, historical } = partitionUnassigned(groups, NOW);
+
+    expect(actionable.map((group) => group.pattern)).toEqual(["NEW SEMINAR"]);
+    expect(historical.map((group) => group.pattern)).toEqual(["FINANCE LAB"]);
+  });
+
+  /**
+   * Keyed on the LAST event, not the first. A course running January to December
+   * is a live concern in July, and keying on `firstStartsAt` would bury it.
+   */
+  it("keeps a straddling group actionable on the strength of its last event", () => {
+    const groups = groupUnassigned([
+      row("YEAR LONG COURSE   (Ses. 1)", "2026-01-19T08:00:00.000Z"),
+      row("YEAR LONG COURSE   (Ses. 2)", "2026-12-01T08:00:00.000Z"),
+    ]);
+
+    expect(partitionUnassigned(groups, NOW).actionable).toHaveLength(1);
+  });
+
+  it("counts events, not groups", () => {
+    const groups = groupUnassigned([
+      row("FINANCE LAB   (Ses. 1)", "2026-01-19T08:00:00.000Z"),
+      row("FINANCE LAB   (Ses. 2)", "2026-01-20T08:00:00.000Z"),
+      row("MICROECONOMICS   (Ses. 1)", "2026-01-21T08:00:00.000Z"),
+    ]);
+
+    expect(countUnassigned(groups)).toBe(3);
+    expect(countUnassigned([])).toBe(0);
+  });
+
+  it("handles an empty bucket", () => {
+    expect(partitionUnassigned([], NOW)).toEqual({ actionable: [], historical: [] });
   });
 });

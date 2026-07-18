@@ -25,9 +25,29 @@
  * The detection source alone is not evidence of provenance, and presenting it as
  * such would put a confident label on a number that has never been checked
  * against a syllabus.
+ *
+ * ## 🔴 The user's decision overrides the detector — added 2026-07-19
+ *
+ * Because the chain is re-run **at read time**, it originally ignored the user
+ * entirely: rejecting an exam wrote `is_exam_candidate = false` to the database
+ * and then the very next render re-detected the same session and displayed it
+ * again, unchanged. "Not an exam" was a button that appeared to do nothing.
+ *
+ * So the detection is now a *proposal* that a recorded decision outranks:
+ *
+ * | stored state | shown |
+ * |---|---|
+ * | `is_exam_candidate` + `detection_source = 'manual'` | that session, `chosen` |
+ * | `is_exam_candidate` locked false | nothing, `rejected` |
+ * | neither | the detector's proposal, `detected` |
+ *
+ * `confidence` is deliberately **not** part of that table. It is computed from
+ * `courses.total_sessions_source` and nothing else, so no user action can
+ * promote a `feed_derived` count into a syllabus-backed one.
  */
 
 import { detectExam, type ExamDetection, maxSessionNumber, normalizeSummary } from "@study/core";
+import { type ExamDecisionItem, isUserChosen, isUserRejected } from "./exam-decision";
 
 /** How much the UI is entitled to trust the answer. */
 export type ExamConfidence =
@@ -69,6 +89,30 @@ export interface ExamStatusAssessment {
   session_number: number | null;
 }
 
+/** One session of a course the user may nominate as the exam. */
+export interface ExamSessionOption {
+  itemId: string;
+  sessionNumber: number;
+  startsAtUtc: string;
+}
+
+/**
+ * Whose answer the panel is showing.
+ *
+ * ⚠ This is **orthogonal to `confidence`**, and keeping the two apart is the
+ * honesty requirement. `decision` says *who chose the session*; `confidence`
+ * says *where the session count came from*. A user confirming a feed-derived
+ * proposal changes the first and must never change the second — their agreeing
+ * with the calendar does not turn the calendar into a syllabus.
+ */
+export type ExamDecisionState =
+  /** Nobody has ruled. Whatever is shown is the detector's proposal. */
+  | "detected"
+  /** The user nominated this session by hand. */
+  | "chosen"
+  /** The user said this course has no exam. Nothing is proposed. */
+  | "rejected";
+
 export interface ExamStatus {
   course: { id: string; title: string; color: string };
   detection: ExamDetection;
@@ -79,6 +123,21 @@ export interface ExamStatus {
   itemId: string | null;
   /** True once the user has confirmed this exam by hand — the §5.1b hard gate. */
   confirmed: boolean;
+  /** Who chose the session currently shown. Never a claim about provenance. */
+  decision: ExamDecisionState;
+  /**
+   * The session the panel should actually display as the exam.
+   *
+   * The user's choice when there is one, the detector's when there is not, and
+   * **null when the user rejected it** — which is what stops a rejection being
+   * silently overruled by a detector that re-runs on every read.
+   */
+  exam: { itemId: string; sessionNumber: number; startsAtUtc: string } | null;
+  /**
+   * Every session of this course the user could nominate instead, by session
+   * number. Empty when the feed carries no session tokens for the course.
+   */
+  sessions: ExamSessionOption[];
   /**
    * The declared total and the feed's highest session disagree.
    *
@@ -139,6 +198,49 @@ function confidenceFor(
   }
 
   return { confidence: "feed_derived", provenanceLabel: "Nothing to go on yet." };
+}
+
+/** `ExamStatusItem` is a superset of what a decision reads; narrow it. */
+function toDecisionItem(item: ExamStatusItem): ExamDecisionItem {
+  return {
+    id: item.id,
+    is_exam_candidate: item.is_exam_candidate,
+    detection_source: item.detection_source,
+    user_locked_fields: item.user_locked_fields,
+  };
+}
+
+/**
+ * The course's sessions, one per item, ordered by session number.
+ *
+ * Ranged rows (`(Ses. 24-25)`) are addressed by their **last** session, which
+ * is the one the chain resolves against `courses.total_sessions` — offering the
+ * first would let a user pick "24" on a course whose total is 25 and get a row
+ * the detector describes as session 25.
+ *
+ * Where several occurrences share an item the earliest date wins, matching
+ * `eventCoveringSession`'s tie-break so the picker and the detector never
+ * disagree about which instant a session is.
+ */
+function sessionOptions(items: readonly ExamStatusItem[]): ExamSessionOption[] {
+  const byItem = new Map<string, ExamSessionOption>();
+
+  for (const item of items) {
+    const summary = normalizeSummary(item.raw_summary ?? "");
+    if (summary === null) continue;
+
+    const sessionNumber = summary.sessionTo ?? summary.sessionFrom;
+    if (sessionNumber === undefined) continue;
+
+    const existing = byItem.get(item.id);
+    if (existing !== undefined && existing.startsAtUtc <= item.starts_at) continue;
+
+    byItem.set(item.id, { itemId: item.id, sessionNumber, startsAtUtc: item.starts_at });
+  }
+
+  return [...byItem.values()].sort(
+    (a, b) => a.sessionNumber - b.sessionNumber || a.startsAtUtc.localeCompare(b.startsAtUtc),
+  );
 }
 
 export interface BuildExamStatusesInput {
@@ -202,6 +304,41 @@ export function buildExamStatuses(input: BuildExamStatusesInput): ExamStatus[] {
         ? (items.find((item) => item.ics_uid === detection.uid) ?? null)
         : null;
 
+    // Every session the user could nominate instead. Built from the same
+    // normalized summaries the detector reads, so what the picker offers is
+    // exactly what the chain can resolve — a session the picker showed but the
+    // detector cannot address would be an offer that silently does nothing.
+    const sessions = sessionOptions(items);
+
+    // 🔒 The user's decision, read before the detector's answer is used.
+    const chosen = items.find((item) => isUserChosen(toDecisionItem(item))) ?? null;
+    const rejected = chosen === null && items.some((item) => isUserRejected(toDecisionItem(item)));
+
+    const decision: ExamDecisionState =
+      chosen !== null ? "chosen" : rejected ? "rejected" : "detected";
+
+    const chosenSession = chosen
+      ? (sessions.find((session) => session.itemId === chosen.id) ?? null)
+      : null;
+
+    const exam =
+      chosen !== null
+        ? {
+            itemId: chosen.id,
+            // A hand-picked row normally carries a session token; when it does
+            // not, the date is still the answer and 0 stands for "no number",
+            // which the UI renders as a bare date rather than "Ses. 0".
+            sessionNumber: chosenSession?.sessionNumber ?? 0,
+            startsAtUtc: chosenSession?.startsAtUtc ?? chosen.starts_at,
+          }
+        : rejected || detection.outcome !== "found" || resolved === null
+          ? null
+          : {
+              itemId: resolved.id,
+              sessionNumber: detection.sessionNumber,
+              startsAtUtc: detection.startsAtUtc,
+            };
+
     const feedMax = maxSessionNumber(candidates);
     const declared = course.total_sessions;
 
@@ -209,10 +346,13 @@ export function buildExamStatuses(input: BuildExamStatusesInput): ExamStatus[] {
       course: { id: course.id, title: course.title, color: course.color },
       detection,
       ...confidenceFor(detection, course),
-      itemId: resolved?.id ?? null,
+      itemId: exam?.itemId ?? resolved?.id ?? null,
       // The §5.1b hard gate: an exam date is confirmed truth only once a human
       // said so. `manual` is what the confirm action writes.
-      confirmed: resolved?.detection_source === "manual",
+      confirmed: chosen !== null,
+      decision,
+      exam,
+      sessions,
       conflict:
         declared !== null && feedMax !== null && declared !== feedMax
           ? { declaredSessions: declared, feedMaxSession: feedMax }

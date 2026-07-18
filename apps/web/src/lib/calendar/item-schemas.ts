@@ -139,6 +139,24 @@ export const assignCourseSchema = z.object({
 export const occurrenceIdSchema = z.uuid();
 export const itemIdSchema = z.uuid();
 
+/**
+ * A user's ruling on a course's exam date (§5.1b).
+ *
+ * A discriminated union rather than one loose object, because the three moves
+ * do not take the same input and a shared shape would have to make both
+ * `itemId` and `courseId` optional — which is precisely how you end up with a
+ * `reset` that quietly resets nothing because no course was named.
+ *
+ * `set` and `reject` address a **session**; `reset` addresses a **course**,
+ * since after a rejection there is no session left to point at. That asymmetry
+ * is the whole reason rejection used to be a dead end.
+ */
+export const examDecisionSchema = z.discriminatedUnion("intent", [
+  z.object({ intent: z.literal("set"), itemId: z.uuid() }),
+  z.object({ intent: z.literal("reject"), itemId: z.uuid() }),
+  z.object({ intent: z.literal("reset"), courseId: z.uuid() }),
+]);
+
 /** The inline weight override on the badge (§5.2 step 1, §7 part 3). */
 export const weightOverrideSchema = z.object({
   itemId: itemIdSchema,

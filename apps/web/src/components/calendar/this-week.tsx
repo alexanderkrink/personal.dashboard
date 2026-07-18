@@ -3,7 +3,7 @@ import { HORIZON_DAYS } from "@study/core";
 import { createClient } from "@/lib/supabase/server";
 import { buildExamStatuses } from "@/server/calendar/exam-status";
 import { refreshStaleFeeds } from "@/server/calendar/refresh";
-import { groupUnassigned } from "@/server/calendar/unassigned";
+import { groupUnassigned, partitionUnassigned } from "@/server/calendar/unassigned";
 import { buildWeekView, type WeekViewOccurrence } from "@/server/calendar/week-view";
 import { DeadlineRow } from "./deadline-row";
 import { ExamPanel } from "./exam-panel";
@@ -107,6 +107,7 @@ export async function ThisWeek({
        calendar_items!inner (
          id, kind, title, raw_summary, location, session_from, session_to, descriptor,
          hidden, missing_since, weight_override, is_exam_candidate, detection_source,
+         user_locked_fields,
          courses (id, title, color),
          assessments (id, title, weight_percent)
        )`,
@@ -141,6 +142,7 @@ export async function ThisWeek({
       weight_override: occurrence.calendar_items.weight_override,
       is_exam_candidate: occurrence.calendar_items.is_exam_candidate,
       detection_source: occurrence.calendar_items.detection_source,
+      user_locked_fields: occurrence.calendar_items.user_locked_fields,
       course: occurrence.calendar_items.courses,
       assessment: occurrence.calendar_items.assessments,
     },
@@ -248,7 +250,12 @@ export async function ThisWeek({
               starts_at: row.starts_at,
               is_exam_candidate: row.item.is_exam_candidate,
               detection_source: row.item.detection_source,
-              user_locked_fields: [],
+              // ⚠ This was hardcoded `[]`, which silently disabled the entire
+              // decision layer: a rejection is recorded as a LOCK on
+              // `is_exam_candidate`, so an empty array makes every rejected
+              // course read as "never touched" and re-proposes the date the
+              // user just declined.
+              user_locked_fields: row.item.user_locked_fields,
             })),
             assessments: [],
             semesters: [],
@@ -257,20 +264,26 @@ export async function ThisWeek({
         />
       ) : null}
 
-      {/* 6 — the unassigned bucket, only when non-empty */}
+      {/* 6 — the unassigned bucket, only when non-empty.
+          Partitioned against the SAME injectable `now` the rest of the view
+          uses, so a pinned verification date moves the bucket's idea of "still
+          to come" with it rather than reading the wall clock behind its back. */}
       {showUnassigned ? (
         <UnassignedBucket
-          groups={groupUnassigned(
-            (unassigned ?? []).map((item) => ({
-              id: item.id,
-              raw_summary: item.raw_summary,
-              title: item.title,
-              // An item always has at least one occurrence, but the join is
-              // typed as an array; the earliest is what dates the group.
-              starts_at:
-                item.calendar_occurrences.map((occurrence) => occurrence.starts_at).sort()[0] ??
-                new Date(0).toISOString(),
-            })),
+          {...partitionUnassigned(
+            groupUnassigned(
+              (unassigned ?? []).map((item) => ({
+                id: item.id,
+                raw_summary: item.raw_summary,
+                title: item.title,
+                // An item always has at least one occurrence, but the join is
+                // typed as an array; the earliest is what dates the group.
+                starts_at:
+                  item.calendar_occurrences.map((occurrence) => occurrence.starts_at).sort()[0] ??
+                  new Date(0).toISOString(),
+              })),
+            ),
+            now,
           )}
           courses={courses ?? []}
         />

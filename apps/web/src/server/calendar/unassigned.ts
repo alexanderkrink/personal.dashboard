@@ -81,3 +81,60 @@ export function groupUnassigned(items: readonly UnassignedItem[]): UnassignedGro
     (a, b) => b.count - a.count || a.pattern.localeCompare(b.pattern),
   );
 }
+
+export interface PartitionedUnassigned {
+  /** Groups with something still to come. These are worth a decision now. */
+  actionable: UnassignedGroup[];
+  /** Groups entirely in the past. Real, keepable, and not urgent. */
+  historical: UnassignedGroup[];
+}
+
+/**
+ * Splits the bucket into *"decide this"* and *"this already happened"*.
+ *
+ * ## Why this exists (2026-07-19)
+ *
+ * ⚠ **All 217 unmatched items are in the past** — every one belongs to 2025/26
+ * spring, a term that ended and that Alexander has decided will never get a
+ * `semesters` row. So the bucket's collapsed one-liner said *"217 across 15
+ * courses"* permanently, at the top of the calendar page, about work that
+ * finished in June and can never become urgent again.
+ *
+ * That is worse than clutter. The bucket's whole justification is that it is
+ * **actionable**: it exists so an unmatched event gets filed and stops being
+ * invisible. A count that never goes down and never matters teaches the reader
+ * to skip the bucket — and then it will be skipped on the day it finally
+ * carries something from this term.
+ *
+ * So the partition is by *"can this still affect me"*, and the historical side
+ * is demoted rather than deleted. **No rows are removed** — this is a display
+ * decision. The history stays reachable for two concrete reasons:
+ *
+ * 1. Filing a pattern writes a `course_matchers` row, so filing a finished
+ *    course is still how its *future* repeats auto-link.
+ * 2. 217 rows that no surface renders are 217 rows nobody can ever find, which
+ *    is the failure mode the bucket was built to prevent.
+ *
+ * A group counts as actionable if **anything in it is still to come**. Keyed on
+ * `lastStartsAt`, not `firstStartsAt`: a course running Jan→Dec is a live
+ * concern in July, and keying on its first event would file it under history.
+ */
+export function partitionUnassigned(
+  groups: readonly UnassignedGroup[],
+  now: Date,
+): PartitionedUnassigned {
+  const at = now.toISOString();
+  const actionable: UnassignedGroup[] = [];
+  const historical: UnassignedGroup[] = [];
+
+  for (const group of groups) {
+    (group.lastStartsAt >= at ? actionable : historical).push(group);
+  }
+
+  return { actionable, historical };
+}
+
+/** Total events across a set of groups — what the collapsed line counts. */
+export function countUnassigned(groups: readonly UnassignedGroup[]): number {
+  return groups.reduce((count, group) => count + group.count, 0);
+}

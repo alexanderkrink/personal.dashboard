@@ -62,6 +62,12 @@ export interface WeekViewOccurrence {
     weight_override: number | null;
     is_exam_candidate: boolean;
     detection_source: string | null;
+    /**
+     * Not read by the week view itself — carried so the exam panel, which is
+     * built from the same rows, can tell a user's recorded decision from an
+     * untouched row. See `exam-decision.ts`.
+     */
+    user_locked_fields: string[];
     course: { id: string; title: string; color: string } | null;
     assessment: { id: string; title: string; weight_percent: number | null } | null;
   };

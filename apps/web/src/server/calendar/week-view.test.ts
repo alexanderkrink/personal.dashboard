@@ -54,6 +54,7 @@ function occurrence(overrides: {
       weight_override: (overrides.weightOverride ?? null) as number | null,
       is_exam_candidate: overrides.isExamCandidate ?? false,
       detection_source: overrides.isExamCandidate ? "syllabus_total_sessions" : null,
+      user_locked_fields: [],
       course: overrides.course ?? null,
       assessment:
         overrides.assessmentWeight == null

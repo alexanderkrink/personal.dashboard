@@ -221,6 +221,178 @@ describe("buildExamStatuses — conflicts and the confirm gate", () => {
   });
 });
 
+describe("buildExamStatuses — the user's decision outranks the detector", () => {
+  function statusFor(items: readonly ExamStatusItem[], courseOverrides = {}) {
+    const [status] = buildExamStatuses({
+      courses: [course(courseOverrides)],
+      items,
+      assessments: [],
+      semesters: [],
+    });
+    if (status === undefined) throw new Error("expected a status");
+    return status;
+  }
+
+  it("shows the detector's proposal when nobody has ruled", () => {
+    const status = statusFor(FULL_TERM);
+
+    expect(status.decision).toBe("detected");
+    expect(status.exam?.itemId).toBe("item-30");
+    expect(status.confirmed).toBe(false);
+  });
+
+  /**
+   * 🔴 The regression this slice fixes. The chain re-runs on every read, so a
+   * rejection written to the database used to be re-detected and displayed
+   * again — "Not an exam" looked like a button that did nothing.
+   */
+  it("shows NO exam once the user rejected it, even though detection still finds one", () => {
+    const status = statusFor([
+      ...FULL_TERM.slice(0, 2),
+      item(30, "2026-12-10T10:30:00.000Z", {
+        is_exam_candidate: false,
+        detection_source: null,
+        user_locked_fields: ["is_exam_candidate"],
+      }),
+    ]);
+
+    // The detector has not changed its mind…
+    expect(status.detection.outcome).toBe("found");
+    // …and the panel shows nothing anyway, because a human said so.
+    expect(status.decision).toBe("rejected");
+    expect(status.exam).toBeNull();
+  });
+
+  it("a rejected course stays in the panel rather than disappearing", () => {
+    const statuses = buildExamStatuses({
+      courses: [course()],
+      items: [
+        ...FULL_TERM.slice(0, 2),
+        item(30, "2026-12-10T10:30:00.000Z", { user_locked_fields: ["is_exam_candidate"] }),
+      ],
+      assessments: [],
+      semesters: [],
+    });
+
+    expect(statuses).toHaveLength(1);
+    expect(statuses[0]?.decision).toBe("rejected");
+  });
+
+  it("shows the session the user nominated, not the one detection picked", () => {
+    const status = statusFor([
+      item(1, "2026-09-01T07:30:00.000Z"),
+      item(29, "2026-12-08T09:00:00.000Z", {
+        is_exam_candidate: true,
+        detection_source: "manual",
+        user_locked_fields: ["is_exam_candidate"],
+      }),
+      item(30, "2026-12-10T10:30:00.000Z", { user_locked_fields: ["is_exam_candidate"] }),
+    ]);
+
+    expect(status.decision).toBe("chosen");
+    expect(status.confirmed).toBe(true);
+    expect(status.exam?.itemId).toBe("item-29");
+    expect(status.exam?.sessionNumber).toBe(29);
+    // The detector's own answer is still reported, so the UI can offer it back.
+    expect(status.detection.outcome === "found" && status.detection.sessionNumber).toBe(30);
+  });
+
+  it("offers every numbered session of the course as an alternative", () => {
+    const status = statusFor(FULL_TERM);
+
+    expect(status.sessions.map((session) => session.sessionNumber)).toEqual([1, 29, 30]);
+    expect(status.sessions.map((session) => session.itemId)).toEqual([
+      "item-1",
+      "item-29",
+      "item-30",
+    ]);
+  });
+
+  it("addresses a ranged session by its last number, as the chain does", () => {
+    const status = statusFor([
+      item(1, "2026-09-01T07:30:00.000Z", {
+        raw_summary: "ALGORITHMS & DATA STRUCTURES   (Ses. 1-2) T-03.01",
+      }),
+    ]);
+
+    expect(status.sessions.map((session) => session.sessionNumber)).toEqual([2]);
+  });
+
+  it("offers no sessions when the feed carries no session tokens", () => {
+    const status = statusFor(
+      [item(1, "2026-09-01T07:30:00.000Z", { raw_summary: "ALGORITHMS & DATA STRUCTURES" })],
+      { total_sessions: null, total_sessions_source: null },
+    );
+
+    expect(status.sessions).toEqual([]);
+  });
+});
+
+/**
+ * 🚨 The honesty signal, asserted against every user action that could plausibly
+ * be read as "the user vouched for this, so upgrade it".
+ *
+ * None of them may. `confidence` is a statement about where the **session
+ * count** came from, and the session count came off the feed no matter who
+ * clicks what. Gate 4/5 verified this property; these tests are what stop it
+ * being lost the next time the panel is edited.
+ */
+describe("buildExamStatuses — confirming never upgrades provenance", () => {
+  const CIRCULAR = { total_sessions: 30, total_sessions_source: "feed_derived" };
+
+  it("a confirmed feed-derived exam is still labelled feed-derived", () => {
+    const [status] = buildExamStatuses({
+      courses: [course(CIRCULAR)],
+      items: [
+        ...FULL_TERM.slice(0, 2),
+        item(30, "2026-12-10T10:30:00.000Z", {
+          is_exam_candidate: true,
+          detection_source: "manual",
+          user_locked_fields: ["is_exam_candidate"],
+        }),
+      ],
+      assessments: [],
+      semesters: [],
+    });
+
+    expect(status?.confirmed).toBe(true);
+    expect(status?.decision).toBe("chosen");
+    expect(status?.confidence).toBe("feed_derived");
+    expect(status?.provenanceLabel).toContain("agreeing with itself");
+  });
+
+  it("hand-picking a different session does not upgrade it either", () => {
+    const [status] = buildExamStatuses({
+      courses: [course(CIRCULAR)],
+      items: [
+        item(1, "2026-09-01T07:30:00.000Z"),
+        item(29, "2026-12-08T09:00:00.000Z", {
+          is_exam_candidate: true,
+          detection_source: "manual",
+          user_locked_fields: ["is_exam_candidate"],
+        }),
+        item(30, "2026-12-10T10:30:00.000Z", { user_locked_fields: ["is_exam_candidate"] }),
+      ],
+      assessments: [],
+      semesters: [],
+    });
+
+    expect(status?.confidence).toBe("feed_derived");
+    expect(status?.provenanceLabel).toContain("agreeing with itself");
+  });
+
+  it("only the recorded course provenance can lift the label", () => {
+    const [status] = buildExamStatuses({
+      courses: [course({ total_sessions: 30, total_sessions_source: "syllabus" })],
+      items: FULL_TERM,
+      assessments: [],
+      semesters: [],
+    });
+
+    expect(status?.confidence).toBe("syllabus");
+  });
+});
+
 describe("buildExamStatuses — input hygiene", () => {
   /**
    * Two of the 5 pseudo rows carry a REAL course prefix, so a filter keyed on

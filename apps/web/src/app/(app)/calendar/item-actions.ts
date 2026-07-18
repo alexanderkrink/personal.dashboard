@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { requireUserId } from "@/lib/auth/require-user";
 import {
   assignCourseSchema,
-  itemIdSchema,
+  examDecisionSchema,
   occurrenceIdSchema,
   QUICK_ADD_FIELDS,
   quickAddSchema,
@@ -15,6 +15,7 @@ import { type FormState, formError, toFormState } from "@/lib/forms/form-state";
 import { readFormValues } from "@/lib/forms/form-values";
 import { createClient } from "@/lib/supabase/server";
 import { withLockedField } from "@/server/calendar/diff";
+import { planExamDecision } from "@/server/calendar/exam-decision";
 
 /**
  * Writes against `calendar_items` / `calendar_occurrences` that a *user* makes.
@@ -209,54 +210,97 @@ export async function setWeightOverride(
 /* -------------------------------------------------------------------------- */
 
 /**
- * Confirms a detected exam date, or rejects it.
+ * Records the user's ruling on a course's exam date — set, reject, or reset.
  *
  * §5.1b: an exam date is **date-critical and grade-critical** — the two gates
  * deliberately reserved by the Human-reversible-AI principle — so nothing is
- * recorded as confirmed truth without an explicit action. Confirming writes
- * `detection_source = 'manual'` and locks `is_exam_candidate`, which is what
- * stops the next sync from quietly re-deriving the flag from the feed.
+ * recorded as confirmed truth without an explicit action. That gate is intact
+ * here: no path in this function flips a course to confirmed except one the
+ * user submitted.
  *
- * Rejecting clears the flag and locks it the same way, so a wrong guess stays
- * rejected instead of coming back tomorrow morning.
+ * ## What changed on 2026-07-19, and why
+ *
+ * The previous version could only accept or reject **the one session the
+ * detector proposed**, and both were terminal:
+ *
+ * - a rejection wrote `is_exam_candidate = false` with no marker distinguishing
+ *   it from "never touched", so nothing downstream could tell that a human had
+ *   ruled — the read path re-detected the same session and displayed it again;
+ * - and there was no way to nominate a *different* session, so a detector that
+ *   picked the wrong one had no correction path at all.
+ *
+ * Three intents replace it. `set` and `reject` name a session; `reset` names a
+ * course, because after a rejection there is no session left to point at — and
+ * that asymmetry is exactly what made rejection a one-way door.
+ *
+ * ## 🔒 The invariant is not this function's to improvise
+ *
+ * *Exactly one `is_exam_candidate` per course* is decided by `planExamDecision`,
+ * a pure function tested against its own output — including from a corrupted
+ * two-candidate starting state. This function loads the course's full item list,
+ * applies the patches it is handed, and adds nothing of its own. The UI is not
+ * trusted to maintain the invariant, and neither is this action.
  */
-export async function confirmExamDate(
-  _previous: FormState,
-  formData: FormData,
-): Promise<FormState> {
-  const id = itemIdSchema.safeParse(formData.get("itemId"));
-  if (!id.success) return formError(NOT_FOUND);
-
-  const reject = formData.get("intent") === "reject";
+export async function setExamDate(_previous: FormState, formData: FormData): Promise<FormState> {
+  const parsed = examDecisionSchema.safeParse({
+    intent: formData.get("intent"),
+    ...(formData.has("itemId") ? { itemId: formData.get("itemId") } : {}),
+    ...(formData.has("courseId") ? { courseId: formData.get("courseId") } : {}),
+  });
+  if (!parsed.success) return formError(NOT_FOUND);
 
   const supabase = await createClient();
   await requireUserId(supabase);
 
-  const item = await supabase
-    .from("calendar_items")
-    .select("user_locked_fields")
-    .eq("id", id.data)
-    .maybeSingle();
-  if (item.error) return formError(SAVE_FAILED);
-  if (!item.data) return formError(NOT_FOUND);
+  // Resolve the course first. `set`/`reject` know only a session, and the
+  // invariant is a statement about the course, so the sweep cannot even be
+  // planned until the sibling rows are known.
+  //
+  // RLS scopes both reads; an item belonging to someone else is simply not
+  // found, which is why no `user_id` filter appears.
+  let courseId: string;
+  if (parsed.data.intent === "reset") {
+    courseId = parsed.data.courseId;
+  } else {
+    const item = await supabase
+      .from("calendar_items")
+      .select("course_id")
+      .eq("id", parsed.data.itemId)
+      .maybeSingle();
+    if (item.error) return formError(SAVE_FAILED);
+    if (!item.data) return formError(NOT_FOUND);
+    if (item.data.course_id === null) {
+      return formError("That entry isn’t filed under a course yet, so it can’t be an exam.");
+    }
+    courseId = item.data.course_id;
+  }
 
-  const { error } = await supabase
+  const items = await supabase
     .from("calendar_items")
-    .update({
-      is_exam_candidate: !reject,
-      detection_source: reject ? null : "manual",
-      user_locked_fields: withLockedField(item.data.user_locked_fields, "is_exam_candidate"),
-    })
-    .eq("id", id.data);
-  if (error) return formError(SAVE_FAILED);
+    .select("id, is_exam_candidate, detection_source, user_locked_fields")
+    .eq("course_id", courseId);
+  if (items.error) return formError(SAVE_FAILED);
+  if ((items.data ?? []).length === 0) return formError(NOT_FOUND);
+
+  const patches = planExamDecision(items.data ?? [], parsed.data);
+
+  for (const patch of patches) {
+    const { id, ...columns } = patch;
+    const { error } = await supabase.from("calendar_items").update(columns).eq("id", id);
+    if (error) return formError(SAVE_FAILED);
+  }
 
   revalidatePath("/calendar");
   revalidatePath("/");
-  return {
-    status: "success",
-    message: reject ? "Not an exam. Sync won’t flag it again." : "Exam date confirmed.",
-  };
+
+  return { status: "success", message: DECISION_MESSAGE[parsed.data.intent] };
 }
+
+const DECISION_MESSAGE = {
+  set: "Exam date set. Sync won’t change it.",
+  reject: "Not an exam. Sync won’t flag it again.",
+  reset: "Back to the detected date — nothing is confirmed.",
+} as const satisfies Record<"set" | "reject" | "reset", string>;
 
 /* -------------------------------------------------------------------------- */
 /* §6 — structured quick-add                                                  */
