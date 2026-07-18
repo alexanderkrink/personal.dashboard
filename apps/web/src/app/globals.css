@@ -293,10 +293,24 @@
  * Urgency heat ramp (light column — tuned for colored TEXT/numerals on the
  * near-white canvas; bright amber/green fail 4.5:1 as small text).
  * green = done ONLY, in the status lane.
+ *
+ * The canvas is not the darkest surface these land on. PLAN's table rule puts
+ * the hover highlight at `--accent-subtle`, which is an azure tint OVER
+ * `--surface` — so heat-ramp text in a hovered row sits on the *least*
+ * contrasting background in the system, not the most. `high` at PLAN's literal
+ * `oklch(0.55 0.14 65)` measures 4.97:1 on `--surface` and 4.76:1 on
+ * `--background` but only **4.41:1 on `--accent-subtle`**, i.e. it fails SC
+ * 1.4.3 exactly where a weight total is read — hovering the row is how you
+ * point at it. Hue and chroma are PLAN's; L drops 0.55 → 0.53, which clears AA
+ * on all three surfaces (4.78 / 5.40 / 5.16) and stays inside PLAN's stated
+ * L ≈ 0.50–0.55 band for the light text column.
+ *
+ * Measured by rasterising each token to sRGB in the browser — OKLCH values are
+ * outside sRGB and naive checkers clip them, reporting optimistically.
  */
 :root {
   --urgency-overdue: oklch(0.53 0.2 27);
-  --urgency-high: oklch(0.55 0.14 65);
+  --urgency-high: oklch(0.53 0.14 65);
   --urgency-medium: oklch(0.55 0.1 78);
   --urgency-low: var(--muted-foreground);
   --urgency-done: oklch(0.5 0.13 155);
