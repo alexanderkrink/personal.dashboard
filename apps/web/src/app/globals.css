@@ -311,7 +311,23 @@
 :root {
   --urgency-overdue: oklch(0.53 0.2 27);
   --urgency-high: oklch(0.53 0.14 65);
-  --urgency-medium: oklch(0.55 0.1 78);
+  /*
+   * Darkened from L=0.55 to L=0.52 on 2026-07-18 (Wave 2, CAL-2).
+   *
+   * MEASURED, not theorised: as 11px badge text on its own 12% tint — the §7
+   * weight badge — the old value rendered at 4.19:1, a WCAG AA failure for small
+   * text. The other three ramp tokens cleared 4.5 only narrowly (4.57–4.75), so
+   * the badge tint also drops to 10% in light mode; together that puts every
+   * tier at 4.7:1 or better with real headroom.
+   *
+   * Chroma drops 0.10 -> 0.09 at the same time. Medium must still READ as dimmer
+   * than `--urgency-high`, and after this change it is no longer meaningfully
+   * lighter than high (0.52 vs 0.53) — so saturation, not lightness, is what
+   * separates them. That is the more legible distinction anyway.
+   *
+   * Dark mode was already comfortable (7.01:1) and is unchanged.
+   */
+  --urgency-medium: oklch(0.52 0.09 78);
   --urgency-low: var(--muted-foreground);
   --urgency-done: oklch(0.5 0.13 155);
 

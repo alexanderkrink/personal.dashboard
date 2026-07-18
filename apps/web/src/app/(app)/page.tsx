@@ -1,7 +1,17 @@
-import { CalendarBlank } from "@phosphor-icons/react/dist/ssr";
-import { EmptyState } from "@/components/empty-state";
+import { ThisWeek } from "@/components/calendar/this-week";
 import { PageHeader } from "@/components/page-header";
 
+/**
+ * The cockpit.
+ *
+ * §7: the "This week" view *"lives as the top section of the dashboard (and
+ * standalone at /calendar)"*. It is the same component in both places, so the
+ * two can never drift into disagreeing about what is due.
+ *
+ * The exam panel and the unassigned bucket are suppressed here: both are
+ * *maintenance* surfaces — reconciling detection, filing unmatched events — and
+ * the dashboard is a triage surface. They live on `/calendar`, one click away.
+ */
 export default function DashboardPage() {
   return (
     <>
@@ -9,27 +19,7 @@ export default function DashboardPage() {
         title="Dashboard"
         lead="The cockpit: what is due, what is next, and what to do about it."
       />
-      <EmptyState
-        icon={CalendarBlank}
-        headline="Nothing to triage yet."
-        body="This is where the week lands — deadlines ranked by what actually matters, not by whatever happens to fall first on the calendar."
-        points={[
-          {
-            term: "Overdue",
-            detail: "pinned in danger red, carried forward until you finish or dismiss it.",
-          },
-          {
-            term: "This week",
-            detail: "hairline rows sorted by priority score, each with a mono countdown.",
-          },
-          {
-            term: "On the horizon",
-            detail: "the next 14 days, medium weight and up, so nothing ambushes you.",
-          },
-        ]}
-        note="Add a course and its assessments and this fills itself in."
-        cta={{ href: "/courses", label: "Set up courses" }}
-      />
+      <ThisWeek showExams={false} showUnassigned={false} />
     </>
   );
 }
