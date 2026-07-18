@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { classifyPseudoRow, expandSessionRange, normalizeSummary, stripJunk } from "./summary";
+import {
+  classifyPseudoRow,
+  expandSessionRange,
+  normalizeSummary,
+  occurrenceLabel,
+  stripJunk,
+} from "./summary";
 
 /** Narrows away the pseudo-row `null` so tests read straight. */
-function normalize(raw: string) {
-  const result = normalizeSummary(raw);
+function normalize(raw: string, location?: string) {
+  const result = normalizeSummary(raw, location === undefined ? {} : { location });
   if (!result) {
     throw new Error(`Expected "${raw}" to normalize, but it was filtered as a pseudo row`);
   }
@@ -192,6 +198,144 @@ describe("🚨 the APPLIED BUSINESS MATHEMATICS trap — all 4 rows", () => {
     // The proof: same prefix, opposite outcomes.
     expect(normalizeSummary(DROPPED[0] as string)).toBeNull();
     expect(normalizeSummary(KEPT[0] as string)).not.toBeNull();
+  });
+});
+
+describe("🚨 the room echo — title must never be a room code", () => {
+  /**
+   * Regression for a defect that reached production data. §5.1b says the room
+   * comes from `LOCATION`, never from `SUMMARY` "where it is duplicated" — but
+   * the normalizer only declined to *read* it from `SUMMARY`, never *removed*
+   * it. The room is the last field of the grammar, so on a clean row it was all
+   * that survived and it became the title.
+   *
+   * Measured on the 374 live rows before the fix: 324 had `title` exactly equal
+   * to `location`, 367 contained it, 305 were a bare `T-NN.NN`. Every class in
+   * the calendar list rendered as `T-06.02`.
+   */
+
+  /** Real `(SUMMARY, LOCATION)` pairs, taken verbatim from the live feed. */
+  const REAL_ROWS: ReadonlyArray<readonly [string, string | undefined, string]> = [
+    // [raw summary, LOCATION, expected title]
+    ["MARKETING MANAGEMENT    (Ses. 1) T-06.02", "T-06.02", ""],
+    ["BUILDING POWERFUL RELATIONSHIPS    (Ses. 1-2) T-06.02", "T-06.02", ""],
+    ["BUILDING POWERFUL RELATIONSHIPS   (Ses. 21) Asynchronous", "Asynchronous", ""],
+    ["CORPORATE FINANCE    (Ses. 3) T-03.01", "T-03.01", ""],
+    ["IE HUMANITIES   | | | , null, null (Ses. 4-5) T-06.04", "T-06.04", ""],
+    ["DATA INSIGHTS AND VISUALIZATION   (Ses. 12) T-09.03A", "T-09.03A", ""],
+    ["SOME COURSE   (Ses. 2) IE TOWER", "IE TOWER", ""],
+    // Multi-room: the `|` is eaten by the junk stripper first, leaving two codes.
+    ["DATA INSIGHTS AND VISUALIZATION    (Ses. 20) T-03.01|T-03.02", "T-03.01|T-03.02", ""],
+    ["COMPUTATIONAL THINKING    (Ses. 30) T-12.02|T-12.03", "T-12.02|T-12.03", ""],
+    // `Extra` is a real descriptor and survives; the room next to it does not.
+    ["COST ACCOUNTING   Extra T-03.01", "T-03.01", "Extra"],
+    ["FINANCE LAB   Extra Live online", "Live online", "Extra"],
+    ["FINANCE LAB   Extra Asynchronous", "Asynchronous", "Extra"],
+    // The 5 rows with NO `LOCATION` are the only ones carrying real prose, and
+    // every one of them must survive untouched.
+    ["IE HUMANITIES   Class Participation ", undefined, "Class Participation"],
+    ["IE HUMANITIES   Final Exam - Session 30 ", undefined, "Final Exam - Session 30"],
+    [
+      "APPLIED BUSINESS MATHEMATICS   Final EXAM Retake June ABM30 ",
+      undefined,
+      "Final EXAM Retake June ABM30",
+    ],
+    [
+      "CORPORATE FINANCE   Retake Exam Corporate Finance June 2026 ",
+      undefined,
+      "Retake Exam Corporate Finance June 2026",
+    ],
+    [
+      "FINANCIAL ACCOUNTING   Retake Exam Financial Accounting June 2026 ",
+      undefined,
+      "Retake Exam Financial Accounting June 2026",
+    ],
+  ];
+
+  it.each(REAL_ROWS)("normalizes %s", (raw, location, expected) => {
+    expect(normalize(raw, location).title).toBe(expected);
+  });
+
+  it("never leaves a title equal to, or containing, the LOCATION", () => {
+    for (const [raw, location] of REAL_ROWS) {
+      if (location === undefined) continue;
+      const { title } = normalize(raw, location);
+      expect(title).not.toBe(location);
+      for (const room of location.split("|")) {
+        expect(title).not.toContain(room);
+      }
+    }
+  });
+
+  it("never leaves a bare room code, even when LOCATION is absent", () => {
+    // 5 live rows carry a room in SUMMARY while LOCATION is null, so keying the
+    // strip only on LOCATION would leave those behind.
+    expect(normalize("ALGORITHMS & DATA STRUCTURES   Final Exam T-06.02").title).toBe("Final Exam");
+    expect(normalize("SOME COURSE    (Ses. 9) T-20.04").title).toBe("");
+  });
+
+  it("does not eat the IE of a real course name", () => {
+    // `IE TOWER` is stripped as a phrase; a bare /\bie\b/ would maul this row.
+    const result = normalize("IE HUMANITIES   Class Participation ", undefined);
+    expect(result.courseName).toBe("IE HUMANITIES");
+    expect(result.title).toBe("Class Participation");
+  });
+
+  it("leaves rawSummary verbatim so the normalizer can be re-run", () => {
+    const raw = "MARKETING MANAGEMENT    (Ses. 1) T-06.02";
+    expect(normalize(raw, "T-06.02").rawSummary).toBe(raw);
+  });
+
+  it("still parses the session token it strips alongside the room", () => {
+    const result = normalize("BUILDING POWERFUL RELATIONSHIPS    (Ses. 24-25) T-06.02", "T-06.02");
+    expect(result.title).toBe("");
+    expect(result.sessionFrom).toBe(24);
+    expect(result.sessionTo).toBe(25);
+  });
+});
+
+describe("occurrenceLabel — what the UI shows when title is legitimately empty", () => {
+  it("prefers a real title", () => {
+    expect(occurrenceLabel({ title: "Class Participation", sessionFrom: 3 })).toBe(
+      "Class Participation",
+    );
+  });
+
+  it("falls back to the session number", () => {
+    expect(occurrenceLabel({ title: "", sessionFrom: 4, sessionTo: 4 })).toBe("Session 4");
+  });
+
+  it("renders a ranged session as a range", () => {
+    expect(occurrenceLabel({ title: "", sessionFrom: 24, sessionTo: 25 })).toBe("Sessions 24–25");
+  });
+
+  it("falls back to the descriptor when there is no session either", () => {
+    expect(occurrenceLabel({ title: "", descriptor: "final_exam" })).toBe("Final exam");
+    expect(occurrenceLabel({ title: "", descriptor: "retake" })).toBe("Retake exam");
+    expect(occurrenceLabel({ title: "", descriptor: "extra" })).toBe("Extra session");
+  });
+
+  it("never returns an empty string", () => {
+    expect(occurrenceLabel({})).toBe("Class");
+    expect(occurrenceLabel({ title: "   " })).toBe("Class");
+    expect(occurrenceLabel({ title: null, sessionFrom: null, descriptor: null })).toBe("Class");
+  });
+
+  it("labels every real row without ever showing a room code", () => {
+    // End-to-end over the live pairs: parse, then label.
+    const rows = [
+      ["MARKETING MANAGEMENT    (Ses. 1) T-06.02", "T-06.02", "Session 1"],
+      ["BUILDING POWERFUL RELATIONSHIPS    (Ses. 1-2) T-06.02", "T-06.02", "Sessions 1–2"],
+      ["BUILDING POWERFUL RELATIONSHIPS   (Ses. 21) Asynchronous", "Asynchronous", "Session 21"],
+      ["COST ACCOUNTING   Extra T-03.01", "T-03.01", "Extra"],
+      ["IE HUMANITIES   Class Participation ", undefined, "Class Participation"],
+    ] as const;
+
+    for (const [raw, location, expected] of rows) {
+      const label = occurrenceLabel(normalize(raw, location));
+      expect(label).toBe(expected);
+      expect(label).not.toMatch(/T-\d{2}\.\d{2}/);
+    }
   });
 });
 

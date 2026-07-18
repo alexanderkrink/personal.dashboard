@@ -1,4 +1,5 @@
 import { CalendarBlank } from "@phosphor-icons/react/dist/ssr";
+import { occurrenceLabel, type SessionDescriptor } from "@study/core";
 import type { Metadata } from "next";
 import { createFeed, updateFeed } from "@/app/(app)/calendar/actions";
 import { FeedCreateForm } from "@/components/calendar/feed-form";
@@ -16,6 +17,21 @@ export const metadata: Metadata = { title: "Calendar" };
 
 /** How far ahead the plain list looks. The ranked week view (§7) arrives later. */
 const LIST_DAYS_AHEAD = 21;
+
+const SESSION_DESCRIPTORS = new Set<string>([
+  "regular",
+  "extra",
+  "retake",
+  "final_exam",
+] satisfies SessionDescriptor[]);
+
+/**
+ * Narrows the `descriptor` column, which is `text` in Postgres and so arrives
+ * as an unconstrained string. An unrecognised value degrades to `regular`.
+ */
+function asSessionDescriptor(value: string | null): SessionDescriptor | null {
+  return value !== null && SESSION_DESCRIPTORS.has(value) ? (value as SessionDescriptor) : null;
+}
 
 function formatDay(iso: string, timeZone: string): string {
   return new Intl.DateTimeFormat("en-GB", {
@@ -66,7 +82,7 @@ export default async function CalendarPage() {
     supabase
       .from("calendar_occurrences")
       .select(
-        "id, starts_at, all_day, status, updated_at, calendar_items!inner (title, hidden, missing_since, courses (title, color))",
+        "id, starts_at, all_day, status, updated_at, calendar_items!inner (title, session_from, session_to, descriptor, hidden, missing_since, courses (title, color))",
       )
       .gte("starts_at", nowIso)
       .lte("starts_at", until)
@@ -186,7 +202,18 @@ export default async function CalendarPage() {
                         : "text-foreground"
                     }
                   >
-                    {item.title || "Untitled"}
+                    {/*
+                      `title` is legitimately empty on most IE rows — the feed's
+                      SUMMARY is course + session + room, and the room belongs to
+                      `location`. `occurrenceLabel` composes "Session 4" rather
+                      than echoing the room code, which is what this used to do.
+                    */}
+                    {occurrenceLabel({
+                      title: item.title,
+                      sessionFrom: item.session_from,
+                      sessionTo: item.session_to,
+                      descriptor: asSessionDescriptor(item.descriptor),
+                    })}
                   </span>
                   {course ? (
                     <span className="flex items-center gap-1.5 text-muted-foreground text-ui-sm">

@@ -419,7 +419,11 @@ function buildEvent(
   maxOccurrences: number,
   extras: { overrides: Map<string, ICAL.Component> },
 ): Result<NormalizedEvent, SyncError> {
-  const normalized = normalizeSummary(rawSummary);
+  // Read LOCATION *before* normalizing: §5.1b's room duplication runs both ways,
+  // so the normalizer needs the room in order to strip it back out of the title.
+  const location = readString(vevent, "location");
+
+  const normalized = normalizeSummary(rawSummary, { location });
   if (!normalized) {
     return err({ kind: "parse", detail: `Pseudo row reached buildEvent: ${rawSummary}` });
   }
@@ -556,7 +560,6 @@ function buildEvent(
     occurrences.push(built.value);
   }
 
-  const location = readString(vevent, "location");
   const descriptionRaw = readString(vevent, "description");
 
   const event: NormalizedEvent = {
