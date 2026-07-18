@@ -4,9 +4,37 @@ import type * as React from "react";
 
 import { cn } from "@/lib/utils";
 
-function Table({ className, ...props }: React.ComponentProps<"table">) {
+/**
+ * `containerClassName` styles the scroll container, not the `<table>`.
+ *
+ * This exists to make one specific pattern possible: a **sticky header**. A
+ * `sticky` `thead` sticks to its nearest scrolling ancestor, and containing the
+ * horizontal scroll (below) makes this wrapper that ancestor. The wrapper has no
+ * height constraint, so it never scrolls vertically and a sticky `thead` has
+ * nothing to stick to — the page scrolls instead and the header rides away with
+ * it. "Sticky header" and "contained horizontal scroll" are therefore mutually
+ * exclusive *unless* this container is also the vertical scroller.
+ *
+ * So sticky headers require exactly this, and only where row count is unbounded:
+ *
+ *   <Table containerClassName="max-h-[60vh] overflow-y-auto">
+ *     <TableHeader className="sticky top-0 z-10 bg-surface">
+ *
+ * Bounded tables (a term's courses, a week of deadlines, one course's grade
+ * components) should NOT do this: capping their height adds a second scrollbar
+ * and hides rows that would otherwise all be visible. They get no sticky header,
+ * which costs nothing because the whole table fits on screen.
+ */
+function Table({
+  className,
+  containerClassName,
+  ...props
+}: React.ComponentProps<"table"> & { containerClassName?: string }) {
   return (
-    <div data-slot="table-container" className="relative w-full overflow-x-auto">
+    <div
+      data-slot="table-container"
+      className={cn("relative w-full overflow-x-auto", containerClassName)}
+    >
       <table
         data-slot="table"
         className={cn("w-full caption-bottom text-sm", className)}
