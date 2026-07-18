@@ -11,7 +11,7 @@
  * composite `(id, user_id)` foreign keys reject the row if it is ever wrong.
  */
 
-import type { Json, SupabaseAdminClient } from "@study/db";
+import type { SupabaseAdminClient } from "@study/db";
 import type {
   CalendarStore,
   FeedCompletion,
@@ -181,9 +181,4 @@ export function createSupabaseCalendarStore(supabase: SupabaseAdminClient): Cale
       }
     },
   };
-}
-
-/** Narrowing helper for the `Json` config column at call sites that need it. */
-export function asJson(value: unknown): Json {
-  return value as Json;
 }
