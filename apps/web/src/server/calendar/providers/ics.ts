@@ -138,9 +138,19 @@ export const icsCalendarProvider: CalendarProvider = {
     if (etag) nextCursor.etag = etag;
     if (lastModified) nextCursor.lastModified = lastModified;
 
-    // §3.2 layer 2. The IE endpoint answers 200 with an identical body far more
-    // often than it answers 304, so in practice this is the layer that does the
-    // work — and it saves the parse, not just the write.
+    // §3.2 layer 2 — a genuine saving when it fires, but do NOT rely on it.
+    //
+    // ⚠ Measured against the live IE endpoint 2026-07-18, three back-to-back
+    // requests: no `ETag` at all, a `Last-Modified` that is simply *now* (so
+    // layer 1 can never fire), and a body that is byte-unstable — identical
+    // length (115209) every time, but the hash changed between request 2 and 3.
+    // The cause is `DTSTAMP`, which is one shared value across all 379 events
+    // and is re-stamped when the feed regenerates. So this layer fires only when
+    // two runs happen to land inside the same regeneration window.
+    //
+    // Idempotence therefore does NOT rest here. It rests on the row-level diff
+    // in `sync.ts`, which is what actually produced 0 writes / 374 unchanged on
+    // a re-parse with the cursor deliberately cleared.
     if (cursor.contentHash && cursor.contentHash === contentHash) {
       return ok({ changed: false, cursor: nextCursor });
     }
