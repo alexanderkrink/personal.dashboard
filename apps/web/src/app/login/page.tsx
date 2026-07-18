@@ -1,14 +1,22 @@
-import { login } from "@/app/auth/actions";
-import { SubmitButton } from "@/components/submit-button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import type { Metadata } from "next";
+import Link from "next/link";
+import { AuthPanel } from "@/components/auth/auth-panel";
+import { SignInForm } from "@/components/auth/sign-in-form";
+import type { FormStatusTone } from "@/components/form/form-status";
 
-const STATUS_MESSAGES: Record<string, string> = {
-  sent: "Check your inbox — a sign-in link is on its way.",
-  "invalid-email": "That doesn't look like a valid email address.",
-  "rate-limited": "A link was already sent recently — check your inbox, or try again in a minute.",
-  error: "Something went wrong. Please try again.",
+export const metadata: Metadata = {
+  title: "Sign in",
+  robots: { index: false, follow: false },
+};
+
+/**
+ * The only statuses left on the query string are the ones that genuinely arrive
+ * by NAVIGATION — another route sent the visitor here and said why. Everything
+ * this form can fail at itself now comes back as a `FormState` from the action
+ * instead, so a failed submit no longer wipes the fields (WCAG 2.2 SC 3.3.7).
+ */
+const STATUS: Record<string, { tone: FormStatusTone; message: string }> = {
+  expired: { tone: "error", message: "That link has expired. Request a new one." },
 };
 
 export default async function LoginPage({
@@ -17,33 +25,24 @@ export default async function LoginPage({
   searchParams: Promise<{ status?: string }>;
 }) {
   const { status } = await searchParams;
-  const message = status ? STATUS_MESSAGES[status] : undefined;
 
   return (
-    <main className="flex min-h-svh items-center justify-center p-8">
-      <Card className="w-full max-w-sm">
-        <CardHeader>
-          <CardTitle className="text-xl">Alex&apos;s Study Dashboard</CardTitle>
-          <CardDescription>Sign in with a magic link sent to your email.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form action={login} className="flex flex-col gap-4">
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                name="email"
-                type="email"
-                placeholder="you@example.com"
-                required
-                autoComplete="email"
-              />
-            </div>
-            <SubmitButton>Send magic link</SubmitButton>
-            {message ? <p className="text-muted-foreground text-sm">{message}</p> : null}
-          </form>
-        </CardContent>
-      </Card>
-    </main>
+    <AuthPanel
+      title="Sign in"
+      lead="Email and password."
+      footer={
+        <>
+          No account yet?{" "}
+          <Link
+            href="/signup"
+            className="focus-ring rounded-sm text-accent-text underline-offset-4 hover:underline"
+          >
+            Create one
+          </Link>
+        </>
+      }
+    >
+      <SignInForm fallback={status ? STATUS[status] : undefined} />
+    </AuthPanel>
   );
 }

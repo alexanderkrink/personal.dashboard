@@ -17,6 +17,7 @@
     "test": "turbo run test",
     "test:e2e": "pnpm --filter web test:e2e",
     "db:types": "pnpm --filter @study/db db:types",
+    "db:types:remote": "pnpm --filter @study/db db:types:remote",
     "db:push": "pnpm --filter @study/db db:push",
     "db:migration": "pnpm --filter @study/db db:migration",
     "prepare": "husky"

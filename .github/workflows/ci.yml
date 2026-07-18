@@ -17,6 +17,8 @@ env:
   NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
   NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: sb_publishable_placeholder
   SUPABASE_SECRET_KEY: sb_secret_placeholder
+  # Access-code gate. Placeholder only — the real code lives in Vercel's env.
+  ACCESS_CODE: ci_placeholder_access_code
 
 jobs:
   verify:

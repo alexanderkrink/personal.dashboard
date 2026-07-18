@@ -4,40 +4,188 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * Alex's Study Dashboard — "analyst terminal that reads like a book".
+ * Token values are transcribed verbatim from PLAN.md "Identity & design"
+ * (Color tokens — OKLCH — both themes fully specified). Do not re-derive.
+ * One deliberate exception, documented inline at its declaration: light
+ * --accent-foreground is L 0.15, not PLAN's L 0.20, because PLAN's value
+ * fails WCAG AA once --accent is gamut-mapped into sRGB.
+ *
+ * Two registers: the cockpit (dense, cool, hue ~237 azure) is the default;
+ * the reading register is the `.reading` wrapper class near the bottom of
+ * this file — a surface treatment inside either theme, not a third theme.
+ */
+
 @theme inline {
+    /* ---- Type ---- */
     --font-heading: var(--font-sans);
     --font-sans: var(--font-sans);
-    --color-sidebar-ring: var(--sidebar-ring);
-    --color-sidebar-border: var(--sidebar-border);
-    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-    --color-sidebar-accent: var(--sidebar-accent);
-    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-    --color-sidebar-primary: var(--sidebar-primary);
-    --color-sidebar-foreground: var(--sidebar-foreground);
-    --color-sidebar: var(--sidebar);
-    --color-chart-5: var(--chart-5);
-    --color-chart-4: var(--chart-4);
-    --color-chart-3: var(--chart-3);
-    --color-chart-2: var(--chart-2);
-    --color-chart-1: var(--chart-1);
-    --color-ring: var(--ring);
-    --color-input: var(--input);
-    --color-border: var(--border);
-    --color-destructive: var(--destructive);
-    --color-accent-foreground: var(--accent-foreground);
-    --color-accent: var(--accent);
-    --color-muted-foreground: var(--muted-foreground);
-    --color-muted: var(--muted);
-    --color-secondary-foreground: var(--secondary-foreground);
-    --color-secondary: var(--secondary);
-    --color-primary-foreground: var(--primary-foreground);
-    --color-primary: var(--primary);
-    --color-popover-foreground: var(--popover-foreground);
-    --color-popover: var(--popover);
-    --color-card-foreground: var(--card-foreground);
-    --color-card: var(--card);
-    --color-foreground: var(--foreground);
+    --font-serif: var(--font-serif);
+    --font-mono: var(--font-mono);
+    /* JetBrains Mono needs tabular figures + slashed zero; the next/font
+     * loader cannot set OpenType features, so they ride on the theme font
+     * definition and are emitted by every `font-mono` utility. */
+    --font-mono--font-feature-settings: "tnum" 1, "zero" 1;
+
+    /* ---- Type scale (PLAN.md "Typography" — fixed rem, ratio ~1.2) ----
+     * Weights: 400 body, 500 labels/buttons, 600 headings. Heading tracking
+     * -0.01em at >=20px, -0.02em on display numerals, never below -0.04em.
+     * Type floors (PLAN "Mobile / PWA & accessibility"): running/body UI >= 13px
+     * (`ui-base`), reading body >= 16px, and `ui-xs` (11px) is reserved for
+     * NON-ESSENTIAL secondary text only (badges, table meta, kbd hints). */
+    --text-ui-xs: 0.6875rem; /* 11px */
+    --text-ui-xs--line-height: 1.3;
+    --text-ui-sm: 0.75rem; /* 12px */
+    --text-ui-sm--line-height: 1.35;
+    --text-ui-base: 0.8125rem; /* 13px — default cockpit UI text */
+    --text-ui-base--line-height: 1.45;
+    --text-ui-md: 0.875rem; /* 14px */
+    --text-ui-md--line-height: 1.5;
+    --text-ui-lg: 1rem; /* 16px — section titles */
+    --text-ui-lg--line-height: 1.4;
+    --text-ui-xl: 1.25rem; /* 20px — page/panel headings */
+    --text-ui-xl--line-height: 1.3;
+    --text-ui-xl--letter-spacing: -0.01em;
+
+    --text-read-body: 1.125rem; /* 18px — Newsreader prose, measure 66-70ch */
+    --text-read-body--line-height: 1.65;
+    --text-read-h3: 1.25rem; /* 20px */
+    --text-read-h3--line-height: 1.3;
+    --text-read-h2: 1.5rem; /* 24px */
+    --text-read-h2--line-height: 1.25;
+    --text-read-h1: 1.875rem; /* 30px */
+    --text-read-h1--line-height: 1.2;
+    --text-read-h1--letter-spacing: -0.01em;
+    --text-read-cap: 0.875rem; /* 14px — captions, footnotes */
+    --text-read-cap--line-height: 1.5;
+
+    --text-mono-data: 0.8125rem; /* 13px — inline data, table numerals */
+    --text-mono-data--line-height: 1.45;
+    --text-mono-code: 0.8125rem; /* 13px, the floor of PLAN's 13-14px range */
+    --text-mono-code--line-height: 1.55;
+    /* PLAN gives `num-hero` as a 28-48px RANGE, not one size: metric tiles sit
+     * at the bottom, a drenched countdown at the top. Three stops span it. */
+    --text-num-hero: 1.75rem; /* 28px */
+    --text-num-hero--line-height: 1.05;
+    --text-num-hero--letter-spacing: -0.02em;
+    --text-num-hero-lg: 2.25rem; /* 36px */
+    --text-num-hero-lg--line-height: 1.05;
+    --text-num-hero-lg--letter-spacing: -0.02em;
+    --text-num-hero-xl: 3rem; /* 48px */
+    --text-num-hero-xl--line-height: 1.05;
+    --text-num-hero-xl--letter-spacing: -0.02em;
+    --text-wordmark: 0.9375rem; /* 15px, PLAN's 15-16px */
+    --text-wordmark--line-height: 1.2;
+    --text-wordmark--letter-spacing: -0.01em;
+
+    /* ---- Motion easing (PLAN.md "Motion") ----
+     * `--ease-*` IS a Tailwind theme namespace, so these become `ease-out-quart`
+     * / `ease-out-expo` utilities directly. No bounce/spring/elastic — do not
+     * add a `--ease-spring`. The DURATION scale cannot live here: Tailwind has
+     * no `--duration-*` namespace (only `duration-<number>`), so a `duration-fast`
+     * written against a theme entry compiles to nothing at all, silently. The
+     * durations are declared at :root below and given real utilities via
+     * `@utility`. */
+    --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+    --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1); /* larger moves */
+
+    /* ---- Core surfaces & ink ---- */
     --color-background: var(--background);
+    --color-foreground: var(--foreground);
+    --color-surface: var(--surface);
+    --color-card: var(--card);
+    --color-card-foreground: var(--card-foreground);
+    --color-popover: var(--popover);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-muted: var(--muted);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-secondary: var(--secondary);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-border: var(--border);
+    --color-input: var(--input);
+    /* Deliberately NOT the same slot as --border. See the declaration below. */
+    --color-input-border: var(--input-border);
+    --color-ring: var(--ring);
+
+    /* ---- Azure accent ---- */
+    --color-primary: var(--primary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-accent: var(--accent);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent-text: var(--accent-text);
+    --color-accent-subtle: var(--accent-subtle);
+    --color-accent-border: var(--accent-border);
+    --color-accent-hover: var(--accent-hover);
+    --color-accent-active: var(--accent-active);
+    /* e3 modal scrim (PLAN.md "Elevation & surfaces"). Declared at :root and
+     * .dark below; exposed here so a `bg-scrim` utility actually exists. */
+    --color-scrim: var(--scrim);
+
+    /* ---- Reading register ---- */
+    --color-reading-bg: var(--reading-bg);
+    --color-reading-foreground: var(--reading-foreground);
+    --color-reading-muted: var(--reading-muted);
+
+    /* ---- Urgency heat ramp + semantics ---- */
+    --color-destructive: var(--destructive);
+    --color-destructive-foreground: var(--destructive-foreground);
+    --color-destructive-button: var(--destructive-button);
+    --color-urgency-overdue: var(--urgency-overdue);
+    --color-urgency-high: var(--urgency-high);
+    --color-urgency-medium: var(--urgency-medium);
+    --color-urgency-low: var(--urgency-low);
+    --color-urgency-done: var(--urgency-done);
+    --color-danger: var(--danger);
+    --color-warning: var(--warning);
+    --color-success: var(--success);
+    --color-info: var(--info);
+
+    /* ---- Course palette (curated 8-hue categorical) ---- */
+    --color-course-indigo: var(--course-indigo);
+    --color-course-violet: var(--course-violet);
+    --color-course-pink: var(--course-pink);
+    --color-course-gold: var(--course-gold);
+    --color-course-green: var(--course-green);
+    --color-course-teal: var(--course-teal);
+    --color-course-cyan: var(--course-cyan);
+    --color-course-rust: var(--course-rust);
+
+    /* ---- Persona palette (weekly ritual time-blocks) ---- */
+    --color-persona-student: var(--persona-student);
+    --color-persona-founder: var(--persona-founder);
+    --color-persona-life: var(--persona-life);
+
+    /* ---- Data-viz ---- */
+    --color-chart-1: var(--chart-1);
+    --color-chart-2: var(--chart-2);
+    --color-chart-3: var(--chart-3);
+    --color-chart-4: var(--chart-4);
+    --color-chart-5: var(--chart-5);
+    --color-chart-6: var(--chart-6);
+    --color-chart-7: var(--chart-7);
+    --color-chart-8: var(--chart-8);
+    --color-seq-1: var(--seq-1);
+    --color-seq-2: var(--seq-2);
+    --color-seq-3: var(--seq-3);
+    --color-seq-4: var(--seq-4);
+    --color-seq-5: var(--seq-5);
+    --color-seq-6: var(--seq-6);
+    --color-div-low: var(--div-low);
+    --color-div-mid: var(--div-mid);
+    --color-div-high: var(--div-high);
+
+    /* ---- Sidebar (shadcn slots) ---- */
+    --color-sidebar: var(--sidebar);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-ring: var(--sidebar-ring);
+
+    /* ---- Radius: dual scale, sharp cockpit / soft reading ---- */
     --radius-sm: calc(var(--radius) * 0.6);
     --radius-md: calc(var(--radius) * 0.8);
     --radius-lg: var(--radius);
@@ -45,80 +193,317 @@
     --radius-2xl: calc(var(--radius) * 1.8);
     --radius-3xl: calc(var(--radius) * 2.2);
     --radius-4xl: calc(var(--radius) * 2.6);
+    --radius-reading: var(--radius-reading);
+}
+
+/* ======================================================================
+ * Light (cockpit)
+ * ==================================================================== */
+:root {
+  --background: oklch(0.98 0.004 237); /* app canvas  ~#f6f8fa */
+  --surface: oklch(0.995 0.002 237); /* raised card ~#fdfdff */
+  --card: oklch(0.995 0.002 237);
+  --card-foreground: oklch(0.21 0.02 237);
+  --popover: oklch(1 0 0); /* overlay     ~#ffffff */
+  --popover-foreground: oklch(0.21 0.02 237);
+  --muted: oklch(0.965 0.006 237); /* subtle bg   ~#eef1f5 */
+  --secondary: oklch(0.965 0.006 237);
+  --secondary-foreground: oklch(0.21 0.02 237);
+  --foreground: oklch(0.21 0.02 237); /* primary ink ~#1c2531 */
+  --muted-foreground: oklch(0.45 0.02 237); /* AA on canvas ~#5b6675 */
+  --border: oklch(0.9 0.008 237); /* hairline    ~#dde1e8 */
+  --input: oklch(0.9 0.008 237); /* control FILL + disabled wash, not its edge */
+
+  /*
+   * The interactive-control edge, kept as its own token on purpose.
+   *
+   * `--border` is the DECORATIVE hairline that draws PLAN's elevation system
+   * (panel edges, table row separators, dividers). It is supposed to be quiet,
+   * and at 1px it reads as a hairline precisely because it is low-contrast.
+   * A form control's edge is a different thing: it is the only visual boundary
+   * of a non-text UI component, so WCAG 2.2 SC 1.4.11 requires 3:1 against the
+   * adjacent surface. Raising `--border` itself to clear 3:1 would repaint every
+   * panel and table rule in the app and flatten the e0/e1/e2 stack into a
+   * wireframe — hairline is an aesthetic, low-contrast is not. Splitting the two
+   * keeps the hairline aesthetic on decoration and pays the 3:1 where the
+   * success criterion actually applies. Inputs stay 1px; only the value changes.
+   *
+   * Measured with CSS Color 4 §13.2 gamut mapping (hold L and hue, reduce
+   * chroma) rather than naive channel clipping, which reports optimistically for
+   * this palette: 3.58:1 on --surface, 3.42:1 on --background, 3.28:1 on
+   * --muted. Was 1.33:1 when this slot was --border.
+   */
+  --input-border: oklch(0.62 0.02 237);
+
+  --primary: oklch(0.52 0.16 237); /* azure btn fill; white text ~5.0:1 (AA) */
+  --primary-foreground: oklch(0.99 0.005 237);
+  --accent: oklch(0.58 0.17 237); /* bright azure: focus ring, wordmark dot, hover/selected bg */
+  /* DARK ink on solid --accent chips.
+   * DEVIATION from PLAN.md, which specifies oklch(0.20 0.02 237): that value
+   * fails WCAG AA on --accent. oklch(0.58 0.17 237) is OUTSIDE the sRGB gamut,
+   * so browsers gamut-map it (CSS Color 4 §13.2: reduce chroma, hold L and hue)
+   * to ~#0084bc rather than naively clipping the negative red channel to
+   * ~#0084d1. Against the mapped colour, L 0.20 ink measures 4.31:1 — under
+   * 4.5:1. (A naive-clip contrast checker reports 4.51:1 and hides this.)
+   * L 0.15 measures 4.68:1 and matches the dark theme's value. See PLAN.md
+   * line 177, which needs the same correction. */
+  --accent-foreground: oklch(0.15 0.02 237);
+  --accent-text: oklch(0.5 0.15 237); /* AA-safe azure for link/interactive TEXT */
+  --ring: oklch(0.58 0.17 237); /* = --accent; focus rings are non-text, 3:1 suffices */
+
+  --radius: 0.375rem; /* 6px cockpit base */
+  --radius-reading: 0.625rem; /* 10px reading cards */
 }
 
 /*
- * Cockpit theme (see PLAN.md "Identity & design"): dark-first, cool blue-tinted
- * neutrals (hue ~258), electric-blue accent, sharp 0.375rem radius. Red/amber/green
- * stay reserved for deadline-urgency semantics — never decorative.
+ * Motion durations (PLAN.md "Motion"). Theme-independent, so they sit at :root
+ * once rather than in both columns. See the note in @theme inline for why these
+ * are not theme entries. Consume them as the `duration-*` utilities defined at
+ * the bottom of this file, or as `var(--duration-base)` in hand-written CSS.
  */
 :root {
-  --background: oklch(0.98 0.003 255);
-  --foreground: oklch(0.17 0.012 255);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.17 0.012 255);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.17 0.012 255);
-  --primary: oklch(0.55 0.2 259);
-  --primary-foreground: oklch(0.985 0.005 255);
-  --secondary: oklch(0.955 0.006 255);
-  --secondary-foreground: oklch(0.25 0.015 255);
-  --muted: oklch(0.955 0.006 255);
-  --muted-foreground: oklch(0.5 0.02 255);
-  --accent: oklch(0.94 0.015 255);
-  --accent-foreground: oklch(0.25 0.015 255);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.91 0.008 255);
-  --input: oklch(0.91 0.008 255);
-  --ring: oklch(0.55 0.2 259);
-  --chart-1: oklch(0.55 0.2 259);
-  --chart-2: oklch(0.6 0.13 215);
-  --chart-3: oklch(0.55 0.18 295);
-  --chart-4: oklch(0.68 0.15 75);
-  --chart-5: oklch(0.6 0.13 165);
-  --radius: 0.375rem;
-  --sidebar: oklch(0.965 0.005 255);
-  --sidebar-foreground: oklch(0.17 0.012 255);
-  --sidebar-primary: oklch(0.55 0.2 259);
-  --sidebar-primary-foreground: oklch(0.985 0.005 255);
-  --sidebar-accent: oklch(0.94 0.015 255);
-  --sidebar-accent-foreground: oklch(0.25 0.015 255);
-  --sidebar-border: oklch(0.91 0.008 255);
-  --sidebar-ring: oklch(0.55 0.2 259);
+  --duration-instant: 0ms;
+  --duration-fast: 120ms; /* hover / press */
+  --duration-base: 180ms; /* menus, tabs */
+  --duration-moderate: 240ms;
+  --duration-slow: 320ms; /* overlays */
 }
 
+/* Reading register (light) — a deliberate warm paper surface, NOT the app bg */
+:root {
+  --reading-bg: oklch(0.985 0.006 80); /* warm off-white paper ~#f9f6f0 */
+  --reading-foreground: oklch(0.24 0.012 60); /* warm dark ink ~#2a2620 */
+  --reading-muted: oklch(0.46 0.012 60); /* captions, meta */
+}
+
+/*
+ * Accent tint ramp — single accent + ramp, no second hue.
+ * "primary +/-5% L" is read as +/-0.05 absolute OKLCH lightness.
+ * Rule of thumb: --accent paints, --accent-text writes.
+ */
+:root {
+  --accent-subtle: color-mix(in oklab, var(--accent) 10%, var(--surface));
+  --accent-border: color-mix(in oklab, var(--accent) 32%, transparent);
+  --accent-hover: oklch(0.57 0.16 237);
+  --accent-active: oklch(0.47 0.16 237);
+  --scrim: oklch(0 0 0 / 55%);
+}
+
+/*
+ * Urgency heat ramp (light column — tuned for colored TEXT/numerals on the
+ * near-white canvas; bright amber/green fail 4.5:1 as small text).
+ * green = done ONLY, in the status lane.
+ *
+ * The canvas is not the darkest surface these land on. PLAN's table rule puts
+ * the hover highlight at `--accent-subtle`, which is an azure tint OVER
+ * `--surface` — so heat-ramp text in a hovered row sits on the *least*
+ * contrasting background in the system, not the most. `high` at PLAN's literal
+ * `oklch(0.55 0.14 65)` measures 4.97:1 on `--surface` and 4.76:1 on
+ * `--background` but only **4.41:1 on `--accent-subtle`**, i.e. it fails SC
+ * 1.4.3 exactly where a weight total is read — hovering the row is how you
+ * point at it. Hue and chroma are PLAN's; L drops 0.55 → 0.53, which clears AA
+ * on all three surfaces (4.78 / 5.40 / 5.16) and stays inside PLAN's stated
+ * L ≈ 0.50–0.55 band for the light text column.
+ *
+ * Measured by rasterising each token to sRGB in the browser — OKLCH values are
+ * outside sRGB and naive checkers clip them, reporting optimistically.
+ */
+:root {
+  --urgency-overdue: oklch(0.53 0.2 27);
+  --urgency-high: oklch(0.53 0.14 65);
+  --urgency-medium: oklch(0.55 0.1 78);
+  --urgency-low: var(--muted-foreground);
+  --urgency-done: oklch(0.5 0.13 155);
+
+  --danger: var(--urgency-overdue);
+  --warning: var(--urgency-high);
+  --success: var(--urgency-done);
+  --info: var(--muted-foreground);
+
+  /* --destructive is the danger red for text/borders/icons; destructive
+   * BUTTONS deepen to --destructive-button so white text clears AA. */
+  --destructive: oklch(0.53 0.2 27);
+  --destructive-button: oklch(0.5 0.2 27);
+  --destructive-foreground: oklch(0.99 0.005 237);
+}
+
+/* Course palette — curated 8-hue categorical (light column). Default = indigo. */
+:root {
+  --course-indigo: oklch(0.55 0.16 265);
+  --course-violet: oklch(0.55 0.18 300);
+  --course-pink: oklch(0.58 0.17 350);
+  --course-gold: oklch(0.65 0.13 85);
+  --course-green: oklch(0.55 0.14 150);
+  --course-teal: oklch(0.58 0.11 195);
+  --course-cyan: oklch(0.58 0.13 225);
+  --course-rust: oklch(0.58 0.15 40);
+}
+
+/* Persona palette (light) — student / founder / life. */
+:root {
+  --persona-student: oklch(0.52 0.16 262);
+  --persona-founder: oklch(0.53 0.18 300);
+  --persona-life: oklch(0.52 0.14 160);
+}
+
+/*
+ * Data-viz (light). Categorical reuses seven course hues + accent azure
+ * (course-cyan dropped to avoid an azure/cyan clash), maximally-distinct order.
+ * Sequential light: low end is light, so value order flips vs dark.
+ */
+:root {
+  --chart-1: oklch(0.55 0.16 237); /* azure (accent) */
+  --chart-2: var(--course-gold);
+  --chart-3: var(--course-violet);
+  --chart-4: var(--course-teal);
+  --chart-5: var(--course-pink);
+  --chart-6: var(--course-green);
+  --chart-7: var(--course-indigo);
+  --chart-8: var(--course-rust);
+
+  --seq-1: oklch(0.95 0.02 237);
+  --seq-2: oklch(0.86 0.06 237);
+  --seq-3: oklch(0.74 0.11 237);
+  --seq-4: oklch(0.62 0.15 237);
+  --seq-5: oklch(0.5 0.15 237);
+  --seq-6: oklch(0.4 0.12 237);
+
+  --div-low: oklch(0.52 0.19 27);
+  --div-mid: oklch(0.92 0.005 237);
+  --div-high: oklch(0.5 0.14 150);
+}
+
+/* Sidebar (light) — not specified in PLAN; derived from the surface stack.
+ * Active item = accent-subtle bg + azure dot + 500 weight. */
+:root {
+  --sidebar: oklch(0.965 0.006 237);
+  --sidebar-foreground: oklch(0.21 0.02 237);
+  --sidebar-primary: oklch(0.52 0.16 237);
+  --sidebar-primary-foreground: oklch(0.99 0.005 237);
+  --sidebar-accent: var(--accent-subtle);
+  --sidebar-accent-foreground: oklch(0.21 0.02 237);
+  --sidebar-border: oklch(0.9 0.008 237);
+  --sidebar-ring: oklch(0.58 0.17 237);
+}
+
+/* ======================================================================
+ * Dark (cockpit) — default theme
+ * ==================================================================== */
 .dark {
-  --background: oklch(0.14 0.012 258);
-  --foreground: oklch(0.93 0.008 255);
-  --card: oklch(0.17 0.014 258);
-  --card-foreground: oklch(0.93 0.008 255);
-  --popover: oklch(0.17 0.014 258);
-  --popover-foreground: oklch(0.93 0.008 255);
-  --primary: oklch(0.62 0.21 259);
-  --primary-foreground: oklch(0.985 0.005 255);
-  --secondary: oklch(0.22 0.016 258);
-  --secondary-foreground: oklch(0.93 0.008 255);
-  --muted: oklch(0.22 0.016 258);
-  --muted-foreground: oklch(0.68 0.015 255);
-  --accent: oklch(0.24 0.02 258);
-  --accent-foreground: oklch(0.93 0.008 255);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(0.93 0.01 255 / 12%);
-  --input: oklch(0.93 0.01 255 / 16%);
-  --ring: oklch(0.62 0.21 259);
-  --chart-1: oklch(0.62 0.21 259);
-  --chart-2: oklch(0.72 0.13 215);
-  --chart-3: oklch(0.65 0.19 295);
-  --chart-4: oklch(0.78 0.14 80);
-  --chart-5: oklch(0.72 0.14 165);
-  --sidebar: oklch(0.16 0.013 258);
-  --sidebar-foreground: oklch(0.93 0.008 255);
-  --sidebar-primary: oklch(0.62 0.21 259);
-  --sidebar-primary-foreground: oklch(0.985 0.005 255);
-  --sidebar-accent: oklch(0.24 0.02 258);
-  --sidebar-accent-foreground: oklch(0.93 0.008 255);
-  --sidebar-border: oklch(0.93 0.01 255 / 12%);
-  --sidebar-ring: oklch(0.62 0.21 259);
+  --background: oklch(0.13 0.012 237); /* canvas   ~#0b0e14 (e0) */
+  --surface: oklch(0.16 0.014 237); /* raised   ~#10141c (e1) */
+  --card: oklch(0.16 0.014 237);
+  --card-foreground: oklch(0.94 0.006 237);
+  --popover: oklch(0.19 0.016 237); /* overlay  ~#151b25 (e2) */
+  --popover-foreground: oklch(0.94 0.006 237);
+  --muted: oklch(0.22 0.016 237); /* subtle bg ~#1a212c */
+  --secondary: oklch(0.22 0.016 237);
+  --secondary-foreground: oklch(0.94 0.006 237);
+  --foreground: oklch(0.94 0.006 237); /* primary ink ~#e9ecf1 */
+  --muted-foreground: oklch(0.7 0.012 237); /* AA on card ~#9aa4b2 */
+  --border: oklch(0.94 0.01 237 / 10%); /* hairline */
+  --input: oklch(0.94 0.01 237 / 14%); /* control FILL + disabled wash */
+  /* See the light column for why this is not --border. On dark the control's
+   * own `bg-input/30` fill is the tightest adjacent colour, not the page:
+   * 4.12:1 against that fill and 6.77:1 against --surface (was 2.25:1 / 3.69:1).
+   * Alpha rather than a solid keeps it composing over every surface tier. */
+  --input-border: oklch(0.94 0.01 237 / 35%);
+
+  --primary: oklch(0.54 0.15 237); /* white text ~4.8:1 (AA, tight — do not brighten) */
+  --primary-foreground: oklch(0.99 0.005 237);
+  --accent: oklch(0.68 0.16 237); /* bright azure (NOT link text — use --accent-text) */
+  --accent-foreground: oklch(0.15 0.02 237); /* on solid --accent chips/highlights */
+  --accent-text: oklch(0.72 0.15 237); /* azure link/interactive TEXT on dark (AA-safe) */
+  --ring: oklch(0.68 0.16 237);
+}
+
+/* Reading register (dark) — a warm, slightly lifted panel inside the dark app */
+.dark {
+  --reading-bg: oklch(0.17 0.006 70); /* warm graphite ~#1a1713 */
+  --reading-foreground: oklch(0.9 0.008 70); /* warm off-white ink ~#e6ded2 */
+  --reading-muted: oklch(0.66 0.01 70);
+}
+
+/* Accent tint ramp (dark). */
+.dark {
+  --accent-subtle: color-mix(in oklab, var(--accent) 10%, var(--surface));
+  --accent-border: color-mix(in oklab, var(--accent) 32%, transparent);
+  --accent-hover: oklch(0.59 0.15 237);
+  --accent-active: oklch(0.49 0.15 237);
+  --scrim: oklch(0 0 0 / 55%);
+}
+
+/* Urgency heat ramp (dark column). green = done ONLY, in the status lane. */
+.dark {
+  --urgency-overdue: oklch(0.68 0.19 25);
+  --urgency-high: oklch(0.78 0.15 68);
+  --urgency-medium: oklch(0.8 0.09 82);
+  --urgency-low: var(--muted-foreground);
+  --urgency-done: oklch(0.74 0.15 155);
+
+  --danger: var(--urgency-overdue);
+  --warning: var(--urgency-high);
+  --success: var(--urgency-done);
+  --info: var(--muted-foreground);
+
+  --destructive: oklch(0.68 0.19 25);
+  --destructive-button: oklch(0.55 0.2 25);
+  --destructive-foreground: oklch(0.99 0.005 237);
+}
+
+/* Course palette — curated 8-hue categorical (dark column). */
+.dark {
+  --course-indigo: oklch(0.68 0.14 265);
+  --course-violet: oklch(0.68 0.16 300);
+  --course-pink: oklch(0.72 0.15 350);
+  --course-gold: oklch(0.8 0.12 85);
+  --course-green: oklch(0.74 0.14 150);
+  --course-teal: oklch(0.75 0.11 195);
+  --course-cyan: oklch(0.74 0.12 225);
+  --course-rust: oklch(0.7 0.14 40);
+}
+
+/* Persona palette (dark). Life emerald ~160 sits deliberately just off
+ * status-green ~155 — identity color, never a status. */
+.dark {
+  --persona-student: oklch(0.66 0.15 262);
+  --persona-founder: oklch(0.62 0.17 300);
+  --persona-life: oklch(0.7 0.14 160);
+}
+
+/* Data-viz (dark). */
+.dark {
+  --chart-1: oklch(0.68 0.16 237); /* azure (accent) */
+  --chart-2: var(--course-gold);
+  --chart-3: var(--course-violet);
+  --chart-4: var(--course-teal);
+  --chart-5: var(--course-pink);
+  --chart-6: var(--course-green);
+  --chart-7: var(--course-indigo);
+  --chart-8: var(--course-rust);
+
+  --seq-1: oklch(0.28 0.05 237);
+  --seq-2: oklch(0.4 0.09 237);
+  --seq-3: oklch(0.52 0.13 237);
+  --seq-4: oklch(0.62 0.16 237);
+  --seq-5: oklch(0.72 0.15 237);
+  --seq-6: oklch(0.82 0.12 237);
+
+  --div-low: oklch(0.62 0.18 25);
+  --div-mid: oklch(0.72 0.01 237);
+  --div-high: oklch(0.68 0.15 150);
+}
+
+/* Sidebar (dark) — derived from the surface stack, between e0 and e1. */
+.dark {
+  --sidebar: oklch(0.15 0.013 237);
+  --sidebar-foreground: oklch(0.94 0.006 237);
+  --sidebar-primary: oklch(0.54 0.15 237);
+  --sidebar-primary-foreground: oklch(0.99 0.005 237);
+  --sidebar-accent: var(--accent-subtle);
+  --sidebar-accent-foreground: oklch(0.94 0.006 237);
+  --sidebar-border: oklch(0.94 0.01 237 / 10%);
+  --sidebar-ring: oklch(0.68 0.16 237);
 }
 
 @layer base {
@@ -127,9 +512,148 @@
   }
   body {
     @apply bg-background text-foreground;
-    font-variant-numeric: tabular-nums;
   }
   html {
     @apply font-sans;
+  }
+  /* Tabular figures + slashed zero belong to JetBrains Mono only (PLAN.md
+   * "Typography"), NOT to body text: they ride on the `font-mono` utility via
+   * --font-mono--font-feature-settings and on the rule below. Do not put
+   * `font-variant-numeric: tabular-nums` on `body` — that forces tabular
+   * figures onto Geist Sans UI prose and onto the Newsreader reading register,
+   * where a book-like proportional figure is the whole point, and (per CSS
+   * Fonts 4) a font-variant-numeric value that omits `slashed-zero` can also
+   * cancel the "zero" 1 feature set here. */
+  code,
+  kbd,
+  samp,
+  pre {
+    font-family: var(--font-mono), ui-monospace, monospace;
+    font-feature-settings: "tnum" 1, "zero" 1;
+  }
+
+  /*
+   * Reduced motion is MANDATORY (PLAN.md "Motion"): every animation has a
+   * `prefers-reduced-motion: reduce` alternative. Per-component alternatives
+   * (hero-number roll -> instant set, sync-pulse -> static status text) are the
+   * *designed* answer and live with those components; this block is the
+   * blanket safety net so an un-audited transition can never move a user who
+   * asked it not to. Durations collapse rather than going to 0 so that
+   * transitionend/animationend listeners still fire.
+   */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/*
+ * Named duration utilities. `--tw-duration` is Tailwind's internal composition
+ * variable — set it as well as `transition-duration`, exactly as the built-in
+ * `duration-<number>` utilities do, so these compose with `transition-*`.
+ */
+@utility duration-instant {
+  --tw-duration: var(--duration-instant);
+  transition-duration: var(--duration-instant);
+}
+@utility duration-fast {
+  --tw-duration: var(--duration-fast);
+  transition-duration: var(--duration-fast);
+}
+@utility duration-base {
+  --tw-duration: var(--duration-base);
+  transition-duration: var(--duration-base);
+}
+@utility duration-moderate {
+  --tw-duration: var(--duration-moderate);
+  transition-duration: var(--duration-moderate);
+}
+@utility duration-slow {
+  --tw-duration: var(--duration-slow);
+  transition-duration: var(--duration-slow);
+}
+
+/*
+ * THE focus treatment (PLAN.md "Elevation & surfaces": "2px --ring (bright
+ * azure) + 2px offset in the surface color, always visible"). One utility,
+ * `focus-ring`, on every focusable in the app.
+ *
+ * `outline`, not `ring`. Three reasons, all of them load-bearing:
+ *
+ *  1. The 2px offset is genuinely TRANSPARENT, so the gap shows whatever surface
+ *     the control actually sits on. A `ring-offset-*` colour has to be named at
+ *     the call site, which means the same button carries the wrong gap colour
+ *     when it moves from the canvas onto a card, a popover or the sidebar.
+ *  2. `outline` is painted outside the border box and never participates in
+ *     layout, so nothing reflows on focus.
+ *  3. The registry's 3px ring at 50% alpha measured 1.60:1 in light and 4.07:1
+ *     in dark against the canvas — the light theme was passing SC 1.4.11 only
+ *     by way of the 1px border underneath it, which is not a focus indicator.
+ *     At full opacity `--ring` measures 3.96:1 on --background, 4.14:1 on
+ *     --surface and 3.79:1 on --muted in light, and 7.14 / 6.89 / 6.14:1 in
+ *     dark (CSS Color 4 §13.2 gamut-mapped).
+ *
+ * The outline is present but transparent when unfocused: it costs nothing, it
+ * keeps Windows High Contrast mode able to paint it, and only `outline-color`
+ * animates. Components must NOT pair this with `outline-none`, which would win
+ * on source order in the unfocused state and fight it.
+ */
+@utility focus-ring {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  transition: outline-color var(--duration-fast) var(--ease-out-quart);
+
+  &:focus-visible {
+    outline-color: var(--ring);
+  }
+
+  /* An invalid control keeps the identical geometry and swaps hue, so the ring
+   * never has to compete with the danger border for meaning. */
+  &[aria-invalid="true"]:focus-visible {
+    outline-color: var(--destructive);
+  }
+}
+
+@layer components {
+  /*
+   * The dot motif (PLAN.md "Wordmark, motif & favicon") — the contained
+   * signature detail, reused for active-nav markers, status indicators and
+   * empty-state marks. A 5px azure disc; `currentColor` variants opt out by
+   * overriding `background-color`.
+   */
+  .dot-motif {
+    display: inline-block;
+    width: 0.3125rem;
+    height: 0.3125rem;
+    border-radius: 9999px;
+    background-color: var(--accent);
+    flex-shrink: 0;
+  }
+}
+
+/*
+ * The reading register: a wrapper CLASS, not a theme variant. It nests inside
+ * either `.dark` or the light default and remaps four things (PLAN.md
+ * "The two registers, explicitly"). Declared in `components` so Tailwind
+ * utilities — notably `font-mono` on provenance chips, locators, KaTeX and
+ * inline data — still override it.
+ */
+@layer components {
+  .reading {
+    --background: var(--reading-bg);
+    --foreground: var(--reading-foreground);
+    /* --reading-muted is the register's captions/meta ink; it has no other route. */
+    --muted-foreground: var(--reading-muted);
+    --radius: var(--radius-reading);
+
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-serif), ui-serif, Georgia, serif;
   }
 }

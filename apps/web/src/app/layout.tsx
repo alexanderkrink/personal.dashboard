@@ -1,14 +1,24 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist, JetBrains_Mono, Newsreader } from "next/font/google";
 import { ThemeProvider } from "@/components/theme-provider";
 import "./globals.css";
 
+// Three families on clean contrast axes (PLAN.md "Typography"):
+// Geist Sans = cockpit UI, Newsreader = reading register, JetBrains Mono = all data.
 const geistSans = Geist({
   variable: "--font-sans",
   subsets: ["latin"],
 });
 
-const geistMono = Geist_Mono({
+// Reading register only (topic prose, exam synthesis, lesson text).
+const newsreader = Newsreader({
+  variable: "--font-serif",
+  subsets: ["latin"],
+});
+
+// The signature data face. Tabular figures + slashed zero are applied in
+// globals.css — the next/font loader cannot set OpenType features.
+const jetbrainsMono = JetBrains_Mono({
   variable: "--font-mono",
   subsets: ["latin"],
 });
@@ -30,7 +40,7 @@ export default function RootLayout({
     <html
       lang="en"
       suppressHydrationWarning
-      className={`${geistSans.variable} ${geistMono.variable}`}
+      className={`${geistSans.variable} ${newsreader.variable} ${jetbrainsMono.variable}`}
     >
       <body className="font-sans antialiased">
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>

@@ -10,6 +10,7 @@
       "env": [
         "NEXT_PUBLIC_*",
         "SUPABASE_*",
+        "ACCESS_CODE",
         "ANTHROPIC_API_KEY",
         "RESEND_API_KEY",
         "SEND_EMAIL_HOOK_SECRET",

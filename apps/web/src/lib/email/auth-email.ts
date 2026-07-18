@@ -59,7 +59,7 @@ export function renderAuthEmail(actionType: string, url: string): string {
             <tr><td style="font-size:14px;color:#525252;line-height:1.6;padding-bottom:24px;">${copy.body}</td></tr>
             <tr>
               <td style="padding-bottom:24px;">
-                <a href="${url}" style="display:inline-block;background-color:#2563eb;color:#ffffff;font-size:14px;font-weight:500;text-decoration:none;padding:10px 20px;border-radius:6px;">${copy.cta}</a>
+                <a href="${url}" style="display:inline-block;background-color:#1c74d8;color:#ffffff;font-size:14px;font-weight:500;text-decoration:none;padding:10px 20px;border-radius:6px;">${copy.cta}</a>
               </td>
             </tr>
             <tr><td style="font-size:12px;color:#a3a3a3;line-height:1.6;">If the button doesn't work, copy this link into your browser:<br/><a href="${url}" style="color:#525252;word-break:break-all;">${url}</a></td></tr>

@@ -1,6 +1,6 @@
 "use client";
 
-import { Moon, Sun } from "lucide-react";
+import { Moon, Sun } from "@phosphor-icons/react";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,6 +15,9 @@ export function ThemeToggle() {
 
   return (
     <DropdownMenu>
+      {/* The 44px coarse-pointer target used to be spelled out here. It lives on
+          every `size` variant in `buttonVariants` now, so this only needs the
+          positioning context for the two crossfading glyphs. */}
       <DropdownMenuTrigger render={<Button variant="outline" size="icon" className="relative" />}>
         <Sun className="size-4 scale-100 rotate-0 transition-all dark:scale-0 dark:-rotate-90" />
         <Moon className="absolute size-4 scale-0 rotate-90 transition-all dark:scale-100 dark:rotate-0" />
