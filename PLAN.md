@@ -1088,6 +1088,39 @@ Neither provider reads PPTX natively. Two-tier approach:
   document records `extraction_fidelity: 'text-only' | 'visual'` so the UI can explain
   quality differences.
 
+> **🔴 Measured against the real corpus 2026-07-18 — v1.1 is NOT an optional upgrade, it is
+> the primary path for at least one whole course.** Text yield across the supplied decks
+> (words per slide, computed from `ppt/slides/slide*.xml`):
+>
+> | Deck | Slides | Words/slide | Media | Path |
+> | --- | --- | --- | --- | --- |
+> | Marketing s13 quantitative | 16 | 52.6 | 1.2 MB | text |
+> | Marketing s14 research/sampling | 45 | **39.0** | 38 MB | **visual** |
+> | Marketing s18 segmentation | 32 | **23.2** | 17.5 MB | **visual** |
+> | Marketing s19 differentiation | 28 | **22.0** | 44 MB | **visual** |
+> | Marketing s20 positioning | 28 | **30.7** | 23 MB | **visual** |
+> | Micro Unit 2 supply/demand | 76 | 84.2 | 6.9 MB | text |
+> | Micro Unit 3 elasticities | 69 | 78.5 | 47.7 MB | text |
+> | Micro Unit 4 surplus | 40 | 60.3 | 18.5 MB | text |
+>
+> **Four of five Marketing decks fall below the 40 words/slide threshold; all three Micro
+> decks clear it comfortably.** The threshold itself is well calibrated — the split is clean
+> and matches how the decks actually look. But the consequence was under-planned: shipping
+> item 5 "text-only for v1, visual later" means the Marketing course extracts at 22–39
+> words/slide, i.e. mostly-empty topic pages from decks whose content is in the images.
+> **Therefore: either CloudConvert (or equivalent) lands inside item 5 rather than after it,
+> or item 5's acceptance corpus must be a text-rich course (Micro) and Marketing is knowingly
+> deferred.** Note also that `extraction_fidelity` stops being a rarely-used field and becomes
+> a routine UI state, so the "why does this page look thin?" explanation needs to be built,
+> not stubbed.
+>
+> Two useful properties of the supplied corpus: `Session 1` exists as **both `.pptx` and
+> `.pdf`** (9 MB vs 1 MB) — the same lecture through both pipelines, which is the natural
+> A/B for validating that the visual path actually recovers what the text path loses. And
+> Marketing sessions **1 → 2 → 3 → 4** are consecutive, giving the N→N+1
+> *update-not-duplicate* test the DoD requires, with sessions 13–14 and 18→19→20 as
+> additional consecutive runs within the same course.
+
 
 ---
 
@@ -1841,6 +1874,16 @@ from the real feed drive this:
 > *Marketing Fundamentals* syllabus states `NUMBER OF SESSIONS: 30` in its header, its
 > program runs `SESSION 1 … SESSION 30`, and its evaluation table puts `Final Exam 30%` —
 > the session count is a first-class, reliably-placed field, not something inferred.
+>
+> **⚠ Qualified 2026-07-18 after a second real syllabus landed — the session-count field is
+> NOT universal, so the fallback is load-bearing, not ceremonial.** *Marketing Fundamentals*
+> states `NUMBER OF SESSIONS: 30` in its header. The *Learning to Observe, Experiment and
+> Survey* syllabus (BDBA, first year, Fall 2025) carries **no such field at all** — it
+> declares credits, language, category and a session-by-session program, but never a total.
+> So the resolution chain is: **(1) syllabus-declared session count if the field exists →
+> (2) highest `SESSION n` heading in the syllabus program → (3) `max(sessionTo)` from the
+> feed.** Do not build as though step 1 always resolves; on this evidence it resolves for
+> roughly half of courses.
 >
 > **Why this ordering is strictly better than max-session-first.** `max(sessionTo)` silently
 > conflates two different states: *"session N is the last one"* and *"session N is the last
@@ -4530,9 +4573,21 @@ real course schedule, with weak spots feeding the same daily review queue.
    and ✅ all self-chosen env values set in `.env.local` + Vercel: `CRON_SECRET`,
    `AI_KILL_SWITCH`, `AI_MAX_TIER=deep`, `AI_MONTHLY_BUDGET_USD`. **No env values remain
    outstanding** — only their code wiring (`env.ts`, `.env.example`, `turbo.json`, CI), which
-   lands with items 2 / 2b / 4 / 5 / 8 per the mapping in the M1 progress note. The Supabase
-   Free plan suffices — every
-   upload fits its 50 MB per-file cap.
+   lands with items 2 / 2b / 4 / 5 / 8 per the mapping in the M1 progress note.
+   ⚠ **CloudConvert is missed by this "no env values outstanding" claim** — see the PPTX
+   note below; if the v1.1 visual path ships, its key needs the full checklist too.
+   ~~The Supabase Free plan suffices — every upload fits its 50 MB per-file cap.~~
+   🔴 **DISPROVEN 2026-07-18.** The real corpus landed and the Marketing course textbook
+   (*Kotler, Principles of Marketing*) is **156 MB — 3× over Supabase's 50 MB per-file cap**,
+   and the plan's own `validate` step enforces the same 50 MB limit. Two other textbooks do
+   fit (*Principles of Corporate Finance* 42 MB, *Business in Action* 12 MB), so this is not
+   universal — but "every upload fits" is false, and the single most valuable document for
+   the Deep-review DoD clause is the one that does not. **Decision needed before item 5:**
+   raise the cap and move to a Supabase paid tier, split oversized books client-side before
+   upload (chapter ranges — probably right anyway, since a 156 MB book is far past the point
+   where one extraction call is sensible), or accept that textbook-scale documents are out of
+   scope for M1. The `validate` step must fail such a file with a *useful* message, not a
+   generic rejection.
 2. **The ICS feed URL(s)** — ✅ **resolved 2026-07-18.** URL supplied and the live feed
    fetched and analysed (379 events, 2026-01-19 → 2026-12-18, two semesters, 15 courses).
    Answers: it is **one global feed** (`X-WR-CALNAME: My IE Agenda`), not per-course; UIDs are
@@ -4565,6 +4620,15 @@ real course schedule, with weak spots feeding the same daily review queue.
    - ❌ **Pass mark (assumed 5/10) still unverified** — this syllabus does not state it.
      Still needed for the Bavarian conversion; check IE's academic regulations rather than
      a syllabus, since it is a university-level constant.
+   - 📄 **Where the definitive attendance rule lives**: the LOES syllabus cites an
+     **"IE Attendance Policy 2025-2026" document posted on Blackboard**. That is the
+     university-wide source; the 80 % figure should be confirmed against it before being
+     hardcoded as a default, since per-syllabus restatements may vary.
+   - ⚠ **`participation_weight` is genuinely 0 for some courses** — LOES states plainly that
+     *"attendance in class does not form part of your grade."* So the column is not merely
+     "sometimes unknown", it is sometimes legitimately zero, and the Participation Ledger
+     must render a course with no participation component without implying the user is
+     failing to log. Do not treat null and zero as the same state.
 5. **Budget comfort** — ✅ `AI_MONTHLY_BUDGET_USD` set in `.env.local` + Vercel (2026-07-18).
    The cost model assumes ≈ $35–60/month AI spend at full usage against a $75 soft cap
    (two-provider network, AI strategy §4); if the value set differs from 75, the guard
