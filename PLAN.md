@@ -4355,11 +4355,16 @@ uploads every lecture's materials (topic pages appear minutes later).
   rows to create, and they reconcile exactly with the feed (term 1 ends 18 Dec; the feed's
   last fall event is `MATHEMATICS … (Ses. 30)` on 2026-12-18):
   - **Term 1 (Fall 2026): 2026-08-31 → 2026-12-18.** Winter break 19 Dec–10 Jan.
-  - **Term 2 (Spring 2027): 2027-01-11 → 2027-05-21** for 1st/2nd-year and 3rd-year Dual
-    Programs students. Spring break 20–29 Mar. Retake period 31 May–30 Jun.
-    ⚠ End-of-classes is **program-dependent** (7 May for 3rd/4th/5th year, 21 May for
-    1st/2nd year and 3rd-year Dual Programs, 28 May for BAS) — confirm which line applies
-    before seeding the row.
+  - **Term 2 (Spring 2027): 2027-01-11 → 2027-05-21.** Spring break 20–29 Mar. Retake period
+    31 May–30 Jun. ✅ **End date confirmed 2026-07-18**: Alexander is in the **Dual Degree
+    (BBA + Data & Business Analytics), entering 2nd year**, so the *"1st and 2nd year
+    students"* line applies → **21 May**. (The other two lines — 7 May for 3rd/4th/5th year,
+    28 May for BAS — do not apply. Note the 3rd-year Dual Programs carve-out will matter in
+    a future year, so store the rule, not just the date.)
+
+  **Both `semesters` rows are therefore fully determined** and can be seeded as soon as the
+  owning account is named — `public.semesters` is still empty, and the production project has
+  two auth users, so which one is the real account must be stated rather than guessed.
 
   **Still outstanding, in priority order:**
   1. 🔴 **Lecture decks** — 2–3 consecutive sessions from one course, plus one reading PDF.
@@ -4368,10 +4373,13 @@ uploads every lecture's materials (topic pages appear minutes later).
   3. 🟡 **Syllabi for the fall courses** — the one on file is from a past term and does not
      correspond to a fall-2026 calendar course, so syllabus→calendar matching cannot yet be
      exercised on real pairs.
-  4. 🟡 **IE's pass mark** (assumed 5/10) — a university regulation, not a syllabus field.
+  4. ✅ ~~IE's pass mark~~ — **resolved 2026-07-18: 5/10.**
   5. 🟡 **Inngest app sync** — only possible once `/api/inngest` is deployed; needs the
      production hostname, which appears nowhere in the repo.
   6. 🟢 **Favicon / PWA icons** — or approval to generate them from the wordmark and accent.
+  8. 🟢 **Which auth account is the real one** — needed to seed the two `semesters` rows and
+     the fall course list. Production has two users and neither matches the address on file,
+     so this must be stated, not inferred.
   7. 🟢 **Case PDFs** — **descoped 2026-07-18: real cases are rarer in this program than the
      plan assumed, so item 10 drops to opportunistic.** Do not let it gate M1.
 
@@ -4648,9 +4656,11 @@ real course schedule, with weak spots feeding the same daily review queue.
      assumed 10–25 % band. Full evaluation table, which sums cleanly to 100: Final Exam 30 ·
      Group Presentation 25 · Class Participation 15 · Intermediate tests 15 (3 × 5) ·
      Individual presentation 10 · Other 5. Course is 6 ECTS, 30 sessions.
-   - ❌ **Pass mark (assumed 5/10) still unverified** — this syllabus does not state it.
-     Still needed for the Bavarian conversion; check IE's academic regulations rather than
-     a syllabus, since it is a university-level constant.
+   - ✅ **Pass mark is 5/10 — confirmed by Alexander 2026-07-18.** The assumption held, so
+     `bavarian_grade() = 1 + 3 × (10 − x) / (10 − 5)` is correct as written: it maps 10 → 1.0
+     (German best) and exactly 5 → 4.0 (German pass), so a passing IE mark always converts to
+     a passing German one and anything below 5 lands above 4.0, i.e. fails on both scales.
+     Clamp at both ends. **Open question 4 is now fully resolved.**
    - ✅ **80 % is universal — confirmed by Alexander 2026-07-18.** It applies to every course;
      no need to consult the IE policy document. Hardcode `absence_fail_pct = 20` as the
      default. The LOES syllabus states the consequence precisely: *"Each student has 4
