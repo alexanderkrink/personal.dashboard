@@ -477,10 +477,22 @@ chip style) — Base UI primitives via shadcn (Nova), `render` prop not `asChild
     nearest scroll container, and a `sticky` `thead` inside a box that never scrolls
     vertically has nothing to stick to. Proven at implementation: header at `y=-398` after a
     600px scroll. The **only** structure where both hold is a table container carrying a
-    `max-height` so it becomes the vertical scroller too. **Open decision** — either cap
-    table height (table scrolls, page doesn't) or drop the sticky-header requirement. Until
-    it is decided, the `sticky` classes on `/courses`, `/courses/[id]` and
-    `/courses/semesters` are decorative and do nothing.
+    `max-height` so it becomes the vertical scroller too.
+  - **✅ DECIDED 2026-07-18 (Wave 2) — sticky is opt-in, and only where rows are
+    unbounded.** The requirement is no longer global. The rule:
+    - **Bounded row count** (a term's courses, one course's grade components, a week of
+      deadlines): **no sticky header.** Capping the height would add a second scrollbar and
+      hide rows that otherwise all fit. The whole table is on screen, so a sticky header buys
+      nothing. The inert `sticky` classes on `/courses`, `/courses/[id]` and
+      `/courses/semesters` were **removed**, not left decorative.
+    - **Unbounded row count** (the full calendar list — the only such table in M1): the
+      container takes `max-height` + `overflow-y-auto` and so becomes the vertical scroller,
+      which is what finally gives the `sticky` `thead` something to stick to.
+    `Table` now accepts a **`containerClassName`** prop for exactly this — previously the
+    container's classes were hardcoded, so no consumer *could* have made a sticky header
+    work even if it wanted one. The working pattern is documented on the component:
+    `<Table containerClassName="max-h-[60vh] overflow-y-auto">` +
+    `<TableHeader className="sticky top-0 z-10 bg-surface">`.
 - **Badges/chips:** full-pill; weight badges use the heat ramp (High amber / Med dim-amber /
   Low neutral, **not** green); course chips use the course palette; status chips use the dot
   motif.
@@ -2012,6 +2024,72 @@ below.) Two observations from the real feed drive the **fallback** path:
 > paragraph ~293 of 420 — and a header-only parse silently produces confident nonsense.
 > Also expect combined headings (`SESSION 28 & 29`), which is why LOES shows 28 headings
 > spanning a 1..30 range.
+
+> **🔴 DISPROVEN 2026-07-18 (Wave 2) — none of the 3 syllabi on file describe a fall-2026
+> course, so the syllabus oracle currently has ZERO coverage of the build target.**
+> The syllabi were transcribed by hand (whole body, not header). Every one is a **2025-26,
+> DEGREE COURSE: FIRST, SEMESTER: 1º** document, and none matches any of the 7 normalised
+> fall-2026 courses:
+>
+> | Fixture | Real course title | Programme | Declared sessions | Maps to a fall-2026 course? |
+> | --- | --- | --- | --- | --- |
+> | `mathematics.pdf` | **APPLIED BUSINESS MATHEMATICS** | Dual Degree BBA & DBA | 30 | **No** |
+> | `marketing-fundamentals-sem1.pdf` | **MARKETING FUNDAMENTALS** | Dual Degree BBA & DBA | 30 | **No** |
+> | `bdba-loes-fall2025.docx` | **LEARNING TO OBSERVE, EXPERIMENT AND SURVEY** | BDBA | 30 (body) | **No** |
+>
+> The `mathematics.pdf` → `MATHEMATICS FOR DATA MANAGEMENT AND ANALYSIS` guess is **wrong,
+> and the feed proves it rather than merely failing to support it**: both names appear in the
+> *same* ICS export as **distinct courses**. `MATHEMATICS FOR DATA MANAGEMENT AND ANALYSIS`
+> holds 30 real fall events (2026-09-02 → 2026-12-18); `APPLIED BUSINESS MATHEMATICS` holds
+> **4** events, all June 2026 (`Final EXAM Retake June ABM30`, `Extra`, and the two Smowl /
+> Excel-upload proctoring rows already filtered as pseudo-events). It is a *spring 2025-26*
+> course seen only through its June re-sit. Likewise `MARKETING FUNDAMENTALS` (30 sessions) is
+> not `MARKETING MANAGEMENT` (20 sessions) — different title, different session count.
+>
+> Grouping the whole feed by normalised name splits cleanly at the term boundary: everything
+> from **2026-01-19 → 2026-06-26** is 2025/26 spring plus June re-sits (`FINANCE LAB`,
+> `MICROECONOMICS`, `COST ACCOUNTING`, `APPLIED BUSINESS MATHEMATICS`, …), and everything
+> from **2026-09-01 → 2026-12-18** is exactly the 7 fall courses. The three syllabi belong to
+> **Fall 2025**, which predates the feed window entirely.
+>
+> **Consequence for CAL-2:** step 1 of the detection chain (syllabus header session-count) and
+> step 2 (in-body `SESSION n` + inline exam labels) currently resolve for **0 of 7** fall
+> courses. Every fall course must resolve through **step 3, the `max(sessionTo)` fallback**,
+> until a fall-2026 syllabus is supplied. The chain's ordering is still right and the two
+> parsers are still validated against real documents — but do not build or test on the
+> assumption that a fall course has a syllabus behind it, and do not let the fallback's three
+> guards be treated as a rare path. **They are the only path today.**
+>
+> **Because of this, `assessments` was deliberately left EMPTY.** Writing these weights
+> against a fall-2026 course would have fabricated a syllabus→course link the evidence
+> contradicts. The transcriptions are recorded below instead, ready to insert if and when the
+> matching courses exist (the 2025/26 term has no `semesters` row — see the 2025/26 gap).
+>
+> **Transcribed evaluation tables** (verbatim weights; `session_number` only where the
+> syllabus states it inline; sanitized — no instructor names or contact details):
+>
+> - **APPLIED BUSINESS MATHEMATICS** (30 sessions) — Final Exam 40% (`SESSION #30`) ·
+>   Intermediate tests / Midterm 20% (`SESSION #12`) · Individual work (home exercises) 20% ·
+>   Class Participation 20%. ⚠ The document also states a *third-attempt* scheme
+>   (Deliverables 20% / Midterm 35% / Final 45%) — that is the re-taker path, **not** the
+>   ordinary call, and must not be transcribed as the course's weights. Pass gate: ≥4.0 on the
+>   final exam regardless of weighted average.
+> - **MARKETING FUNDAMENTALS** (`NUMBER OF SESSIONS: 30`) — Final Exam 30% · Group
+>   Presentation 25% · Intermediate tests 15% (3 × 5%) · Individual presentation 10% · Class
+>   Participation 10% · Other (peer evaluation) 10%. Totals 100%. No inline session labels for
+>   the exams, so **no `session_number` is derivable** beyond the declared total of 30.
+> - **LEARNING TO OBSERVE, EXPERIMENT AND SURVEY** (30 sessions, from the body) — Midterm Exam
+>   30% (`SESSION 19`) · Final Exam 25% (`SESSION 30`) · MC Quizzes 15% (5 × 3%) ·
+>   Participation 10% · Group Research Presentation 10% (`SESSIONS 28/29` — a **range**, so it
+>   does not fit the single `session_number` column) · 5 Experiments 5% · Discussion Board
+>   Posts 5%. Totals 100%. Pass gate: ≥3.5 on the final exam.
+>
+> **✅ CONFIRMS the attendance/participation split, in the syllabus's own words.** LOES states:
+> *"your attendance in class does not form part of your grade… your grade in this course will
+> not be affected by your attendance"* — while separately grading **Participation 10%**. The
+> two are independent: attendance is a zero-point pass/fail gate (`courses.absence_fail_pct`,
+> IE's universal 80% rule), participation is a graded `assessments` row. Never fold one into
+> the other.
 >
 > **Why this ordering is strictly better than max-session-first.** `max(sessionTo)` silently
 > conflates two different states: *"session N is the last one"* and *"session N is the last
@@ -4548,11 +4626,17 @@ uploads every lecture's materials (topic pages appear minutes later).
      (Kotler 156 MB — over the 50 MB cap, so it is also the `validate`-rejection test case;
      Corporate Finance 42 MB; Business in Action 12 MB). The Deep-review DoD clause has real
      material to run against.
-  3. 🟡 **Fall-2026 syllabi** — 3 syllabi are now on file (`marketing-fundamentals-sem1.pdf`,
-     `bdba-loes-fall2025.docx`, `mathematics.pdf`) and the revised §5.1b exam chain resolved
-     **2 of 2** of them, but they are past-term documents; a syllabus for a *fall-2026*
-     calendar course is still wanted to exercise syllabus→calendar matching on a real pair.
-     **Not blocking.**
+  3. 🔴 **Fall-2026 syllabi — now BLOCKING for the syllabus oracle, upgraded from 🟡 on
+     2026-07-18 (Wave 2).** 3 syllabi are on file (`marketing-fundamentals-sem1.pdf`,
+     `bdba-loes-fall2025.docx`, `mathematics.pdf`) and the revised §5.1b chain resolves
+     **3 of 3** as documents — but **0 of 3 describe a fall-2026 course**, so the oracle
+     covers **0 of the 7** courses CAL-2 actually builds against. All three are 2025-26
+     first-year semester-1 documents; `mathematics.pdf` is *Applied Business Mathematics*,
+     which the feed carries as a **separate course** from `MATHEMATICS FOR DATA MANAGEMENT
+     AND ANALYSIS` (see §5.1b). Every fall course therefore resolves through the
+     `max(sessionTo)` fallback today. **A fall-2026 syllabus is the single highest-value
+     input Alexander can supply**; one file would move a course from the guarded fallback to
+     the primary oracle.
   4. ✅ ~~IE's pass mark~~ — **resolved 2026-07-18: 5/10.**
   5. 🟡 **Inngest app sync** — only possible once `/api/inngest` is deployed; needs the
      production hostname, which appears nowhere in the repo.
@@ -4569,9 +4653,24 @@ uploads every lecture's materials (topic pages appear minutes later).
   Navigate + Appearance only (Actions and Search need the deadline model and the pipeline);
   the two signature motions (hero-number roll, sync-pulse) are specified but unimplemented;
   `/calendar` and `/documents` are designed teaching empty states, not features.
-  **Defects carried:** sticky table headers are inert (see *Component conventions*);
-  outline-variant button borders sit at ~1.33:1 against a 3:1 floor (inputs were fixed,
-  buttons missed); `notFound()` returns HTTP 200 (no data leaks — verified); and there is
+  **Defects carried:** ~~sticky table headers are inert~~ — **✅ resolved 2026-07-18 (Wave 2)**,
+  see *Component conventions*: sticky is now opt-in via `Table`'s `containerClassName`, and the
+  three inert usages were removed. ~~outline-variant button borders sit at ~1.33:1 against a
+  3:1 floor (inputs were fixed, buttons missed)~~ — **✅ resolved 2026-07-18 (Wave 2), and the
+  diagnosis was understated.** 🔴 **DISPROVEN 2026-07-18:** the figure was never 1.33:1 as
+  rendered. The cva base carried `border-transparent` and the `outline` variant tried to
+  override it with an equal-specificity utility, so the winner was whichever Tailwind emitted
+  later — and it emits `.border-transparent` (offset 27181) *after* `.border-input-border`
+  (26858). The outline border therefore resolved to `rgba(0,0,0,0)`: **invisible, a 1.00:1
+  edge**, not a low-contrast one. ~1.33:1 was a *token* comparison; no rendered pixel ever
+  measured it. Fixed structurally — the base sets border *width* only and every variant names
+  its own colour, so each button carries exactly one border-colour utility and ordering cannot
+  decide it. ⚠ **CORRECTED 2026-07-18:** dark `--input-border` was also wrong (see
+  `globals.css`) — annotated 4.12:1 but measured 2.83:1, because its own alpha was never
+  composited onto the dark backdrop; raised 35% → 40%. This means **Wave 1's input fix was
+  itself failing SC 1.4.11 in dark**, not just the buttons. Now 3.44:1 (light) / 3.27:1 (dark)
+  from rendered pixels, locked by `e2e/control-border-contrast.spec.ts`.
+  `notFound()` returns HTTP 200 (no data leaks — verified); and there is
   **no favicon, PWA manifest or app icon of any kind**, so a deployed app shows the browser's
   default globe.
 
