@@ -157,6 +157,18 @@ uses the darker *light-mode* variants noted with each palette, because bright az
 green all fail 4.5:1 as small text on the near-white canvas. Verify every pair with a
 contrast checker at implementation.
 
+> **⚠ Gamut warning (learned at implementation, 2026-07-18).** A plain contrast checker is
+> **not sufficient for this palette**. Nine of these tokens — including `--primary` in both
+> themes, light `--accent`, light `--accent-text`, and the light heat-ramp amber/green — fall
+> **outside the sRGB gamut**. Most checkers naively *clip* the negative channel, which reports
+> an optimistic ratio; browsers instead **gamut-map** per CSS Color 4 §13.2 (hold L and hue,
+> reduce chroma), which lands darker. Two AA failures shipped past a naive check this way and
+> were caught only by gamut-aware math: light `--accent-foreground` at L 0.20 measured 4.51:1
+> clipped but **4.31:1 mapped** (now L 0.15), and the light `high` amber measured fine on the
+> canvas but **4.41:1 on `--accent-subtle`** — the table-hover surface this very document
+> mandates below (now L 0.53). **Rule: any future token work must use a gamut-mapping-aware
+> checker, and must test colored text against `--accent-subtle`, not just the canvas.**
+
 ```css
 /* ---- Light (cockpit) ---- */
 :root {
@@ -174,7 +186,7 @@ contrast checker at implementation.
   --primary:           oklch(0.52 0.16 237);    /* azure btn fill; white text ~5.0:1 (AA) */
   --primary-foreground:oklch(0.99 0.005 237);
   --accent:            oklch(0.58 0.17 237);    /* bright azure: focus ring, wordmark dot, hover/selected bg */
-  --accent-foreground: oklch(0.20 0.02 237);    /* DARK ink on solid --accent chips: light-mode --accent (L 0.58) is too light for white text */
+  --accent-foreground: oklch(0.15 0.02 237);    /* DARK ink on solid --accent chips: light-mode --accent (L 0.58) is too light for white text. CORRECTED 2026-07-18 (was 0.20, which fails AA — see the gamut note below) */
   --accent-text:       oklch(0.50 0.15 237);    /* AA-safe azure for link/interactive TEXT (~5.5:1 on canvas) */
   --ring:              oklch(0.58 0.17 237);    /* = --accent (bright azure); focus rings are non-text, 3:1 suffices */
 
@@ -237,7 +249,7 @@ identity register that never reads as status, so they don't break the rule.)
 | Role | Dark | Light (text) | Use |
 | --- | --- | --- | --- |
 | `overdue` / danger | `oklch(0.68 0.19 25)` | `oklch(0.53 0.20 27)` | overdue deadlines, destructive |
-| `high` / urgent (amber) | `oklch(0.78 0.15 68)` | `oklch(0.55 0.14 65)` | high-weight / due-soon, warnings |
+| `high` / urgent (amber) | `oklch(0.78 0.15 68)` | `oklch(0.53 0.14 65)` | high-weight / due-soon, warnings |
 | `medium` (dim amber) | `oklch(0.80 0.09 82)` | `oklch(0.55 0.10 78)` | mid-tier weight |
 | `low` / info (neutral) | `--muted-foreground` | `--muted-foreground` | low-weight, classes, info |
 | `done` / success (green) | `oklch(0.74 0.15 155)` | `oklch(0.50 0.13 155)` | **only** completed / passed / correct |
@@ -451,6 +463,16 @@ chip style) — Base UI primitives via shadcn (Nova), `render` prop not `asChild
 - **Tables (the cockpit's backbone):** hairline row separators, 28–32px rows, mono tabular
   numerals right-aligned, sticky header, hover row-highlight = `accent-subtle`. Horizontal
   scroll contained.
+  - **⚠ Corrected 2026-07-18:** "sticky header" and "contained horizontal scroll" are
+    **mutually exclusive as originally written**, and the shipped tables have an *inert*
+    sticky header because of it. Containing the horizontal scroll makes that wrapper the
+    nearest scroll container, and a `sticky` `thead` inside a box that never scrolls
+    vertically has nothing to stick to. Proven at implementation: header at `y=-398` after a
+    600px scroll. The **only** structure where both hold is a table container carrying a
+    `max-height` so it becomes the vertical scroller too. **Open decision** — either cap
+    table height (table scrolls, page doesn't) or drop the sticky-header requirement. Until
+    it is decided, the `sticky` classes on `/courses`, `/courses/[id]` and
+    `/courses/semesters` are decorative and do nothing.
 - **Badges/chips:** full-pill; weight badges use the heat ramp (High amber / Med dim-amber /
   Low neutral, **not** green); course chips use the course palette; status chips use the dot
   motif.
@@ -544,22 +566,50 @@ non-essential secondary text only**; screen-reader announcements on async state
   email+password sign-up/login; login/signup are unreachable without a valid code, and
   every screen matches the analyst-terminal system.
 
-#### Implementation notes (for the UI milestone, not this session)
+#### Implementation notes
 
-- Tokens above replace the current `globals.css` values; keep the Tailwind v4 `@theme`
+> **✅ Implemented 2026-07-18 (M1 Wave 1, items 13a + 13b).** Everything in this subsection
+> has shipped and is merged to `main`. The notes are kept as the record of what was decided;
+> corrections found at implementation are marked inline below.
+
+- ✅ Tokens above replace the current `globals.css` values; keep the Tailwind v4 `@theme`
   mapping and shadcn variable names, add `--font-serif`, `--reading-*`, `--surface`,
   `--accent-text`, the heat-ramp/semantic, course, persona, and `--chart-1..8` tokens. The
   reading register is a `.reading` wrapper class (see *The two registers*), not a theme.
-- Fonts: add **Newsreader** and **JetBrains Mono** via `next/font/google` (→ `--font-serif`,
+  *(The `.reading` class exists and is correct, but has **no consumer surface yet** — topic
+  pages arrive with the document pipeline. "Reading register live on topic pages" is
+  therefore **not** met, by scope rather than by failure.)*
+- ✅ Fonts: add **Newsreader** and **JetBrains Mono** via `next/font/google` (→ `--font-serif`,
   `--font-mono`), keep Geist Sans (`--font-sans`); retire Geist Mono. Add catalog entries in
   `pnpm-workspace.yaml` where a package is introduced.
-- Icons: add `@phosphor-icons/react`, migrate existing `lucide-react` usages, then drop
-  lucide (see the perf note in *Iconography*).
-- ⌘K palette — **decided: shadcn Nova's `Command` primitive**, not raw `cmdk`, so the palette
-  follows the same Base-UI `render`-prop convention as the rest of the system. (`cmdk` is
-  therefore *not* a dependency; every other mention of it in this plan is superseded by this
-  line.) Verify at implementation that the Nova preset ships `Command` — if it does not, fall
-  back to raw `cmdk` and add it to the dependency list below.
+- ✅ Icons: add `@phosphor-icons/react`, migrate existing `lucide-react` usages, then drop
+  lucide (see the perf note in *Iconography*). **⚠ Corrected:** this line reads as trivial but
+  there were **four** call sites across two files — `theme-toggle.tsx` (`Sun`, `Moon`) *and*
+  the generated `components/ui/dropdown-menu.tsx` (`CheckIcon`, `ChevronRightIcon`). Future
+  sweeps must count `src/components/ui/` too. Zero lucide now remains, lockfile included.
+- ✅ ⌘K palette — **decided: shadcn Nova's `Command` primitive**, not raw `cmdk`, so the palette
+  follows the same Base-UI `render`-prop convention as the rest of the system.
+  **⚠ Corrected 2026-07-18 — the parenthetical claiming `cmdk` is "*not* a dependency" was
+  wrong, and the either/or framing does not describe reality.** Nova *does* ship `Command`,
+  but it is **implemented on top of `cmdk`**, so `cmdk@^1.1.1` is a direct dependency of
+  `apps/web` *and* the Nova convention is followed — both at once, not a fallback. Installing
+  it also pulls `dialog` + `input-group` as registry dependencies. **Do not try to remove
+  `cmdk`.** Note the vendored Nova `CommandDialog` shipped two defects that were fixed
+  locally: it never wrapped children in `<Command>` (threw on every palette open) and its
+  `DialogHeader` sat outside the portalled content, leaving the dialog with no accessible name.
+- **⚠ New, learned at implementation — `form` is not a real component in `base-nova`.** Its
+  registry entry resolves to `{"name":"form","type":"registry:ui"}` with **no files**, so
+  `shadcn add form` succeeds silently and writes nothing. Base UI's equivalent is **`field`**.
+  Any plan item saying "add `form`" means `field`.
+- **⚠ New — motion durations cannot be `@theme` entries.** Tailwind v4 has **no `--duration-*`
+  namespace** (only `--ease-*` exists), so a `duration-fast` utility written against a theme
+  entry compiles to **nothing at all, silently**. Durations must be `:root` variables plus
+  `@utility` definitions setting both `--tw-duration` and `transition-duration`. Easing tokens
+  *can* be theme entries.
+- **⚠ New — the dark-theme `~#hex` annotations beside the OKLCH values are off by roughly one
+  lightness step** (e.g. `--background` is annotated `~#0b0e14` but paints `#04080b`). The
+  OKLCH values are authoritative and were used verbatim. If the rendered dark canvas reads too
+  black, raise the OKLCH lightness — do not "fix" it by trusting the hex comments.
 - Additional (later-milestone) dependencies the surfaces imply, tracked here so the
   accounting is honest: **KaTeX** (topic-page/exam formulas), **CodeMirror 6** (coding
   workspace + Data Lab SQL), **Recharts** (via shadcn/ui chart components — analytics studio,
@@ -3612,10 +3662,18 @@ create table courses (
   archived boolean not null default false
 );
 
--- ⚠ Drift from the applied migration: `20260717161053_…` shipped
--- `color text not null default '#6366f1'` (Tailwind indigo-500, pre-design-system). A small
--- follow-up migration in M1 item 13 changes the column to a palette key and backfills the one
--- existing default. Nothing depends on the hex yet, so this is a rename, not a data problem.
+-- ✅ RESOLVED 2026-07-18. The drift is closed: migration `20260718094900_courses_color_palette_key`
+-- dropped the '#6366f1' default, set default 'indigo', and added a check constraint on
+-- ('indigo','violet','pink','gold','green','teal','cyan','rust'). Applied against 0 rows.
+--
+-- ✅ Also applied 2026-07-18 — `20260718140050_tenant_scoped_fks_and_grading_scale`:
+--   * `grading_scale` gained its check constraint, values ('ie_10','de_1_5'). It was the one
+--     text enum in these tables missing one, against the convention above. `de_1_5` (German,
+--     1.0 best / 4.0 passes) was added for the dual degree's German half — a superset of the
+--     `bavarian_grade()` CONVERSION spec'd in the Grade Cockpit, which is a different thing:
+--     a natively-German-graded course is not an IE course with a conversion applied.
+--   * `courses.semester_id` and `assessments.course_id` became **tenant-scoped composite
+--     foreign keys** — see the RLS strategy section for why RLS alone could not cover this.
 
 -- Graded components of a course (syllabus-derived or manual).
 create table assessments (
@@ -3769,6 +3827,25 @@ feature's migration, never ahead of need.
    future exception — shared/group spaces — will introduce membership-scoped policies
    (`exists (select 1 from members ...)`) and was deliberately deferred (see cut
    features).
+7. **Tenant-scoped foreign keys — added 2026-07-18 after a hole was found in Wave 1.**
+   RLS validates only the row being **written** (`(select auth.uid()) = user_id`). It never
+   validates the row being **pointed at**. With single-column foreign keys, user B could
+   insert an assessment legitimately owned by B that references user A's `course_id`, and
+   Postgres accepted it — verified against the live project (HTTP 201, twice: once via
+   `courses.semester_id`, once via `assessments.course_id`).
+   **This is not something RLS can express**, so it must be structural: every FK between two
+   user-owned tables is widened to `(fk_column, user_id)` referencing a `(id, user_id)` unique
+   key on the parent. The parent pair only exists when both rows share an owner, so a
+   cross-tenant reference has nothing to resolve against and is rejected outright.
+   **This is now a convention: any future FK between user-owned tables must be composite.**
+   Application-layer ownership checks are *not* a substitute — the whole point is that
+   service-role writers (rule 3: Inngest functions, webhook handlers) bypass both RLS and the
+   Server Actions, and they are exactly the code that must not be able to corrupt tenancy.
+   Two implementation notes: use `on delete set null (fk_column)` — naming the column, a
+   PostgreSQL 15+ feature — because the bare form would try to null `user_id`, which is
+   `not null`; and a nullable FK column keeps `match simple` semantics, so an unassigned
+   child (a course with no semester) correctly skips the check.
+   Applied to the foundation tables in `20260718140050_tenant_scoped_fks_and_grading_scale`.
 
 ---
 
@@ -4102,11 +4179,53 @@ uploads every lecture's materials (topic pages appear minutes later).
   Added as M1 work item 12 below. Caveat carried forward: per-user AI-budget metering is still
   wanted before opening the access code widely (a leaked code + shared provider keys — Anthropic
   + Gemini — can drain the global budget, which the kill switch would then pause for everyone).
+  **⚠ Corrected 2026-07-18 — "codes rotatable/per-invite" is stale.** Shipped is a **single
+  `ACCESS_CODE` env value**; per-invite codes are explicitly deferred to M4. Rotation works
+  (each gate cookie is derived from the code, so changing the value invalidates every issued
+  cookie — unit-tested), but there is no per-invite table and none is planned before M4.
+
+- **✅ Wave 1 shipped and merged to `main` (2026-07-18, merge `b1f79f3`)** — items **13a, 13b,
+  12 and 1b**, built in sequence with an independent review gate after each. 12 commits;
+  119 unit tests and 28 Playwright tests green alongside typecheck, lint and build.
+  **The review gates caught what the verify chain could not**, which is the transferable
+  lesson for later waves:
+  - A **complete bypass of the access-code gate via Server Actions**. `UNGATED_PATHS`
+    exempted the `/auth/update-password` *page*, and Next bundles Server Actions into pages —
+    so `signUp`, `signIn` and `resetPassword` were all invokable with **no code at all**,
+    confirmed against a production build with real action digests. The gate was a UI curtain,
+    not a boundary. **Rule learned: never exempt a *page* from the gate — only GET-only route
+    handlers.** Fixed in `8cb4c68`.
+  - An **open redirect** on `/auth/confirm` and `/auth/callback`: `` `${origin}${next}` ``
+    resists `//evil.com` but not `next=@evil.com`, where the real host becomes *userinfo*.
+    Fixed in `53c560c`.
+  - **Two WCAG AA failures that a naive contrast checker passed**, both caused by
+    out-of-gamut OKLCH — see the gamut warning in *Identity & design*.
+  - **WCAG 3.3.7 (Level A) form-wiping** and a `cn()`/tailwind-merge config that silently
+    deleted design-system type classes. Both were in *shared primitives*, so they were
+    repaired (`fa49620`) **before** foundation CRUD was built on them rather than after.
+  - A `<Button render={<Link/>}>` pattern that **rendered three pages completely blank while
+    typecheck, lint, test and build all stayed green.** **Rule learned: the verify chain does
+    not catch blank-page rendering — every wave must click through its routes in a real
+    browser before being called done.**
+  - A **cross-tenant foreign-key hole RLS cannot express** — see *RLS strategy* rule 7.
+    Closed structurally in `20260718140050`.
+
+  **Known gaps carried out of Wave 1** (none blocking, all deliberate): the `.reading`
+  register has no consumer surface until topic pages; no sync-status chip (nothing to report
+  on until ICS feeds exist — a chip that always reads "ok" is a lie in waiting); ⌘K has
+  Navigate + Appearance only (Actions and Search need the deadline model and the pipeline);
+  the two signature motions (hero-number roll, sync-pulse) are specified but unimplemented;
+  `/calendar` and `/documents` are designed teaching empty states, not features.
+  **Defects carried:** sticky table headers are inert (see *Component conventions*);
+  outline-variant button borders sit at ~1.33:1 against a 3:1 floor (inputs were fixed,
+  buttons missed); `notFound()` returns HTTP 200 (no data leaks — verified); and there is
+  **no favicon, PWA manifest or app icon of any kind**, so a deployed app shows the browser's
+  default globe.
 
 | # | Work item | Effort | Spec |
 | --- | --- | --- | --- |
 | 0 | ✅ Rename to Alex's Study Dashboard + cockpit design system (scope `@study/*`, tokens, dark default, email copy) — shipped 2026-07-16 | S | Vision § Identity & design |
-| 1 | Foundation: `semesters`/`courses`/`assessments` migrations + course CRUD UI — ✅ migration applied + types regenerated + committed (`7e15ef1`); ⏳ course CRUD UI still to build | S–M | Data model |
+| 1 | ✅ **DONE** Foundation: `semesters`/`courses`/`assessments` migrations + course CRUD UI — migration applied + types regenerated (`7e15ef1`); CRUD UI shipped in Wave 1 (`609d211`): `/courses` list + create/edit/archive, `/courses/[id]` with inline assessments CRUD and a warn-don't-block weight total, semesters CRUD at `/courses/semesters`. RSC reads, Server Action writes, Zod at every boundary. Full CRUD round-tripped live; RLS verified with two accounts | S–M | Data model |
 | 2 | Inngest wiring (`/api/inngest`, client, env, first no-op function) | S | Architecture |
 | 2b | **AI provider layer (multi-provider):** wire `@ai-sdk/google` alongside `@ai-sdk/anthropic`; evolve `packages/ai/src/models.ts` from the 3-tier `MODELS` map to the job→(provider,model) registry (`MODELS` + `JOBS` + `RANK`) with `getModel(job)`; add `GOOGLE_GENERATIVE_AI_API_KEY` through the full env checklist (`env.ts`, `.env.example`, `turbo.json`, CI, Vercel); per-provider price tables + `(provider, model)` stamp in the cost rollup. Prerequisite for **items 5, 7, 10 and 11** — every M1 item that makes an LLM call. Items 3 and 4 (CAL-1/CAL-2) are AI-free and can run in parallel with it. | S–M | AI strategy §1/§1b |
 | 3 | Calendar hub CAL-1: provider interface, ical.js parsing w/ naked-TZID IANA fallback + real-feed DST fixtures, **sync engine (dedup, tombstones — the priority: IE signals cancellation only by disappearance)**, generic RRULE support to spec (IE feed has none), feed CRUD | M–L | Deadlines & calendar hub §3.4–3.6 |
@@ -4118,8 +4237,8 @@ uploads every lecture's materials (topic pages appear minutes later).
 | 9 | Participation & Attendance Ledger (PWA manifest, 2-tap logging) | M | Additional #4 |
 | 10 | Case-brief slice (pipeline step for `case`-tagged docs) | S–M | Additional #2 |
 | 11 | *Stretch:* NL quick-add (CAL-3), syllabus → `assessments` extraction | S+S | Calendar §6, Additional #3 |
-| 12 | Auth v2: access-code gate (landing page + `proxy.ts` enforcement, rotatable codes) → email+password sign-up/login (email verify + password reset via the Resend hook) → analyst-terminal `/login` redesign | M | Vision § Identity & design; Roadmap M0.5 |
-| 13 | **Design-system migration:** port `globals.css` to the azure analyst-terminal tokens (incl. `--surface`, `--accent-text`, `--reading-*`, heat-ramp, course, persona, `--chart-1..8`); add Newsreader + JetBrains Mono via `next/font` and retire Geist Mono; add Phosphor and migrate off `lucide-react`; build the shell (sidebar + ⌘K + route map) and the `.reading` register wrapper; update the Resend email button to `#1c74d8`; follow-up migration turning `courses.color` into a palette key | M | Vision § Identity & design |
+| 12 | ✅ **DONE** Auth v2: access-code gate (landing page + `proxy.ts` enforcement) → email+password sign-up/login (email verify + password reset via the Resend hook) → analyst-terminal `/login` redesign. Shipped Wave 1 (`eed1b12`, `8cb4c68`, `53c560c`). Single `ACCESS_CODE` env var, **not** per-invite (deferred to M4); constant-time Web Crypto comparison (Edge has no `node:crypto`); cookie derived from the code so rotation revokes. ⚠ One clause **unproven**: signup email delivery was only ever probed with `@example.com`, which Resend refuses — needs one test with a real address | M | Vision § Identity & design; Roadmap M0.5 |
+| 13 | ✅ **DONE** **Design-system migration**, split into 13a (tokens) + 13b (shell). 13a (`6603b3e`, `06ed42b`): `globals.css` ported to the azure tokens in both themes, Newsreader + JetBrains Mono, Geist Mono retired, Phosphor migrated (lucide gone, lockfile included), email button `#1c74d8`, `courses.color` → palette key. 13b (`2bfde9b`, `f404812`): `(app)` route group, collapsible sidebar + mobile tab bar, ⌘K palette, 12 shadcn components, `loading.tsx`/`error.tsx`, jsdom + RTL test infrastructure, motion + type-scale tokens. ⚠ `.reading` wrapper exists but has **no consumer** until topic pages (item 6) | M | Vision § Identity & design |
 
 **Definition of done**
 
@@ -4141,12 +4260,29 @@ uploads every lecture's materials (topic pages appear minutes later).
   transitions land at the right local time (fixture-tested from the real export).
 - Every new table has RLS policies; every AI call appears in `ai_generations` with cost;
   `AI_KILL_SWITCH=true` verifiably stops all spend.
-- Auth: a visitor to the domain root hits the **access-code gate** and cannot reach
-  `/login` or `/signup` without a valid code; with a code, email+password sign-up (with
-  email verification) and login work end-to-end; the `/login` page matches the design system.
-- Every M1 UI surface renders in the azure analyst-terminal system (item 13): tokens ported,
-  Newsreader/JetBrains Mono loaded, Phosphor icons, sidebar + ⌘K shell, reading register live
-  on topic pages.
+- **🟡 MOSTLY MET (Wave 1, 2026-07-18)** Auth: a visitor to the domain root hits the
+  **access-code gate** and cannot reach `/login` or `/signup` without a valid code; with a
+  code, email+password sign-up (with email verification) and login work end-to-end; the
+  `/login` page matches the design system.
+  - ✅ Gate enforced at the **proxy layer**, not the UI — 14 hand-run bypass probes against a
+    production build (direct URL, case/slash/encoding variants, Server Action POSTs, matcher
+    gaps) all blocked, plus 28 e2e tests.
+  - ✅ Login, password reset and email verification each round-tripped live with real tokens;
+    `/login` matches the system in both themes.
+  - ⚠ **Sign-up end-to-end is unproven, not broken.** Every 500 observed came from
+    `@example.com` probe addresses, which Resend refuses to deliver to (reserved domain), so
+    the hook 500s and GoTrue rolls the signup back. No real address was ever tested.
+    **Close this with one signup using a deliverable address.**
+- **🟡 PARTIALLY MET (Wave 1, 2026-07-18)** Every M1 UI surface renders in the azure
+  analyst-terminal system (item 13): tokens ported, Newsreader/JetBrains Mono loaded, Phosphor
+  icons, sidebar + ⌘K shell, reading register live on topic pages.
+  - ✅ Tokens, fonts, Phosphor, and the sidebar + ⌘K shell all shipped; all 8 routes verified
+    in a real browser in both themes at desktop and 375px, zero console errors or warnings.
+  - ❌ **"Reading register live on topic pages" is not met and was never deliverable in
+    Wave 1** — the `.reading` class exists and is correct, but topic pages arrive with the
+    document pipeline (item 6). Unmet by scope, not by failure.
+  - Note "every M1 UI surface" currently means 8 routes plus 4 auth surfaces; `/calendar` and
+    `/documents` are designed empty states awaiting items 3–5.
 - Deployed on Vercel; CI green; participation loggable from a phone in < 5 seconds.
 
 ### M2 — "The app changes grades": practice engine + exam planner
