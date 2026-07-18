@@ -16,6 +16,7 @@
       "!pnpm-lock.yaml",
       "!packages/db/src/types/database.ts",
       "!packages/db/supabase/.temp",
+      "!.claude",
       "!**/*.css"
     ]
   },

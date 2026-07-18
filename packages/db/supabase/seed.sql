@@ -1,0 +1,9 @@
+-- Local development seed data.
+--
+-- Runs automatically after migrations on `pnpm db:reset` (config.toml → [db.seed]).
+-- Intentionally empty for now: every table is user-owned and keyed to auth.users,
+-- so meaningful seeds need a local auth user to hang off. Add fixtures here when
+-- local development of courses / calendar / documents needs them, and keep them
+-- idempotent (`on conflict do nothing`) so repeated resets stay clean.
+--
+-- Never seed production data or anything derived from the real ICS feed.
