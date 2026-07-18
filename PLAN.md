@@ -2169,6 +2169,30 @@ below.) Two observations from the real feed drive the **fallback** path:
   courses have feed rows incomplete relative to their true session count (see the revision
   below).
 
+  ✅ **DECIDED 2026-07-19 (Wave 2) — the `2` in that list was a FALSE POSITIVE.**
+  `ATTENTION MANAGEMENT FOR LEARNING` is **not a real course**. Alexander confirmed it, so
+  its detected "exam" (2026-09-25, session 2 of 2) is not an exam. It has been **rejected
+  through the UI** — `setExamDate`, so the `is_exam_candidate` lock is written by the real
+  code path — and the **course archived** (`courses.archived = true`). The panel now reads
+  6 courses, not 7.
+
+  ⚠ **This is the false positive the pre-implementation review predicted**, and it landed
+  exactly as described: a 2-session course whose last session is *trivially* "the final".
+  The general limitation is worth stating plainly, because it is not fixed:
+
+  > 🔴 **Known limitation: step 1 has no plausibility floor.** `detectExam` accepts any
+  > `courses.total_sessions` that is a finite number `> 0`. A 2-session course resolves
+  > "session 2 is the exam" with exactly the same machinery and the same reported confidence
+  > as a 30-session course, even though "the last of two sessions" carries essentially no
+  > evidence that an exam happened there. Nothing in the chain asks whether a course is long
+  > enough for a final to be a meaningful concept. The confirm gate is the only thing
+  > standing between that and a wrong date on the dashboard — which is an argument for the
+  > gate, not a substitute for a floor.
+
+  A floor was **not** added here: with one known instance, the honest fix is the user's
+  rejection (which is now durable and reversible), not a threshold guessed from a single
+  data point. Revisit if a second false positive appears.
+
 > **⚠ REVISED 2026-07-18 (Alexander's decision) — the syllabus session count is the PRIMARY
 > oracle, and max-session becomes the fallback.** The rule is now:
 > **the syllabus declares a total session count `N` → find the calendar event carrying
@@ -2422,6 +2446,42 @@ two gates deliberately reserved by the Human-reversible-AI principle.
 > proposal until then. A syllabus/feed disagreement surfaces on the same row as a one-tap
 > conflict (`ExamStatus.conflict`), never a silent pick.
 
+> ✅ **DECIDED 2026-07-19 (Wave 2) — exam dates are USER-EDITABLE after detection, and no
+> state is a dead end.** Alexander's requirement: the six remaining exam dates look right,
+> but he must be able to change them later. The 2026-07-18 gate above satisfied "confirm or
+> reject" and nothing more, and two of its properties turned out to be defects:
+>
+> - **Rejection was a one-way door with no visible effect.** It wrote `is_exam_candidate =
+>   false` with no marker distinguishing it from "never touched" — and because
+>   `buildExamStatuses` **re-runs the chain at read time**, the very next render re-detected
+>   the same session and displayed it again. "Not an exam" was a button that appeared to do
+>   nothing, and there was no way back from it either.
+> - **The wrong session could not be corrected.** Only the detector's own candidate could be
+>   accepted or refused; if it picked the wrong session there was no path to the right one.
+>
+> Three intents replace the two (`setExamDate`): **set** a session as the exam, **reject** the
+> course's exam entirely, **reset** back to letting detection propose. `set`/`reject` name a
+> session; `reset` names a *course*, because after a rejection there is no session left to
+> point at — that asymmetry is precisely what made rejection terminal.
+>
+> - A rejected course **stays in the panel**, reading *"You said this course has no exam"*,
+>   with Undo beside it. A row that disappears is a decision that cannot be found again.
+> - **Exactly one `is_exam_candidate` per course** is enforced in `planExamDecision`, a pure
+>   function unit-tested over its own output — including from a corrupted two-candidate start.
+>   The UI is not trusted to maintain the invariant and neither is the action.
+> - Every decision locks `is_exam_candidate` via `user_locked_fields`; **`reset` removes the
+>   lock**, since leaving it would pin the row to its reset value forever.
+> - Two existing columns carry the decision, so this needed **no migration and no new
+>   `detection_source` value**: `'manual'` + flag set = *the user chose this*; the lock + flag
+>   clear = *the user said no*. No oracle writes either, so both are unambiguously human.
+> - 🚨 **The confirm gate and the honesty signal are both untouched.** Nothing becomes
+>   confirmed without an explicit action, and no action on this panel can reach the
+>   confidence chip — it is computed from `courses.total_sessions_source` alone. Confirming
+>   says *which session*, never *where the session count came from*.
+>
+> The 6 remaining exams were deliberately **left unconfirmed and editable**: Alexander said
+> they look correct but hedged, and the confirm click is his to make.
+
 #### 5.2 Grade-impact weighting
 
 The number that drives ranking is **weight_percent**: how much of the course grade the
@@ -2568,6 +2628,48 @@ correct feeling is "clear this week, exam in 9 days," never false calm.
 > the fold at every viewport. Grouping also makes one click worth making: assigning a
 > pattern files that course's entire history *and* writes the `course_matchers` row that
 > files all its future events automatically.
+
+> ✅ **DECIDED 2026-07-19 (Wave 2) — the bucket surfaces ACTIONABLE items; a finished term is
+> demoted, not deleted.** Grouping and collapsing were not enough. Once the 2025/26 Spring
+> term was decided against ever being seeded (see the M1 note), **all 217 visible unmatched
+> items are permanently in the past** — verified: 217 past occurrences, **0 current or
+> future**. So the collapsed line read *"217 across 15 courses"* forever, above the
+> deadlines, about work that finished in June.
+>
+> That is worse than clutter. The bucket's entire justification is that it is *actionable*;
+> a count that never falls and never matters teaches the reader to skip it, and then it gets
+> skipped on the day it finally carries something from this term.
+>
+> `partitionUnassigned(groups, now)` splits on **"is anything in this group still to come"**,
+> keyed on the group's LAST event (a course running Jan→Dec is live in July; keying on the
+> first would bury it):
+>
+> - **Anything still to come** → the section renders as before, counting only the actionable
+>   groups, with a *"N more from earlier terms"* sub-disclosure underneath.
+> - **A finished term only** → one muted line, no border, no background, below everything:
+>   *"217 unmatched entries from earlier terms"*, expanding on click.
+>
+> **No rows are hidden from the user and none are deleted — this is a display decision.** The
+> history stays reachable for two reasons: filing a finished course still writes the
+> `course_matchers` rule that auto-links it if it ever returns, and 217 rows that no surface
+> renders are 217 rows nobody can ever find, which is the failure the bucket exists to
+> prevent. Verified against real data at both ends: pinned to today the bucket is one quiet
+> line; pinned to 2026-03-01 it renders 209 actionable items across 13 courses with 8
+> historical behind the sub-disclosure.
+
+> ✅ **DECIDED 2026-07-19 (Wave 2) — archiving a course excludes it from NEW matching, and
+> existing item links SURVIVE.** Found while archiving `ATTENTION MANAGEMENT FOR LEARNING`.
+> Archiving must stop a course claiming newly synced events, or a course archived in June
+> keeps absorbing them forever — so archived courses are dropped from the sync's match
+> context. ⚠ **That alone was destructive**: `matchCourse` returns `null` for "no answer",
+> `toSyncedItemPayload` copies it into `course_id`, and the diff then wrote `course_id →
+> null` on every already-linked row, tipping a whole archived course into the Unassigned
+> bucket. `preserveCourseLink` closes it with the rule **matching is additive** — it may give
+> an unassigned item a course, it may move an item when it positively identifies a different
+> one, it may never take a course away on the strength of having no opinion. The same hole
+> fired on a course rename and on a deleted `course_matchers` row. Verified end-to-end: after
+> archiving and **two real syncs against the live IE feed**, both items stayed linked and the
+> unassigned count stayed at 217.
 
 > **🎨 MEASURED 2026-07-18 (Wave 2, CAL-2) — the heat-ramp badge failed WCAG AA in light
 > mode and `--urgency-medium` was retuned.**
@@ -4955,13 +5057,36 @@ uploads every lecture's materials (topic pages appear minutes later).
   outside** — so guard 2 of the exam-detection rule (candidate must sit inside term bounds)
   now has real data to test against and passes on the whole term.
 
-  ⚠ **Gap: the 2025/26 Spring term has no `semesters` row.** The feed's other 225 events run
-  2026-01-19 → 2026-07-18 and belong to the academic year that just ended, not to
-  `2026/27 Spring`. That matters because the historical decks and syllabi in
-  `.local-fixtures/` are from that term, so any exam-detection test run against the *sample*
-  data has no term bounds to check. Seeding it needs the **2025-2026** academic calendar,
-  which is not on file — and its end date cannot be inferred from the feed, since the
-  Jun–Jul events are the retake period rather than classes.
+  ✅ **DECIDED 2026-07-19 (Wave 2) — the 2025/26 Spring term will NOT be seeded. It is over.**
+  Resolves the gap below rather than leaving it open: Alexander confirmed the term has ended,
+  so it needs no `semesters` row and the missing 2025-2026 academic calendar stops being an
+  input anyone is waiting for.
+
+  Two consequences, both accepted and both now handled as **display**, not data:
+
+  1. **217 visible items stay permanently unmatched** (220 rows, 3 hidden). No rows are
+     deleted — they are real history, and filing one still writes the `course_matchers` rule
+     that would auto-link the course if it ever returns.
+  2. ⚠ The Unassigned bucket had been shouting *"217 across 15 courses"* at the top of the
+     calendar page **forever**, about work that finished in June and can never become urgent.
+     A count that never falls and never matters trains the reader to skip the bucket — and
+     the bucket only earns its position by being actionable. It is therefore **partitioned by
+     "is anything in this group still to come"** (`partitionUnassigned`): actionable groups
+     render as a normal section, a finished term renders as one muted line with no panel
+     chrome. Today that means the bucket is visually quiet, because zero unmatched items are
+     current or future. See §7 part 6.
+
+  > ⚠ ~~**Gap: the 2025/26 Spring term has no `semesters` row.**~~ The feed's other 225 events run
+  > 2026-01-19 → 2026-07-18 and belong to the academic year that just ended, not to
+  > `2026/27 Spring`. That matters because the historical decks and syllabi in
+  > `.local-fixtures/` are from that term, so any exam-detection test run against the *sample*
+  > data has no term bounds to check. Seeding it needs the **2025-2026** academic calendar,
+  > which is not on file — and its end date cannot be inferred from the feed, since the
+  > Jun–Jul events are the retake period rather than classes.
+  >
+  > (Superseded by the decision above. The `unbounded` flag in `boundsFlags` is what makes
+  > this harmless: a candidate with no covering semester row is flagged and KEPT, never
+  > discarded — so the absent row costs a confidence signal, not a date.)
 
   **Still outstanding, in priority order:**
   1. ✅ ~~**Lecture decks**~~ — **supplied 2026-07-18.** `.local-fixtures/decks/` holds 10
@@ -4974,17 +5099,35 @@ uploads every lecture's materials (topic pages appear minutes later).
      (Kotler 156 MB — over the 50 MB cap, so it is also the `validate`-rejection test case;
      Corporate Finance 42 MB; Business in Action 12 MB). The Deep-review DoD clause has real
      material to run against.
-  3. 🔴 **Fall-2026 syllabi — now BLOCKING for the syllabus oracle, upgraded from 🟡 on
-     2026-07-18 (Wave 2).** 3 syllabi are on file (`marketing-fundamentals-sem1.pdf`,
-     `bdba-loes-fall2025.docx`, `mathematics.pdf`) and the revised §5.1b chain resolves
-     **3 of 3** as documents — but **0 of 3 describe a fall-2026 course**, so the oracle
-     covers **0 of the 7** courses CAL-2 actually builds against. All three are 2025-26
-     first-year semester-1 documents; `mathematics.pdf` is *Applied Business Mathematics*,
-     which the feed carries as a **separate course** from `MATHEMATICS FOR DATA MANAGEMENT
-     AND ANALYSIS` (see §5.1b). Every fall course therefore resolves through the
-     `max(sessionTo)` fallback today. **A fall-2026 syllabus is the single highest-value
-     input Alexander can supply**; one file would move a course from the guarded fallback to
-     the primary oracle.
+  3. ✅ **DECIDED 2026-07-19 (Wave 2) — no fall-2026 syllabus exists yet, so the exam chain
+     stays circular BY ACCEPTANCE and stops being a blocker.** Downgraded from 🔴 BLOCKING.
+     Alexander confirmed there is no accurate fall-2026 syllabus to supply, so there is
+     nothing to wait for and no workaround is to be attempted. The consequences are recorded
+     rather than engineered around:
+     - `courses.total_sessions_source` stays `'feed_derived'` on **all 7** courses. That is
+       the honest label: the counts were read off the same feed the exam date comes from.
+     - Steps 1 and 3 of the §5.1b chain therefore remain one oracle read twice, and a
+       "7 of 7 resolved" result remains a tautology. **The UI must keep disclosing this** —
+       see the exam panel's `feed_derived` chip and its "the calendar is agreeing with
+       itself" line, which are computed from `total_sessions_source` and from nothing else.
+     - ⚠ **Confirming an exam date must never upgrade that label.** A user agreeing with the
+       calendar is not independent corroboration. Guarded by
+       `exam-status.test.ts` → *"confirming never upgrades provenance"*.
+
+     The original text is kept below, because it still describes what a syllabus WOULD buy
+     if one ever arrives:
+
+     > 🔴 ~~**Fall-2026 syllabi — now BLOCKING for the syllabus oracle, upgraded from 🟡 on
+     > 2026-07-18 (Wave 2).**~~ 3 syllabi are on file (`marketing-fundamentals-sem1.pdf`,
+     > `bdba-loes-fall2025.docx`, `mathematics.pdf`) and the revised §5.1b chain resolves
+     > **3 of 3** as documents — but **0 of 3 describe a fall-2026 course**, so the oracle
+     > covers **0 of the 7** courses CAL-2 actually builds against. All three are 2025-26
+     > first-year semester-1 documents; `mathematics.pdf` is *Applied Business Mathematics*,
+     > which the feed carries as a **separate course** from `MATHEMATICS FOR DATA MANAGEMENT
+     > AND ANALYSIS` (see §5.1b). Every fall course therefore resolves through the
+     > `max(sessionTo)` fallback today. **A fall-2026 syllabus is the single highest-value
+     > input Alexander can supply**; one file would move a course from the guarded fallback to
+     > the primary oracle.
   4. ✅ ~~IE's pass mark~~ — **resolved 2026-07-18: 5/10.**
   5. 🟡 **Inngest app sync** — only possible once `/api/inngest` is deployed; needs the
      production hostname, which appears nowhere in the repo.
