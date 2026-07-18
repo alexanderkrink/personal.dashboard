@@ -15,6 +15,24 @@
 const MASK = "••••••••";
 
 /**
+ * Rewrites `webcal://` to `https://`.
+ *
+ * `webcal:` is not a transport — it is the same HTTPS URL wearing a scheme that
+ * means "hand this to a calendar app", and it is what a university's
+ * "Subscribe" button almost always produces. Refusing the exact string the user
+ * was handed would be obtuse, so it is normalized instead.
+ *
+ * Shared with `icsFeedConfigSchema` deliberately. When it lived only in the
+ * schema, a row stored before normalization rendered as a bare mask with no
+ * origin at all: `new URL("webcal://…").origin` is the string `"null"`, because
+ * `webcal` is not a *special* scheme in the URL spec. Caught in a browser, not
+ * by any of the four checks.
+ */
+export function normalizeFeedUrl(url: string): string {
+  return url.startsWith("webcal://") ? `https://${url.slice(9)}` : url;
+}
+
+/**
  * A feed URL reduced to something safe to render.
  *
  * Shows the **origin only**. The path is replaced wholesale, because on this
@@ -31,7 +49,7 @@ const MASK = "••••••••";
 export function maskFeedUrl(url: string): string {
   let parsed: URL;
   try {
-    parsed = new URL(url);
+    parsed = new URL(normalizeFeedUrl(url));
   } catch {
     return MASK;
   }

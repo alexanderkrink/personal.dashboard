@@ -23,6 +23,15 @@ describe("maskFeedUrl", () => {
     expect(masked).toBe("https://example.edu/••••••••");
   });
 
+  it("still shows the origin for a webcal:// URL", () => {
+    // Regression: `webcal` is not a *special* scheme, so `new URL(…).origin` is
+    // the literal string "null" and the mask collapsed to a bare row of dots
+    // with no host at all. A browser caught this; none of the four checks did.
+    expect(maskFeedUrl(`webcal://calendar.ie.edu/agenda/${TOKEN}.ics`)).toBe(
+      "https://calendar.ie.edu/••••••••",
+    );
+  });
+
   it("degrades to a bare mask rather than echoing an unparseable value", () => {
     // Someone pasting a naked token into the URL box must not see it rendered
     // back at them as if it were safe.

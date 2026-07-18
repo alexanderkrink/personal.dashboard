@@ -8,6 +8,7 @@
  */
 
 import { z } from "zod";
+import { normalizeFeedUrl } from "@/lib/calendar/secret";
 
 /**
  * An ICS subscription URL.
@@ -23,7 +24,7 @@ export const icsUrlSchema = z
   .string()
   .trim()
   .min(1, "Paste the calendar feed URL.")
-  .transform((value) => (value.startsWith("webcal://") ? `https://${value.slice(9)}` : value))
+  .transform(normalizeFeedUrl)
   .pipe(z.url({ protocol: /^https$/, hostname: z.regexes.domain }))
   .refine((value) => !value.includes(".."), {
     message: "That URL doesn’t look like a calendar feed.",
