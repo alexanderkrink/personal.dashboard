@@ -530,6 +530,116 @@ export type Database = {
         }
         Relationships: []
       }
+      syllabus_extraction_components: {
+        Row: {
+          assessment_id: string
+          created_at: string
+          extraction_id: string
+          id: string
+          session_note: string | null
+          source_snippet: string
+          user_id: string
+        }
+        Insert: {
+          assessment_id: string
+          created_at?: string
+          extraction_id: string
+          id?: string
+          session_note?: string | null
+          source_snippet: string
+          user_id: string
+        }
+        Update: {
+          assessment_id?: string
+          created_at?: string
+          extraction_id?: string
+          id?: string
+          session_note?: string | null
+          source_snippet?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "syllabus_extraction_components_assessment_id_fkey"
+            columns: ["assessment_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "assessments"
+            referencedColumns: ["id", "user_id"]
+          },
+          {
+            foreignKeyName: "syllabus_extraction_components_extraction_id_fkey"
+            columns: ["extraction_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "syllabus_extractions"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
+      syllabus_extractions: {
+        Row: {
+          confirmed_at: string | null
+          course_id: string
+          created_at: string
+          extracted_course_title: string
+          id: string
+          input_hash: string
+          model: string
+          notes: string | null
+          prompt_id: string
+          prompt_version: number
+          proposed_total_sessions: number | null
+          provider: string
+          source_label: string
+          total_sessions_evidence: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          confirmed_at?: string | null
+          course_id: string
+          created_at?: string
+          extracted_course_title: string
+          id?: string
+          input_hash: string
+          model: string
+          notes?: string | null
+          prompt_id: string
+          prompt_version: number
+          proposed_total_sessions?: number | null
+          provider: string
+          source_label: string
+          total_sessions_evidence?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          confirmed_at?: string | null
+          course_id?: string
+          created_at?: string
+          extracted_course_title?: string
+          id?: string
+          input_hash?: string
+          model?: string
+          notes?: string | null
+          prompt_id?: string
+          prompt_version?: number
+          proposed_total_sessions?: number | null
+          provider?: string
+          source_label?: string
+          total_sessions_evidence?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "syllabus_extractions_course_id_fkey"
+            columns: ["course_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "courses"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
     }
     Views: {
       ai_daily_cost: {
