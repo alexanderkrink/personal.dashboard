@@ -443,10 +443,20 @@ roll → instant set, pulse → static state text, transitions → crossfade/ins
 - **Dot motif** (the signature detail, contained): the azure dot is reused system-wide —
   sync/status indicators (`●` synced / `○` pending / `●` pulsing = live), loading (`●●●`
   pulse instead of a spinner), empty-state marks, list bullets, and active-nav markers.
-- **Favicon / PWA icon:** azure dot centered on the deep cockpit canvas in a rounded square
-  (~20% corner radius); provide 32/180/512px + a maskable variant with safe-area padding.
-  A `s●d` mono monogram is the acceptable large-size variant. Monochrome-accent, no small
-  text. No separate logo asset to maintain.
+- **Favicon / PWA icon — BUILT 2026-07-19, and the polarity is inverted from what this
+  bullet originally specified.** The spec said an azure dot centered on the deep cockpit
+  canvas. Measured against real browser chrome, a canvas-coloured plate sits at **1.25:1**
+  on a dark tab strip — it disappears, leaving an unanchored floating dot. The shipped mark
+  therefore **inverts**: an **azure plate with the cockpit canvas knocked out** of it, same
+  two colours and same single motif, but it holds in both browser themes. Dot 43.75% of the
+  canvas (7px at 16px, the floor at which it still resolves as a deliberate circle); 20%
+  corner radius on `icon.svg` only. Sizes 16/32/48 (`favicon.ico`), 180 (`apple-icon.png`),
+  512 + maskable (`public/`). **apple-icon and maskable are full-bleed** — iOS and Android
+  apply their own mask and a baked-in radius double-rounds. One dark variant everywhere: no
+  `prefers-color-scheme` swap, because the azure plate needs no theme-specific rescue.
+  The `s●d` mono monogram was built and **rejected** — it is illegible below ~48px, and
+  keeping it would have meant a second small-size asset, which this bullet rules out.
+  Monochrome-accent, no small text, no separate logo asset to maintain.
 
 #### Navigation
 

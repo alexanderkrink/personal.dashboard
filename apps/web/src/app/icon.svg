@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Alex's Study Dashboard">
+  <!--
+    The dot motif, inverted: an azure plate with the cockpit canvas knocked out of it.
+
+    NOTE: no CSS custom-property names appear in this comment. XML forbids a double hyphen
+    inside a comment, so writing the tokens with their leading dashes makes the whole file
+    fail to parse. It still serves a 200 and still passes the build; the tab just silently
+    shows a globe. Biome does not lint SVG, so the only thing that catches it is
+    icon.test.ts, which parses this file and samples the pixels it rasterises to.
+
+    Colours are the MEASURED sRGB the browser paints for the app's own dark-theme tokens,
+    not the approximations in the globals.css comments. Both azures are outside the sRGB
+    gamut, so these are the clipped values a rasteriser produces anyway:
+
+      #00a4ed   accent token,     oklch(0.68 0.16 237)    bright azure
+      #04080b   background token, oklch(0.13 0.012 237)   cockpit canvas
+
+    Contrast dot-on-plate is 7.21:1. The plate is azure rather than canvas because a canvas
+    plate measures 1.25:1 against a dark browser tab strip and effectively disappears; the
+    azure plate holds in both browser themes, which is why this ships a single variant with
+    no prefers-color-scheme swap.
+
+    Geometry: 20% corner radius (102.4/512). Dot diameter 43.75% of the canvas, which is
+    7px at a 16px favicon: the smallest size at which it still resolves as a circle.
+
+    The corner radius is baked in HERE only. apple-icon.png and the maskable icon are
+    full-bleed, because iOS and Android apply their own mask and a baked radius
+    double-rounds.
+  -->
+  <rect width="512" height="512" rx="102.4" ry="102.4" fill="#00a4ed"/>
+  <circle cx="256" cy="256" r="112" fill="#04080b"/>
+</svg>
