@@ -10,6 +10,7 @@ import {
   setDocumentStatus,
 } from "@/inngest/documents";
 import { documentUploaded, documentUploadedData } from "@/inngest/events";
+import { runExtract } from "@/inngest/extract";
 import { deriveOwner } from "@/inngest/owner";
 
 /**
@@ -99,7 +100,13 @@ export const processDocument = inngest.createFunction(
     const document = await step.run("load-document", async () => {
       const { data, error } = await adminClient()
         .from("documents")
-        .select("id, course_id, storage_path, filename, mime_type, size_bytes, kind, status")
+        // `courses (title)` is joined rather than fetched separately because the
+        // extraction prompt needs it and a second round trip for one string is
+        // waste. The FK is composite `(course_id, user_id)`, so this join cannot
+        // reach another tenant's course even through the admin client.
+        .select(
+          "id, course_id, storage_path, filename, mime_type, size_bytes, kind, status, courses (title)",
+        )
         .eq("id", documentId)
         .eq("user_id", userId)
         .single();
@@ -207,13 +214,39 @@ export const processDocument = inngest.createFunction(
       };
     });
 
+    // ── extract ──────────────────────────────────────────────────────────────
+    //
+    // §4.1/§4.2. Three routes (native PDF, PPTX XML, PPTX→PDF via CloudConvert)
+    // and one `generateObject` on the `doc-structuring` job. This is the first
+    // LLM call an Inngest function in this repo makes; see `inngest/extract.ts`.
+    //
+    // Its own step, so a transport failure re-runs the extraction and not the
+    // validation — and so the Inngest dashboard shows where a slow document is
+    // actually spending its time. It is by far the longest step in this
+    // function, which is why the status UI's watchdog now backs off (see
+    // `lib/documents/use-document-feed.ts`).
+    const extraction = await step.run("extract", () =>
+      runExtract({
+        admin: adminClient(),
+        userId,
+        documentId,
+        courseId: document.course_id,
+        courseTitle: document.courses?.title ?? "this course",
+        filename: document.filename,
+        storagePath: document.storage_path,
+        format: validation.format,
+      }),
+    );
+
     // ── The seam ─────────────────────────────────────────────────────────────
     //
-    // extract → segment-and-route → merge:<topic> → chunk-and-embed → coverage
-    // → glossary → (syllabus-components | case-brief) → (deep-review) all go
-    // HERE, between a validate that works and a finalize that works. Each is a
-    // `step.run` inserted into this list; none of them needs to change the two
-    // steps around it.
+    // segment-and-route → merge:<topic> → chunk-and-embed → coverage → glossary
+    // → (syllabus-components | case-brief) → (deep-review) all go HERE, between
+    // an extract that works and a finalize that works. Each is a `step.run`
+    // inserted into this list; none of them needs to change the steps around it.
+    // `extraction` above carries the route, the fidelity and the page counts;
+    // the extraction itself is on the `documents` row, because it is far too
+    // large to thread through a step's return value.
 
     // ── finalize ─────────────────────────────────────────────────────────────
     await step.run("finalize", async () => {
@@ -245,6 +278,7 @@ export const processDocument = inngest.createFunction(
       courseId: document.course_id,
       status: "ready" as const,
       format: validation.format,
+      extraction,
     };
   },
 );

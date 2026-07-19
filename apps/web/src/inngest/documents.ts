@@ -218,3 +218,44 @@ export async function downloadDocumentBytes(
 
   return new Uint8Array(await data.arrayBuffer());
 }
+
+/** How long an extraction's signed URL stays valid. Generous; the step uses it at once. */
+const SIGNED_URL_TTL_SECONDS = 600;
+
+/**
+ * Downloads a document's bytes through a **signed URL** (PLAN §4.1's mechanics).
+ *
+ * `downloadDocumentBytes` above pulls the same bytes through the storage client and is
+ * simpler, so the difference is worth stating rather than leaving as an inconsistency:
+ *
+ *   - §4.1 specifies this path explicitly, and Gate 2 measured it end to end —
+ *     `createSignedUrl` → `GET` → `200`, bytes byte-identical — precisely to derisk this
+ *     step. Using the path that was verified beats using the one that was not.
+ *   - It is the only shape that generalizes. Handing a *URL* to a provider that fetches
+ *     the file itself (Gemini's File API, for large PDFs) is a change of one argument from
+ *     here and a rewrite from the download path.
+ *
+ * The TTL is long enough that a slow extraction cannot outlive its own URL, and short
+ * enough that a URL leaked into a log is not a durable handle on a private bucket.
+ */
+export async function downloadViaSignedUrl(
+  admin: SupabaseAdminClient,
+  storagePath: string,
+): Promise<Uint8Array> {
+  const { data, error } = await admin.storage
+    .from(DOCUMENTS_BUCKET)
+    .createSignedUrl(storagePath, SIGNED_URL_TTL_SECONDS);
+
+  if (error !== null || data === null) {
+    throw new Error(`Could not sign ${storagePath}: ${error?.message ?? "no signed URL returned"}`);
+  }
+
+  const response = await fetch(data.signedUrl);
+  if (!response.ok) {
+    // Retriable: a 5xx from Storage says nothing about the file. The URL itself cannot
+    // have expired this fast, so a 4xx here is worth surfacing rather than special-casing.
+    throw new Error(`Signed download of ${storagePath} returned ${response.status}`);
+  }
+
+  return new Uint8Array(await response.arrayBuffer());
+}

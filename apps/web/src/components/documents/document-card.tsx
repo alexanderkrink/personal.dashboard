@@ -3,8 +3,10 @@
 import {
   ArrowClockwise,
   CheckCircle,
+  Eye,
   FilePdf,
   FilePpt,
+  TextAlignLeft,
   Trash,
   WarningCircle,
   XCircle,
@@ -50,8 +52,9 @@ import { cn } from "@/lib/utils";
 const CHECKLIST: ReadonlyArray<{ status: string; label: string }> = [
   { status: "queued", label: "Queued" },
   { status: "validating", label: "Checking the file" },
-  // extracting / structuring / merging / embedding attach HERE, in enum order,
-  // as their steps land.
+  { status: "extracting", label: "Reading the pages" },
+  // structuring / merging / embedding attach HERE, in enum order, as their
+  // steps land.
   { status: "ready", label: "Done" },
 ];
 
@@ -213,16 +216,65 @@ export function DocumentCard({
 
       {/* ── ready: collapsed to a summary (§8) ──────────────────────────── */}
       {document.status === "ready" ? (
-        <p className="mt-2 text-muted-foreground text-ui-xs">
-          {/* §8's summary line is "Contributed to 4 topics" plus a coverage
-              line. Both are computed by steps that do not exist yet, so this
-              says the true thing instead of a placeholder shaped like the
-              eventual one. */}
-          Checked and stored. Topic extraction lands with the next pipeline steps.
-        </p>
+        <div className="mt-2 flex flex-col gap-1">
+          <p className="text-muted-foreground text-ui-xs">
+            {/* §8's summary line is "Contributed to 4 topics" plus a coverage
+                line. Both are computed by steps that do not exist yet, so this
+                says the true thing instead of a placeholder shaped like the
+                eventual one. */}
+            Read and stored. Topic extraction lands with the next pipeline steps.
+          </p>
+          <FidelityNote fidelity={document.extraction_fidelity} />
+        </div>
       ) : null}
     </li>
   );
+}
+
+/**
+ * "Why does this page look thin?" — `documents.extraction_fidelity`, explained.
+ *
+ * PLAN's 🔴 measured block of 2026-07-18 is explicit that this "stops being a rarely-used
+ * field and becomes a routine UI state, so the explanation must be built, not stubbed."
+ * The corpus bears that out: four of five Marketing decks take the visual path and three
+ * of three Micro decks take the text path, so within one semester a user sees both, on
+ * documents that look identical in the list.
+ *
+ * The two cases genuinely need different sentences, and neither is an error:
+ *
+ *  - **`visual`** — the document was *seen*: a native PDF, or a picture-heavy deck we
+ *    converted to PDF first. Diagrams and charts were read. This is the good case and it
+ *    says so briefly, because a reassurance nobody needed is still clutter.
+ *  - **`text-only`** — the deck's own text was rich enough that its images were not worth
+ *    the conversion, so figures were *not* read. That is the state that produces a thinner
+ *    topic page than the user expects, and it is the one this component exists for. It
+ *    names the cause and the remedy rather than apologising.
+ *
+ * A `null` renders nothing: an older document processed before this field existed has no
+ * honest answer, and inventing one would be worse than staying quiet.
+ */
+function FidelityNote({ fidelity }: { fidelity: string | null }) {
+  if (fidelity === "visual") {
+    return (
+      <p className="text-muted-foreground text-ui-xs">
+        <Eye aria-hidden className="mr-1 inline size-3.5 align-[-2px]" />
+        Read visually — diagrams, charts and equations on the pages were included.
+      </p>
+    );
+  }
+
+  if (fidelity === "text-only") {
+    return (
+      <p className="text-muted-foreground text-ui-xs">
+        <TextAlignLeft aria-hidden className="mr-1 inline size-3.5 align-[-2px]" />
+        Read from the deck’s text, which was detailed enough not to need the images. Anything that
+        only appears inside a diagram or a screenshot won’t be in the notes — re-upload it as a PDF
+        if a figure matters.
+      </p>
+    );
+  }
+
+  return null;
 }
 
 const KIND_LABELS: Readonly<Record<string, string>> = {

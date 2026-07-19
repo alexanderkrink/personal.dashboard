@@ -106,8 +106,34 @@ const TERMINAL_STATUSES = new Set(["ready", "partial", "failed"]);
 /** How many feed lines to keep per course. The card shows the last few per document. */
 const FEED_LIMIT = 200;
 
-/** Reconciliation cadence while work is in flight. Stops entirely when it isn't. */
-const WATCHDOG_MS = 4000;
+/**
+ * Reconciliation cadence while work is in flight. Stops entirely when it isn't.
+ *
+ * ## Why this backs off, as of Wave 4's `extract` step
+ *
+ * A flat 4 s was right when the whole pipeline was `validate → finalize` and ran in about
+ * 1.5 s: the watchdog fired once or twice and the document was done. `extract` changes the
+ * arithmetic completely — a real multimodal read of a 40-page deck takes a minute or more,
+ * and a *failing* document sits non-terminal for ~3 minutes while Inngest's retries back
+ * off. At a flat 4 s that is ~45 round trips per document, every one of them re-reading
+ * the full document list and 200 feed rows, to learn nothing.
+ *
+ * The distinction that matters is **slow vs missing**, and they need opposite treatment:
+ *
+ *  - a document that is *progressing* (its status moved, or a new feed line landed) is
+ *    being narrated correctly and needs no reconciliation at all — the transport is
+ *    working, so the watchdog should get out of the way;
+ *  - a document that is *silent* might be a dropped Realtime frame, which is the whole
+ *    reason this exists — but the longer the silence, the less likely another immediate
+ *    poll is the thing that resolves it.
+ *
+ * So the interval starts tight and doubles up to a ceiling while nothing changes, and
+ * **resets to tight the moment anything does**. A document that finishes in two seconds is
+ * still caught in two seconds; one that grinds for three minutes costs ~8 requests instead
+ * of ~45. Both bounds stay small enough that the status card never feels stale.
+ */
+const WATCHDOG_MIN_MS = 4000;
+const WATCHDOG_MAX_MS = 30_000;
 
 export interface DocumentFeed {
   readonly documents: readonly DocumentRow[];
@@ -260,11 +286,45 @@ export function useDocumentFeed(
   // itself the moment the last one finishes.
   const hasWorkInFlight = documents.some((document) => !TERMINAL_STATUSES.has(document.status));
 
+  /**
+   * What "something changed" means, as one comparable string.
+   *
+   * Statuses **and** the newest feed line: during a long `extract` the status sits on
+   * `extracting` for a minute while progress lines keep arriving, and treating that as
+   * silence would back the watchdog off precisely when the pipeline is most alive.
+   */
+  const progressSignature = `${documents.map((document) => `${document.id}:${document.status}`).join(",")}|${events.at(-1)?.id ?? 0}`;
+
+  /**
+   * `progressSignature` is not read inside this effect, and that is the point — it is a
+   * **re-run trigger**. The body owns a `delay` that doubles on every tick, and the only
+   * way to reset it to the floor when the pipeline shows a sign of life is to rebuild the
+   * effect. Dropping it, as the lint fix suggests, would leave the backoff monotonically
+   * increasing for the lifetime of the mount: a document that finished in 2 s would still
+   * be polled at 30 s intervals half an hour later. The dependency is load-bearing
+   * precisely because it is unused inside the closure.
+   */
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset trigger — see above.
   useEffect(() => {
     if (!hasWorkInFlight || courseId === null) return;
-    const timer = setInterval(() => void backfillRef.current(), WATCHDOG_MS);
-    return () => clearInterval(timer);
-  }, [hasWorkInFlight, courseId]);
+
+    // `setTimeout` rather than `setInterval`, because the delay is recomputed each time.
+    let delay = WATCHDOG_MIN_MS;
+    let timer: ReturnType<typeof setTimeout>;
+
+    const tick = (): void => {
+      timer = setTimeout(() => {
+        void backfillRef.current();
+        delay = Math.min(delay * 2, WATCHDOG_MAX_MS);
+        tick();
+      }, delay);
+    };
+    tick();
+
+    // The effect re-runs whenever `progressSignature` changes, which tears this down and
+    // rebuilds it with `delay` back at the floor. That IS the reset — no separate ref.
+    return () => clearTimeout(timer);
+  }, [hasWorkInFlight, courseId, progressSignature]);
 
   const refresh = useCallback(() => {
     void backfillRef.current();
