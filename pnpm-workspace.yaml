@@ -3,6 +3,13 @@ packages:
   - packages/*
 
 allowBuilds:
+  # Pulled in transitively by `inngest` (its OpenTelemetry trace exporter).
+  # protobufjs' postinstall only regenerates descriptors that already ship built
+  # in the tarball, so denying it changes nothing at runtime — but the decision
+  # has to be RECORDED, not left blank: pnpm treats an undecided build script as
+  # an error, and `pnpm install --frozen-lockfile` exits 1 with
+  # ERR_PNPM_IGNORED_BUILDS, which fails CI at the install step.
+  protobufjs: false
   sharp: true
 
 # Single source of truth for versions shared across workspace packages.
