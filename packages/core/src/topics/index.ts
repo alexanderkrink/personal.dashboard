@@ -44,6 +44,14 @@ export {
   type WorkedExampleLike,
 } from "./page";
 export {
+  type MergePlan,
+  type MergeTargetLike,
+  type PlanMergeWorkInput,
+  type PriorContribution,
+  planMergeWork,
+  type SkippedTarget,
+} from "./reprocess";
+export {
   type ExtractedHeadingLike,
   type ExtractedPageLike,
   type Segment,
