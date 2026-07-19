@@ -14,6 +14,75 @@ export type Database = {
   }
   public: {
     Tables: {
+      ai_generations: {
+        Row: {
+          attempt: number
+          cache_read_tokens: number
+          cache_write_tokens: number
+          cost_usd: number | null
+          created_at: string
+          error_message: string | null
+          id: string
+          input_hash: string
+          input_tokens: number
+          job: string
+          latency_ms: number
+          model: string
+          outcome: string
+          output_tokens: number
+          prompt_id: string
+          prompt_version: number
+          provider: string
+          raw_text: string | null
+          step: string
+          user_id: string
+        }
+        Insert: {
+          attempt: number
+          cache_read_tokens?: number
+          cache_write_tokens?: number
+          cost_usd?: number | null
+          created_at?: string
+          error_message?: string | null
+          id?: string
+          input_hash: string
+          input_tokens?: number
+          job: string
+          latency_ms: number
+          model: string
+          outcome: string
+          output_tokens?: number
+          prompt_id: string
+          prompt_version: number
+          provider: string
+          raw_text?: string | null
+          step: string
+          user_id: string
+        }
+        Update: {
+          attempt?: number
+          cache_read_tokens?: number
+          cache_write_tokens?: number
+          cost_usd?: number | null
+          created_at?: string
+          error_message?: string | null
+          id?: string
+          input_hash?: string
+          input_tokens?: number
+          job?: string
+          latency_ms?: number
+          model?: string
+          outcome?: string
+          output_tokens?: number
+          prompt_id?: string
+          prompt_version?: number
+          provider?: string
+          raw_text?: string | null
+          step?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       assessments: {
         Row: {
           confirmed: boolean
@@ -463,7 +532,22 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      ai_daily_cost: {
+        Row: {
+          cache_read_tokens: number | null
+          cache_write_tokens: number | null
+          calls: number | null
+          cost_usd: number | null
+          day: string | null
+          input_tokens: number | null
+          model: string | null
+          output_tokens: number | null
+          provider: string | null
+          successes: number | null
+          user_id: string | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
       claim_calendar_feed: {
