@@ -97,6 +97,16 @@ export interface LadderOptions<T> {
   readonly maxRank?: Rank;
   /** Wall clock, injectable for deterministic tests. */
   readonly now?: () => number;
+  /**
+   * Called as each attempt *completes*, before the ladder decides what to do next.
+   *
+   * Metering hangs off this rather than off the returned `attempts` array because a
+   * transport error on a later rung propagates (see the module note above) and would
+   * otherwise discard the record of every earlier rung — attempts that already ran and
+   * already cost money. An unmetered paid call is a hole in the budget guard, so the
+   * records are handed over as they happen rather than batched at the end.
+   */
+  readonly onAttempt?: (record: AttemptRecord) => void | Promise<void>;
 }
 
 /** §2's corrective-retry wording. Appended to the prompt on rung 2. */
@@ -116,7 +126,7 @@ export async function runStructuredLadder<T>(options: LadderOptions<T>): Promise
   const run = async (request: AttemptRequest): Promise<AttemptResult<T>> => {
     const startedAt = now();
     const result = await options.attempt(request);
-    attempts.push({
+    const record: AttemptRecord = {
       model: request.model,
       step: request.step,
       attempt: request.attempt,
@@ -125,7 +135,9 @@ export async function runStructuredLadder<T>(options: LadderOptions<T>): Promise
       rawText: result.status === "success" ? undefined : result.rawText,
       usage: result.usage,
       latencyMs: now() - startedAt,
-    });
+    };
+    attempts.push(record);
+    await options.onAttempt?.(record);
     return result;
   };
 

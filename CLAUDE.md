@@ -12,7 +12,7 @@ starting feature work — it defines every feature, the data model, and the road
   - `packages/db` — Supabase clients, generated types, SQL migrations. Never reads
     `process.env`; apps inject config.
   - `packages/ai` — ALL LLM interaction lives here: providers, prompt templates,
-    Zod output schemas, model tier registry. No direct `@ai-sdk/*` or model-ID usage
+    Zod output schemas, the model-per-job registry. No direct `@ai-sdk/*` or model-ID usage
     outside this package (exception: UI streaming hooks like `useChat` from
     `@ai-sdk/react` live in apps/web, against endpoints backed by this package).
     Never reads `process.env`.

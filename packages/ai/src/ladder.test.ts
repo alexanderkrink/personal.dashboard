@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  type AttemptRecord,
   type AttemptRequest,
   type AttemptResult,
   correctiveMessage,
@@ -145,6 +146,54 @@ describe("transport errors are not the ladder's business", () => {
     });
     await expect(runStructuredLadder({ startModel: start, attempt })).rejects.toThrow("429");
     expect(attempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("still reports the rungs that already ran, so paid attempts are not lost", async () => {
+    // The `attempts` array is unreachable when the ladder throws, so metering hangs off
+    // `onAttempt` instead. Batching emits until after the ladder returned would silently
+    // drop both completed rungs here — two paid calls missing from `ai_generations`.
+    const metered: AttemptRecord[] = [];
+    const attempt = vi.fn(async (request: AttemptRequest): Promise<AttemptResult<string>> => {
+      if (request.attempt === 3) throw new Error("529 overloaded");
+      return invalid();
+    });
+
+    await expect(
+      runStructuredLadder({ startModel: start, attempt, onAttempt: (r) => void metered.push(r) }),
+    ).rejects.toThrow("529");
+
+    expect(metered.map((record) => record.step)).toEqual(["initial", "corrective-retry"]);
+  });
+});
+
+describe("onAttempt", () => {
+  it("fires once per completed attempt, in order, before the ladder resolves", async () => {
+    const metered: AttemptRecord[] = [];
+    const { attempt } = scripted(invalid(), invalid(), ok("done"));
+    const result = await runStructuredLadder({
+      startModel: start,
+      attempt,
+      onAttempt: (record) => void metered.push(record),
+    });
+
+    expect(metered).toEqual([...result.attempts]);
+  });
+
+  it("is awaited, so a slow logger cannot interleave rows out of order", async () => {
+    const order: string[] = [];
+    const { attempt } = scripted(invalid(), ok("done"));
+    await runStructuredLadder({
+      startModel: start,
+      attempt,
+      onAttempt: async (record) => {
+        // Yield across several microtasks — an un-awaited `onAttempt` would let the next
+        // rung's record land first.
+        for (let i = 0; i < 5; i += 1) await Promise.resolve();
+        order.push(record.step);
+      },
+    });
+
+    expect(order).toEqual(["initial", "corrective-retry"]);
   });
 });
 

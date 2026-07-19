@@ -8,7 +8,7 @@
  *   because a caller never gets the chance to write one.
  * - **the §2 failure ladder**: corrective retry → cross-provider escalation → dead-letter.
  * - **metering** (§5/§6): every attempt — success, retry, escalation, dead-letter — is
- *   handed to `log` with the full stamp, token usage and latency attached.
+ *   handed to `log` with the full stamp, token usage and latency attached, as it completes.
  *
  * ┌─ INSERTION POINT FOR M1 ITEM 2c (Agent 3) ────────────────────────────────────────┐
  * │ `AIRuntimeConfig.log` is the one hook the `ai_generations` writer plugs into.       │
@@ -17,6 +17,17 @@
  * │ what makes the stamp structurally impossible to forget rather than merely required. │
  * │ The kill switch and the budget guard belong at the top of `generateStructured`,     │
  * │ before the first `getModel` call — see the marked comment there.                    │
+ * │                                                                                     │
+ * │ ⚠ TWO PATHS ARE NOT METERED YET, and the M1 DoD ("every AI call appears in          │
+ * │ `ai_generations` with cost") is not satisfied until they are:                        │
+ * │  1. `languageModel(job)` and `providers` hand out a raw AI SDK model. Anything       │
+ * │     built on them — `streamText` for chat/RAG and lesson prose (§2) — bypasses       │
+ * │     `emit()` entirely. Only `generateStructured` is metered. A streaming equivalent  │
+ * │     (stamp + `onFinish` usage) has to exist before chat/RAG ships in Wave 4.         │
+ * │  2. An attempt that dies with a *transport* error is never a completed attempt, so   │
+ * │     it produces no record here. §6 wants that error persisted to `ai_generations`;   │
+ * │     that belongs in the Inngest step wrapper, which is where the NonRetriableError   │
+ * │     decision already lives. Earlier completed rungs ARE metered before it throws.    │
  * └────────────────────────────────────────────────────────────────────────────────────┘
  *
  * This package never reads `process.env`. `apps/web/src/env.ts` injects both provider keys,
@@ -228,6 +239,11 @@ export function createAIRuntime(config: AIRuntimeConfig): AIRuntime {
       const result = await runStructuredLadder<z.infer<TSchema>>({
         startModel: start.model,
         maxRank: config.maxRank,
+        // Metering is structural AND eager: each attempt is logged the moment it completes,
+        // not after the ladder returns. A transport error on a later rung propagates (below),
+        // so batching the emits at the end would silently discard every earlier rung — paid
+        // attempts that never reach `ai_generations`. Rows land in attempt order.
+        onAttempt: emit,
         attempt: async (request): Promise<AttemptResult<z.infer<TSchema>>> => {
           const promptText =
             request.corrective === undefined ? rendered : `${rendered}\n\n${request.corrective}`;
@@ -263,10 +279,6 @@ export function createAIRuntime(config: AIRuntimeConfig): AIRuntime {
           }
         },
       });
-
-      // Metering is structural: every attempt the ladder took is logged here, not at any
-      // call site. Sequential so `ai_generations` rows land in attempt order.
-      for (const record of result.attempts) await emit(record);
 
       const stampFor = (model: ModelId): AIGenerationStamp => ({
         promptId: prompt.id,
