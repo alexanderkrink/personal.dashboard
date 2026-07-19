@@ -6,6 +6,7 @@ import {
   type EmbeddingGenerationRecord,
   EmbeddingsPausedError,
   type FetchLike,
+  RATE_LIMIT_ATTEMPTS,
   VoyageEmbeddingError,
 } from "./embeddings";
 import { embeddingPriceUsd } from "./pricing";
@@ -19,6 +20,8 @@ function stubVoyage(options?: {
   readonly shuffle?: boolean;
   readonly dropIndex?: number;
   readonly throws?: boolean;
+  /** Fail this many leading requests with `status`, then succeed. For the backoff tests. */
+  readonly failFirst?: number;
 }) {
   const requests: { readonly input: string[]; readonly inputType: string }[] = [];
 
@@ -28,10 +31,15 @@ function stubVoyage(options?: {
     const body = JSON.parse(init?.body ?? "{}") as { input: string[]; input_type: string };
     requests.push({ input: body.input, inputType: body.input_type });
 
-    if (options?.status !== undefined && options.status !== 200) {
+    const failing =
+      options?.status !== undefined &&
+      options.status !== 200 &&
+      (options.failFirst === undefined || requests.length <= options.failFirst);
+
+    if (failing) {
       return {
         ok: false,
-        status: options.status,
+        status: options?.status ?? 500,
         json: async () => ({}),
         text: async () => "rate limited",
       };
@@ -131,7 +139,7 @@ describe("createEmbeddingClient — metering", () => {
   });
 
   it("still logs a row when the request fails", async () => {
-    const { fetchImpl } = stubVoyage({ status: 429 });
+    const { fetchImpl } = stubVoyage({ status: 401 });
     const { rows, log } = collector();
     const client = createEmbeddingClient({ apiKey: "k", log, killSwitch: false, fetchImpl });
 
@@ -141,7 +149,68 @@ describe("createEmbeddingClient — metering", () => {
 
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ outcome: "transport-error", costUsd: null });
-    expect(rows[0]?.errorMessage).toContain("429");
+    expect(rows[0]?.errorMessage).toContain("401");
+  });
+
+  /**
+   * 🔴 MEASURED: three embedding requests in ~14 seconds — an ordinary two-document run —
+   * came back 429 and failed the whole routing step. Retrying HERE rather than letting the
+   * Inngest step retry is what keeps a rate limit from re-billing every Sonnet merge the
+   * step had already completed.
+   */
+  it("retries a 429 and succeeds, writing only the successful row", async () => {
+    const { fetchImpl, requests } = stubVoyage({ failFirst: 2, status: 429 });
+    const { rows, log } = collector();
+    const client = createEmbeddingClient({
+      apiKey: "k",
+      log,
+      killSwitch: false,
+      fetchImpl,
+      retryDelayMs: 1,
+    });
+
+    const result = await client.embed({
+      texts: ["a"],
+      inputType: "document",
+      purpose: "embed-segment",
+    });
+
+    expect(requests).toHaveLength(3);
+    expect(result.embeddings).toHaveLength(1);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.outcome).toBe("success");
+  });
+
+  it("gives up after the bounded number of attempts", async () => {
+    const { fetchImpl, requests } = stubVoyage({ status: 429 });
+    const { rows, log } = collector();
+    const client = createEmbeddingClient({
+      apiKey: "k",
+      log,
+      killSwitch: false,
+      fetchImpl,
+      retryDelayMs: 1,
+    });
+
+    await expect(
+      client.embed({ texts: ["a"], inputType: "document", purpose: "embed-segment" }),
+    ).rejects.toThrow(/429/);
+
+    expect(requests).toHaveLength(RATE_LIMIT_ATTEMPTS);
+    expect(rows).toHaveLength(1);
+  });
+
+  /** A 401 will not fix itself. Retrying it turns a misconfiguration into a slow one. */
+  it("does not retry a non-retriable status", async () => {
+    const { fetchImpl, requests } = stubVoyage({ status: 401 });
+    const { log } = collector();
+    const client = createEmbeddingClient({ apiKey: "k", log, killSwitch: false, fetchImpl });
+
+    await expect(
+      client.embed({ texts: ["a"], inputType: "document", purpose: "embed-segment" }),
+    ).rejects.toThrow(/401/);
+
+    expect(requests).toHaveLength(1);
   });
 
   it("logs a row when the transport itself throws", async () => {

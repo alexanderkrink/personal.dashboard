@@ -200,6 +200,41 @@ describe("detectMergeLoss — the phantom-locator case", () => {
     expect(result.findings).toEqual([]);
   });
 
+  /**
+   * The shape the live schema actually emits. `blockSourceSchema` was flattened from
+   * `{documentId, locator:{page,slide}}` to `{documentId, page}` after Anthropic refused
+   * the nested version with "the compiled grammar is too large" — so the flat form is what
+   * every real merge produces and it must be the form the detector reads first.
+   */
+  it("reads the flat `page` the live schema emits", () => {
+    const result = detectMergeLoss(
+      input({
+        after: page({
+          notes: [
+            { id: "x", heading: "h", markdown: "m", sources: [{ documentId: DOC, page: 14 }] },
+          ],
+        }),
+        routedPages: [1, 2, 3],
+      }),
+    );
+
+    expect(result.findings[0]).toMatchObject({ kind: "phantom-locator", subject: "note:x@14" });
+  });
+
+  it("accepts a flat citation inside the routed pages", () => {
+    const result = detectMergeLoss(
+      input({
+        after: page({
+          notes: [
+            { id: "x", heading: "h", markdown: "m", sources: [{ documentId: DOC, page: 2 }] },
+          ],
+        }),
+      }),
+    );
+
+    expect(result.findings).toEqual([]);
+  });
+
   it("reads a slide locator the same way as a page locator", () => {
     const result = detectMergeLoss(
       input({

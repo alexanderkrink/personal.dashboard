@@ -40,9 +40,19 @@ export interface LocatorLike {
   readonly slide?: number | null;
 }
 
-/** One block-level provenance entry: which document, and where in it. */
+/**
+ * One block-level provenance entry: which document, and where in it.
+ *
+ * Carries the page BOTH flat and nested, and reads either. The live schema is flat
+ * (`{documentId, page}`) because a nested locator blew past Anthropic's grammar ceiling —
+ * see `blockSourceSchema` in `@study/ai`. The nested form stays accepted because the
+ * boundary rule applies to stored artifacts too: a page written by any earlier shape of
+ * this schema is an external input, and it must parse rather than silently lose its
+ * provenance. {@link locatorUnit} is where the two are reconciled, once.
+ */
 export interface BlockSourceLike {
   readonly documentId?: string | null;
+  readonly page?: number | null;
   readonly locator?: LocatorLike | null;
 }
 

@@ -154,6 +154,11 @@ export interface EmbeddingClientConfig {
   readonly fetchImpl?: FetchLike;
   /** Inputs per HTTP request. Voyage accepts far more; this bounds one request's blast radius. */
   readonly batchSize?: number;
+  /**
+   * First rate-limit backoff step, doubling per retry. Injected so the backoff tests assert
+   * the retry *behaviour* without spending seven real seconds asserting that sleep sleeps.
+   */
+  readonly retryDelayMs?: number;
 }
 
 export interface EmbedOptions {
@@ -196,6 +201,28 @@ export class VoyageEmbeddingError extends Error {
 const VOYAGE_ENDPOINT = "https://api.voyageai.com/v1/embeddings";
 const DEFAULT_BATCH_SIZE = 96;
 
+/** Total tries for one batch, including the first. See the backoff note in `embed`. */
+export const RATE_LIMIT_ATTEMPTS = 4;
+/** First backoff step; doubles each retry (1s, 2s, 4s → ~7s of patience total). */
+export const RATE_LIMIT_BASE_DELAY_MS = 1_000;
+
+/**
+ * `setTimeout` as a promise, without depending on a timer global's type.
+ *
+ * `web-globals.d.ts` deliberately declares only the handful of globals this package uses,
+ * and `setTimeout`'s signature differs between node and the DOM (a `Timeout` object versus
+ * a number). Reaching for either lib to get a sleep would drag the whole environment in, so
+ * the one call site casts a structurally-minimal binding instead.
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    (globalThis as unknown as { setTimeout: (fn: () => void, ms: number) => unknown }).setTimeout(
+      resolve,
+      ms,
+    );
+  });
+}
+
 /** Voyage's response, as much of it as this module relies on. */
 interface VoyageResponse {
   readonly data?: readonly { readonly index?: number; readonly embedding?: readonly number[] }[];
@@ -212,6 +239,7 @@ function chunk<T>(items: readonly T[], size: number): T[][] {
 export function createEmbeddingClient(config: EmbeddingClientConfig): EmbeddingClient {
   const batchSize = Math.max(1, config.batchSize ?? DEFAULT_BATCH_SIZE);
   const doFetch = config.fetchImpl ?? fetch;
+  const retryDelayMs = config.retryDelayMs ?? RATE_LIMIT_BASE_DELAY_MS;
 
   return {
     async embed({ texts, inputType, purpose }: EmbedOptions): Promise<EmbedResult> {
@@ -256,35 +284,70 @@ export function createEmbeddingClient(config: EmbeddingClientConfig): EmbeddingC
           });
         };
 
-        let response: FetchResponse;
-        try {
-          response = await doFetch(VOYAGE_ENDPOINT, {
-            method: "POST",
-            headers: {
-              authorization: `Bearer ${config.apiKey}`,
-              "content-type": "application/json",
-            },
-            body: JSON.stringify({
-              model: EMBEDDING_MODEL,
-              input: batch,
-              input_type: inputType,
-              output_dimension: EMBEDDING_DIMENSIONS,
-            }),
-          });
-        } catch (error) {
-          // A failed request is still an event worth a row: `ai_generations` is the only
-          // place a reader can see that embedding was attempted and did not happen.
-          const message = error instanceof Error ? error.message : String(error);
-          await emit("transport-error", 0, message);
-          throw new VoyageEmbeddingError(`Voyage request failed: ${message}`);
+        // ── The request, with bounded backoff on a rate limit ─────────────────
+        //
+        // 🔴 MEASURED: Voyage rate-limits this account hard. Three embedding requests
+        // inside ~14 seconds — a perfectly ordinary two-document pipeline run — returned
+        // **HTTP 429**, which failed the routing step and took the whole document with it.
+        //
+        // Retrying here rather than leaving it to Inngest's step retry is deliberate. An
+        // Inngest retry re-runs the ENTIRE step, which for `route-and-merge` means paying
+        // for the routing call and every completed Sonnet merge again. A rate limit is the
+        // one error where the correct response is simply to wait a moment, and the cheapest
+        // possible place to wait is here, before anything expensive has happened.
+        //
+        // Bounded at {@link RATE_LIMIT_ATTEMPTS} and never applied to any other status: a
+        // 401 is not going to fix itself, and a client that retried it would turn a
+        // misconfiguration into a slow one.
+        let response: FetchResponse | undefined;
+        let lastStatus = 0;
+        let lastBody = "";
+
+        for (let attempt = 1; attempt <= RATE_LIMIT_ATTEMPTS; attempt += 1) {
+          try {
+            response = await doFetch(VOYAGE_ENDPOINT, {
+              method: "POST",
+              headers: {
+                authorization: `Bearer ${config.apiKey}`,
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({
+                model: EMBEDDING_MODEL,
+                input: batch,
+                input_type: inputType,
+                output_dimension: EMBEDDING_DIMENSIONS,
+              }),
+            });
+          } catch (error) {
+            // A failed request is still an event worth a row: `ai_generations` is the only
+            // place a reader can see that embedding was attempted and did not happen.
+            const message = error instanceof Error ? error.message : String(error);
+            await emit("transport-error", 0, message);
+            throw new VoyageEmbeddingError(`Voyage request failed: ${message}`);
+          }
+
+          if (response.ok) break;
+
+          lastStatus = response.status;
+          lastBody = await response.text().catch(() => "");
+
+          const retriable = response.status === 429 || response.status >= 500;
+          if (!retriable || attempt === RATE_LIMIT_ATTEMPTS) {
+            await emit("transport-error", 0, `HTTP ${lastStatus}: ${lastBody.slice(0, 300)}`);
+            throw new VoyageEmbeddingError(
+              `Voyage returned ${lastStatus} for ${batch.length} input(s) after ${attempt} attempt(s).`,
+              lastStatus,
+            );
+          }
+
+          await sleep(retryDelayMs * 2 ** (attempt - 1));
         }
 
-        if (!response.ok) {
-          const body = await response.text().catch(() => "");
-          await emit("transport-error", 0, `HTTP ${response.status}: ${body.slice(0, 300)}`);
+        if (response === undefined || !response.ok) {
+          await emit("transport-error", 0, `HTTP ${lastStatus}: ${lastBody.slice(0, 300)}`);
           throw new VoyageEmbeddingError(
-            `Voyage returned ${response.status} for ${batch.length} input(s).`,
-            response.status,
+            `Voyage returned ${lastStatus} for ${batch.length} input(s).`,
+            lastStatus,
           );
         }
 

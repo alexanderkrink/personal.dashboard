@@ -108,7 +108,10 @@ function citedUnits(sources: readonly BlockSourceLike[], documentId: string): re
   const units: number[] = [];
   for (const source of sources) {
     if (source.documentId !== documentId) continue;
-    const unit = locatorUnit(source.locator);
+    // Flat first (the live schema), nested second (anything stored by an earlier shape).
+    const flat = source.page;
+    const unit =
+      typeof flat === "number" && Number.isFinite(flat) ? flat : locatorUnit(source.locator);
     // A citation with no page is a document-level claim, not a checkable one. Skipped
     // rather than treated as page 0 — see `locatorUnit`.
     if (unit !== null) units.push(unit);

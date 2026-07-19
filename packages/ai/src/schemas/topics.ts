@@ -21,31 +21,40 @@ import { z } from "zod";
 /* ────────────────────────────────────────────────────────────────────────── */
 
 /**
- * Where a piece of content came from, inside one document.
+ * Where a piece of content came from: which document, and which page of it.
  *
- * Both keys optional and neither required, mirroring `topic_sources.locators`'
- * `[{page:12},{slide:4}]`. `.nullable()` on both because a model asked for "page or slide"
- * reliably returns the other one as null rather than omitting it, and rejecting that would
- * burn a corrective-retry rung on a difference of no consequence.
+ * ## 🔴 This was a nested `{documentId, locator: {page, slide}}` and Anthropic REFUSED it
+ *
+ * Measured, not reasoned. The first live merge against `claude-sonnet-5` came back
+ * **HTTP 400 `invalid_request_error`: "The compiled grammar is too large, which would cause
+ * performance issues. Simplify your tool schemas"** — every merge, on both topics, before a
+ * single token was generated. A TopicPage is six arrays of objects, and giving each of them
+ * an array of two-level nested source objects (with a nullable `page`/`slide` pair inside)
+ * multiplied the constrained-decoding grammar past the provider's ceiling.
+ *
+ * Two things make this worth a long comment rather than a one-line fix:
+ *
+ * 1. **No unit test could have caught it.** The schema is valid Zod, parses correctly, and
+ *    round-trips fixtures perfectly. The constraint lives in the provider's grammar
+ *    compiler and is only observable by making a real call. This is exactly the class of
+ *    failure the "build it, then run it once for real" rule exists to find.
+ * 2. **The nesting was never earned.** `extractedPageSchema` already unifies the vocabulary
+ *    — "1-based page (PDF) or slide (PPTX) number" — so a separate `page`/`slide` pair was
+ *    modelling a distinction the extractor had already collapsed, at the cost of two object
+ *    levels on the hottest schema in the product.
+ *
+ * So a source is flat: a document id and the one number that locates content in it. The
+ * `{page: n}` shape still appears in `topic_sources.locators`, which is a database column
+ * written by code rather than a grammar the model has to satisfy.
  */
-export const topicLocatorSchema = z.object({
-  page: z
-    .number()
-    .int()
-    .nullable()
-    .describe("1-based page number, for a PDF. null when this is a slide."),
-  slide: z
-    .number()
-    .int()
-    .nullable()
-    .describe("1-based slide number, for a deck. null when this is a page."),
-});
-
 export const blockSourceSchema = z.object({
   documentId: z
     .string()
     .describe("The id of the document this content came from. Copy it exactly as given."),
-  locator: topicLocatorSchema.describe("Where in that document — the page or slide number."),
+  page: z
+    .number()
+    .int()
+    .describe("The 1-based page or slide number within that document, as shown in [p.N]."),
 });
 
 /**
@@ -144,7 +153,6 @@ export const topicPageSchema = z.object({
     ),
 });
 
-export type TopicLocator = z.infer<typeof topicLocatorSchema>;
 export type BlockSource = z.infer<typeof blockSourceSchema>;
 export type NoteBlock = z.infer<typeof noteBlockSchema>;
 export type KeyTerm = z.infer<typeof keyTermSchema>;
