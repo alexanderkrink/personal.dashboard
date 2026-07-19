@@ -874,6 +874,45 @@ Pipeline model assignments (from the `JOBS` registry in `packages/ai` — call s
 All tables follow the repo RLS pattern: `user_id uuid not null references auth.users(id)
 on delete cascade`, RLS enabled, per-operation policies with `(select auth.uid())`.
 
+> ⚠ **CORRECTED 2026-07-19 (Wave 4 Agent 1) — every FK in the block below is written
+> single-column and shipped composite.** This section predates Wave 1's cross-tenant FK
+> discovery, so it still says `references courses(id)`. That form is exactly what
+> [RLS strategy](#rls-strategy) **rule 7** forbids: RLS validates the row being *written*,
+> never the row being *pointed at*, and this pipeline's writers are Inngest jobs under
+> `createAdminSupabaseClient`, where RLS is not in the path at all. As shipped in
+> `20260719175553_document_pipeline_tables`, every FK between two user-owned tables is
+> `(fk_column, user_id)` against an `(id, user_id)` unique key on the parent; `documents`
+> and `topics` each declare their own `(id, user_id)` key. **Measured, not reasoned:** an
+> insert of a hans-owned `documents` row pointing at another account's `course_id` was
+> rejected `23503 documents_course_id_fkey` — through the session client *and* through the
+> RLS-bypassing service-role client, where the FK was the only check in the path.
+>
+> Three further deviations shipped, all marked in the migration:
+> 1. **`documents` and `topics` also carry `unique (id, course_id)`**, and the children that
+>    denormalise `course_id` (`document_processing_events`, `document_chunks`) point at it.
+>    Rule 7's tenant key cannot catch a *same-tenant, wrong-course* row, which would put a
+>    chunk in the wrong course's search results or a Realtime event on the wrong
+>    subscriber's socket.
+> 2. **`documents` carries a `documents_storage_path_convention` check** tying
+>    `storage_path` to `{user_id}/{course_id}/{id}/…`. Storage RLS can only police the first
+>    path segment, because `storage.objects` knows nothing about courses or documents.
+> 3. **`document_processing_events` and `topic_revisions` get `using (false)` UPDATE and
+>    DELETE policies** rather than owner-scoped ones — four policies, two of them
+>    unsatisfiable. An append-only log the audited party can rewrite is not a log; same
+>    reasoning as `20260719120203` on `ai_generations`.
+
+> 🔴 **DISPROVEN 2026-07-19 (Wave 4 Agent 1): the `document_chunks` block below cannot be
+> applied as written — its FK and its check constraint contradict each other.** `topic_id`
+> is declared `on delete set null` while `document_chunks_owner` requires
+> `source = 'topic_page' → topic_id is not null`. Deleting a topic that has synthesized
+> chunks nulls their `topic_id` and instantly violates the check, so **the DELETE fails and
+> the topic is undeletable.** Neither constraint is wrong alone; the gap is that `topic_id`
+> means different things per `source` — a routing *label* on `source='document'` chunks
+> (which should survive the topic and be unlabelled) and the *owner* on `source='topic_page'`
+> chunks (which should die with it). Shipped fix: a `before delete` trigger on `topics`
+> (`delete_synthesized_chunks_for_topic`) removes the topic's own synthesized chunks first,
+> so `SET NULL` only ever reaches the routing-label case.
+
 ```sql
 -- Extensions (one-time migration)
 create extension if not exists vector;
@@ -1467,6 +1506,24 @@ re-embedding or restructuring (Course Copilot implements it).
 **Search/RAG surface:** a `match_chunks(course_id, query_embedding, k)` SQL function
 (`security invoker`, `set search_path = ''`) powering course search, "ask your notes"
 chat with citations, and context retrieval for the exam-review generator.
+
+> ⚠ **CORRECTED 2026-07-19 (Wave 4 Agent 1)** — as shipped in `20260719175555_match_chunks`
+> the signature is `match_chunks(p_course_id, p_query_embedding, p_match_count default 8,
+> p_source default null, p_topic_id default null)`; `p_match_count` is clamped to 1..200 so
+> a caller cannot turn retrieval into a full-course dump. `security invoker` is the whole
+> tenancy model and it was **measured, not argued**: two tenants' chunks with *identical*
+> embeddings were inserted, and a real session call for the account that owns neither
+> returned **0 rows** for the other tenant's course while the service-role control call
+> returned that same row — RLS, not the query, did the filtering.
+>
+> ⚠ **Also corrected: the SQL block above spells the type `vector(1024)`, which will not
+> compile in this project.** `20260719092113` installed pgvector into the `extensions`
+> schema (not `public`, to avoid Supabase's `extension_in_public` advisory), so columns are
+> `extensions.vector(1024)`, the index opclass is `extensions.vector_cosine_ops`, and — because
+> operators cannot be dot-qualified — the distance operator inside a `search_path = ''`
+> function must be written `OPERATOR(extensions.<=>)`. Getting that last one wrong costs a
+> sequential scan rather than an error, since the ORDER BY must match the indexed expression
+> exactly.
 
 ---
 
