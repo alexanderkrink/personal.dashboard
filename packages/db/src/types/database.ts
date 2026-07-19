@@ -446,6 +446,268 @@ export type Database = {
           },
         ]
       }
+      document_chunks: {
+        Row: {
+          chunk_hash: string
+          content: string
+          course_id: string
+          created_at: string
+          document_id: string | null
+          embedding: string | null
+          id: string
+          locator: Json
+          source: string
+          token_count: number
+          topic_id: string | null
+          user_id: string
+        }
+        Insert: {
+          chunk_hash: string
+          content: string
+          course_id: string
+          created_at?: string
+          document_id?: string | null
+          embedding?: string | null
+          id?: string
+          locator: Json
+          source?: string
+          token_count: number
+          topic_id?: string | null
+          user_id: string
+        }
+        Update: {
+          chunk_hash?: string
+          content?: string
+          course_id?: string
+          created_at?: string
+          document_id?: string | null
+          embedding?: string | null
+          id?: string
+          locator?: Json
+          source?: string
+          token_count?: number
+          topic_id?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "document_chunks_course_id_fkey"
+            columns: ["course_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "courses"
+            referencedColumns: ["id", "user_id"]
+          },
+          {
+            foreignKeyName: "document_chunks_document_course_fkey"
+            columns: ["document_id", "course_id"]
+            isOneToOne: false
+            referencedRelation: "documents"
+            referencedColumns: ["id", "course_id"]
+          },
+          {
+            foreignKeyName: "document_chunks_document_id_fkey"
+            columns: ["document_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "documents"
+            referencedColumns: ["id", "user_id"]
+          },
+          {
+            foreignKeyName: "document_chunks_topic_course_fkey"
+            columns: ["topic_id", "course_id"]
+            isOneToOne: false
+            referencedRelation: "topics"
+            referencedColumns: ["id", "course_id"]
+          },
+          {
+            foreignKeyName: "document_chunks_topic_id_fkey"
+            columns: ["topic_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "topics"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
+      document_processing_events: {
+        Row: {
+          course_id: string
+          created_at: string
+          detail: string | null
+          document_id: string
+          id: number
+          level: string
+          step: string
+          user_id: string
+        }
+        Insert: {
+          course_id: string
+          created_at?: string
+          detail?: string | null
+          document_id: string
+          id?: never
+          level?: string
+          step: string
+          user_id: string
+        }
+        Update: {
+          course_id?: string
+          created_at?: string
+          detail?: string | null
+          document_id?: string
+          id?: never
+          level?: string
+          step?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "document_processing_events_course_id_fkey"
+            columns: ["document_id", "course_id"]
+            isOneToOne: false
+            referencedRelation: "documents"
+            referencedColumns: ["id", "course_id"]
+          },
+          {
+            foreignKeyName: "document_processing_events_document_id_fkey"
+            columns: ["document_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "documents"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
+      documents: {
+        Row: {
+          content_hash: string
+          course_id: string
+          coverage: Json | null
+          created_at: string
+          deep_review: string
+          deep_reviewed_at: string | null
+          extraction: Json | null
+          extraction_fidelity: string | null
+          failed_topics: Json
+          failure_reason: string | null
+          filename: string
+          id: string
+          kind: string
+          mime_type: string
+          processed_at: string | null
+          session_label: string | null
+          size_bytes: number
+          status: Database["public"]["Enums"]["document_status"]
+          storage_path: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          content_hash: string
+          course_id: string
+          coverage?: Json | null
+          created_at?: string
+          deep_review?: string
+          deep_reviewed_at?: string | null
+          extraction?: Json | null
+          extraction_fidelity?: string | null
+          failed_topics?: Json
+          failure_reason?: string | null
+          filename: string
+          id?: string
+          kind: string
+          mime_type: string
+          processed_at?: string | null
+          session_label?: string | null
+          size_bytes: number
+          status?: Database["public"]["Enums"]["document_status"]
+          storage_path: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          content_hash?: string
+          course_id?: string
+          coverage?: Json | null
+          created_at?: string
+          deep_review?: string
+          deep_reviewed_at?: string | null
+          extraction?: Json | null
+          extraction_fidelity?: string | null
+          failed_topics?: Json
+          failure_reason?: string | null
+          filename?: string
+          id?: string
+          kind?: string
+          mime_type?: string
+          processed_at?: string | null
+          session_label?: string | null
+          size_bytes?: number
+          status?: Database["public"]["Enums"]["document_status"]
+          storage_path?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "documents_course_id_fkey"
+            columns: ["course_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "courses"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
+      exam_reviews: {
+        Row: {
+          content: Json
+          course_id: string
+          created_at: string
+          id: string
+          input_hash: string
+          model: string
+          prompt_id: string
+          prompt_version: number
+          provider: string
+          stale: boolean
+          topic_snapshot: Json
+          user_id: string
+        }
+        Insert: {
+          content: Json
+          course_id: string
+          created_at?: string
+          id?: string
+          input_hash: string
+          model: string
+          prompt_id: string
+          prompt_version: number
+          provider: string
+          stale?: boolean
+          topic_snapshot: Json
+          user_id: string
+        }
+        Update: {
+          content?: Json
+          course_id?: string
+          created_at?: string
+          id?: string
+          input_hash?: string
+          model?: string
+          prompt_id?: string
+          prompt_version?: number
+          provider?: string
+          stale?: boolean
+          topic_snapshot?: Json
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "exam_reviews_course_id_fkey"
+            columns: ["course_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "courses"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
       job_heartbeats: {
         Row: {
           created_at: string
@@ -640,6 +902,176 @@ export type Database = {
           },
         ]
       }
+      topic_revisions: {
+        Row: {
+          change_summary: string
+          created_at: string
+          document_id: string | null
+          id: string
+          input_hash: string
+          model: string
+          needs_review: boolean
+          page: Json
+          prompt_id: string
+          prompt_version: number
+          provider: string
+          revision: number
+          source: string
+          topic_id: string
+          user_id: string
+        }
+        Insert: {
+          change_summary: string
+          created_at?: string
+          document_id?: string | null
+          id?: string
+          input_hash: string
+          model: string
+          needs_review?: boolean
+          page: Json
+          prompt_id: string
+          prompt_version: number
+          provider: string
+          revision: number
+          source?: string
+          topic_id: string
+          user_id: string
+        }
+        Update: {
+          change_summary?: string
+          created_at?: string
+          document_id?: string | null
+          id?: string
+          input_hash?: string
+          model?: string
+          needs_review?: boolean
+          page?: Json
+          prompt_id?: string
+          prompt_version?: number
+          provider?: string
+          revision?: number
+          source?: string
+          topic_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "topic_revisions_document_id_fkey"
+            columns: ["document_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "documents"
+            referencedColumns: ["id", "user_id"]
+          },
+          {
+            foreignKeyName: "topic_revisions_topic_id_fkey"
+            columns: ["topic_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "topics"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
+      topic_sources: {
+        Row: {
+          created_at: string
+          document_id: string
+          id: string
+          locators: Json
+          topic_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          document_id: string
+          id?: string
+          locators?: Json
+          topic_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          document_id?: string
+          id?: string
+          locators?: Json
+          topic_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "topic_sources_document_id_fkey"
+            columns: ["document_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "documents"
+            referencedColumns: ["id", "user_id"]
+          },
+          {
+            foreignKeyName: "topic_sources_topic_id_fkey"
+            columns: ["topic_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "topics"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
+      topics: {
+        Row: {
+          course_id: string
+          created_at: string
+          exam_weight: number
+          exam_weight_override: number | null
+          id: string
+          page: Json
+          revision: number
+          slug: string
+          summary: string
+          summary_embedding: string | null
+          title: string
+          title_embedding: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          course_id: string
+          created_at?: string
+          exam_weight?: number
+          exam_weight_override?: number | null
+          id?: string
+          page?: Json
+          revision?: number
+          slug: string
+          summary?: string
+          summary_embedding?: string | null
+          title: string
+          title_embedding?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          course_id?: string
+          created_at?: string
+          exam_weight?: number
+          exam_weight_override?: number | null
+          id?: string
+          page?: Json
+          revision?: number
+          slug?: string
+          summary?: string
+          summary_embedding?: string | null
+          title?: string
+          title_embedding?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "topics_course_id_fkey"
+            columns: ["course_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "courses"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
     }
     Views: {
       ai_daily_cost: {
@@ -708,13 +1140,40 @@ export type Database = {
         Args: { p_extraction_id: string }
         Returns: undefined
       }
+      match_chunks: {
+        Args: {
+          p_course_id: string
+          p_match_count?: number
+          p_query_embedding: string
+          p_source?: string
+          p_topic_id?: string
+        }
+        Returns: {
+          content: string
+          document_id: string
+          id: string
+          locator: Json
+          similarity: number
+          source: string
+          topic_id: string
+        }[]
+      }
       reject_syllabus_extraction: {
         Args: { p_extraction_id: string }
         Returns: undefined
       }
     }
     Enums: {
-      [_ in never]: never
+      document_status:
+        | "queued"
+        | "validating"
+        | "extracting"
+        | "structuring"
+        | "merging"
+        | "embedding"
+        | "ready"
+        | "partial"
+        | "failed"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -841,6 +1300,18 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      document_status: [
+        "queued",
+        "validating",
+        "extracting",
+        "structuring",
+        "merging",
+        "embedding",
+        "ready",
+        "partial",
+        "failed",
+      ],
+    },
   },
 } as const
