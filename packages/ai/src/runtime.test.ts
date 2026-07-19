@@ -1,6 +1,7 @@
 import { NoObjectGeneratedError } from "ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { AIPausedError } from "./guard";
 import { definePrompt, type PromptTemplate } from "./prompts/define";
 import { type AIGenerationRecord, createAIRuntime, sha256Hex } from "./runtime";
 
@@ -44,11 +45,19 @@ const prompt = definePrompt<{ topic: string }>({
   render: ({ topic }) => `Merge: ${topic}`,
 });
 
+/** A guard that never blocks. §6's own behaviour is exercised in `guard.test.ts`. */
+const openGuard = {
+  killSwitch: false,
+  monthlyBudgetUsd: 75,
+  monthToDateSpendUsd: () => 0,
+};
+
 function runtimeWithLog() {
   const logged: AIGenerationRecord[] = [];
   const runtime = createAIRuntime({
     anthropicApiKey: "test-anthropic",
     googleApiKey: "test-google",
+    guard: openGuard,
     log: (record) => {
       logged.push(record);
     },
@@ -223,6 +232,125 @@ describe("the ladder, through the runtime", () => {
   });
 });
 
+describe("the kill switch and the budget guard stop spend before it happens", () => {
+  function guardedRuntime(guard: {
+    killSwitch: boolean;
+    monthlyBudgetUsd: number;
+    monthToDateSpendUsd: () => number | Promise<number>;
+  }) {
+    const logged: AIGenerationRecord[] = [];
+    const runtime = createAIRuntime({
+      anthropicApiKey: "a",
+      googleApiKey: "g",
+      guard,
+      log: (record) => {
+        logged.push(record);
+      },
+    });
+    return { runtime, logged };
+  }
+
+  it("makes no provider call and no rollup read at all when AI_KILL_SWITCH is set", async () => {
+    generateObject.mockResolvedValue({ object: { title: "ok" }, usage: usage(1, 1) });
+    const spendReads = vi.fn(() => 0);
+    const { runtime, logged } = guardedRuntime({
+      killSwitch: true,
+      monthlyBudgetUsd: 75,
+      monthToDateSpendUsd: spendReads,
+    });
+
+    await expect(
+      runtime.generateStructured({ prompt, vars: { topic: "x" }, schema }),
+    ).rejects.toThrow(AIPausedError);
+
+    // The DoD clause: flipping the switch verifiably stops ALL spend.
+    expect(generateObject).not.toHaveBeenCalled();
+    expect(logged).toEqual([]);
+    // And it costs nothing to enforce — not even a database round trip.
+    expect(spendReads).not.toHaveBeenCalled();
+  });
+
+  it("defers a deep-rank background job past 100% but still serves it interactively", async () => {
+    generateObject.mockResolvedValue({ object: { title: "ok" }, usage: usage(1, 1) });
+    const { runtime } = guardedRuntime({
+      killSwitch: false,
+      monthlyBudgetUsd: 75,
+      monthToDateSpendUsd: () => 80,
+    });
+    // `exam-review` is pinned to Opus (deep). The prompt id must equal the job, so the
+    // job override is how a fixture borrows another job's rank.
+    const options = { prompt, vars: { topic: "x" }, schema, job: "exam-review" } as const;
+
+    await expect(runtime.generateStructured(options)).rejects.toThrow(/Deferred/);
+    expect(generateObject).not.toHaveBeenCalled();
+
+    await expect(
+      runtime.generateStructured({ ...options, kind: "interactive" }),
+    ).resolves.toMatchObject({ status: "success" });
+    expect(generateObject).toHaveBeenCalledTimes(1);
+  });
+
+  it("kills interactive calls too once spend passes 150%", async () => {
+    generateObject.mockResolvedValue({ object: { title: "ok" }, usage: usage(1, 1) });
+    const { runtime } = guardedRuntime({
+      killSwitch: false,
+      monthlyBudgetUsd: 75,
+      monthToDateSpendUsd: () => 200,
+    });
+
+    await expect(
+      runtime.generateStructured({ prompt, vars: { topic: "x" }, schema, kind: "interactive" }),
+    ).rejects.toMatchObject({ reason: "budget-halt" });
+    expect(generateObject).not.toHaveBeenCalled();
+  });
+
+  it("guards against the CLAMPED rank, not the rank the job is pinned to", async () => {
+    generateObject.mockResolvedValue({ object: { title: "ok" }, usage: usage(1, 1) });
+    const runtime = createAIRuntime({
+      anthropicApiKey: "a",
+      googleApiKey: "g",
+      log: () => {},
+      maxRank: "fast",
+      guard: { killSwitch: false, monthlyBudgetUsd: 75, monthToDateSpendUsd: () => 80 },
+    });
+
+    // `exam-review` is pinned to Opus, but AI_MAX_TIER=fast already forced it down to
+    // Haiku. Deferring it as though it were still a deep job would pause a call that now
+    // costs cents — the clamp and the budget guard have to agree on what actually runs.
+    await expect(
+      runtime.generateStructured({ prompt, vars: { topic: "x" }, schema, job: "exam-review" }),
+    ).resolves.toMatchObject({ status: "success" });
+  });
+
+  it("treats an unspecified call as background — forgetting defers, it never overspends", async () => {
+    generateObject.mockResolvedValue({ object: { title: "ok" }, usage: usage(1, 1) });
+    const { runtime } = guardedRuntime({
+      killSwitch: false,
+      monthlyBudgetUsd: 75,
+      monthToDateSpendUsd: () => 100, // 133% — defer-balanced
+    });
+
+    // `topic-merge` is Sonnet (balanced) and no `kind` was passed.
+    await expect(
+      runtime.generateStructured({ prompt, vars: { topic: "x" }, schema }),
+    ).rejects.toMatchObject({ reason: "budget-defer-balanced" });
+  });
+
+  it("exposes the same decision without making a call, for chat to render politely", async () => {
+    const { runtime } = guardedRuntime({
+      killSwitch: true,
+      monthlyBudgetUsd: 75,
+      monthToDateSpendUsd: () => 0,
+    });
+
+    await expect(runtime.guardCheck("chat-rag", "interactive")).resolves.toEqual({
+      allowed: false,
+      reason: "kill-switch",
+    });
+    expect(generateObject).not.toHaveBeenCalled();
+  });
+});
+
 describe("job resolution and the clamp", () => {
   it("refuses a prompt id that resolves to no job", async () => {
     // `PromptId` would reject this id at compile time. The double assertion is deliberate:
@@ -245,6 +373,10 @@ describe("job resolution and the clamp", () => {
     const clamped = createAIRuntime({
       anthropicApiKey: "a",
       googleApiKey: "g",
+      guard: openGuard,
+      // `log` is required — a runtime that can spend money without a metering sink is a
+      // compile error, which is the structural half of "every call lands a row".
+      log: () => {},
       maxRank: "fast",
     });
     // `topic-merge` is pinned to Sonnet (balanced); the clamp forces it down its own family.

@@ -10,32 +10,42 @@
  * - **metering** (§5/§6): every attempt — success, retry, escalation, dead-letter — is
  *   handed to `log` with the full stamp, token usage and latency attached, as it completes.
  *
- * ┌─ INSERTION POINT FOR M1 ITEM 2c (Agent 3) ────────────────────────────────────────┐
- * │ `AIRuntimeConfig.log` is the one hook the `ai_generations` writer plugs into.       │
- * │ It is called once per ladder attempt from `emit()` below, with an already-complete  │
- * │ `AIGenerationRecord` — nothing is left for the implementer to assemble, which is    │
- * │ what makes the stamp structurally impossible to forget rather than merely required. │
- * │ The kill switch and the budget guard belong at the top of `generateStructured`,     │
- * │ before the first `getModel` call — see the marked comment there.                    │
- * │                                                                                     │
- * │ ⚠ TWO PATHS ARE NOT METERED YET, and the M1 DoD ("every AI call appears in          │
- * │ `ai_generations` with cost") is not satisfied until they are:                        │
- * │  1. `languageModel(job)` and `providers` hand out a raw AI SDK model. Anything       │
- * │     built on them — `streamText` for chat/RAG and lesson prose (§2) — bypasses       │
- * │     `emit()` entirely. Only `generateStructured` is metered. A streaming equivalent  │
- * │     (stamp + `onFinish` usage) has to exist before chat/RAG ships in Wave 4.         │
- * │  2. An attempt that dies with a *transport* error is never a completed attempt, so   │
- * │     it produces no record here. §6 wants that error persisted to `ai_generations`;   │
- * │     that belongs in the Inngest step wrapper, which is where the NonRetriableError   │
- * │     decision already lives. Earlier completed rungs ARE metered before it throws.    │
- * └────────────────────────────────────────────────────────────────────────────────────┘
+ * ## Metering is structural, not optional
+ *
+ * `AIRuntimeConfig.log` and `AIRuntimeConfig.guard` are **required**. There is no way to
+ * construct a runtime that can spend money without a metering sink and a kill switch —
+ * that is a compile error, not a review comment. `log` is called once per ladder attempt
+ * from `emit()` below with an already-complete `AIGenerationRecord`, so a caller cannot
+ * forget to stamp because a caller never gets the chance to write one.
+ *
+ * ⚠ TWO PATHS CAN STILL MAKE AN LLM CALL WITHOUT LANDING A ROW, and the M1 DoD ("every AI
+ * call appears in `ai_generations` with cost") is not satisfied until both close:
+ *  1. `unmeteredLanguageModel()` and `unmeteredProviders()` hand out a raw AI SDK model.
+ *     Anything built on them — `streamText` for chat/RAG and lesson prose (§2) — bypasses
+ *     `emit()` entirely. They are named for what they are and require an explicit
+ *     acknowledgement argument, so reaching one is a decision rather than an accident, but
+ *     the real fix is a metered streaming wrapper (stamp + `onFinish` usage) and it has to
+ *     land *with* chat/RAG in Wave 4, not after it.
+ *  2. An attempt that dies with a *transport* error is never a completed attempt, so it
+ *     produces no record here. §6 wants that error persisted; that belongs in the Inngest
+ *     step wrapper, which is where the `NonRetriableError` decision already lives — and
+ *     `ai_generations.outcome` already accepts `'transport-error'` so closing it is a code
+ *     change, not a migration. Earlier completed rungs ARE metered before it throws.
  *
  * This package never reads `process.env`. `apps/web/src/env.ts` injects both provider keys,
- * the clamp and the logger.
+ * the clamp, the guard and the logger.
  */
 
 import { generateObject, NoObjectGeneratedError } from "ai";
 import type { z } from "zod";
+import {
+  AIPausedError,
+  type AISpendGuardConfig,
+  type CallKind,
+  type GuardDecision,
+  guardDecision,
+  spendPosture,
+} from "./guard";
 import {
   type AttemptRecord,
   type AttemptResult,
@@ -88,7 +98,7 @@ export interface AIGenerationRecord extends AIGenerationStamp {
 }
 
 /**
- * Agent 3 implements this against the `ai_generations` table.
+ * Writes one `ai_generations` row. Implemented in `apps/web/src/lib/ai/generations.ts`.
  *
  * Awaited, so a logging failure surfaces rather than vanishing into an unhandled rejection —
  * an unmetered call is a hole in the budget guard, not a cosmetic problem.
@@ -98,8 +108,18 @@ export type AIGenerationLogger = (record: AIGenerationRecord) => void | Promise<
 export interface AIRuntimeConfig {
   readonly anthropicApiKey: string;
   readonly googleApiKey: string;
-  /** ⇦ Agent 3's `ai_generations` writer plugs in here. */
-  readonly log?: AIGenerationLogger;
+  /**
+   * The `ai_generations` writer. **Required** — there is deliberately no way to build a
+   * runtime that can spend money without a metering sink. A test that genuinely does not
+   * care still has to write `log: () => {}`, which is three characters of friction and a
+   * grep-able marker; forgetting it is a type error rather than a silent gap in the DoD.
+   */
+  readonly log: AIGenerationLogger;
+  /**
+   * The §6 kill switch and budget guard. **Required** for the same reason as `log`: a
+   * runtime with no circuit breaker is exactly the thing §6 exists to make impossible.
+   */
+  readonly guard: AISpendGuardConfig;
   /** `AI_MAX_TIER` (§6): clamps resolved rank and constrains ladder escalation. */
   readonly maxRank?: Rank;
 }
@@ -111,6 +131,12 @@ export interface GenerateStructuredOptions<TVars extends PromptVars, TSchema ext
   readonly system?: string;
   /** Overrides the job derived from `prompt.id`. Needed only by variant-suffixed prompts. */
   readonly job?: JobId;
+  /**
+   * Whether a human is waiting (§6). Defaults to `"background"` — the stricter side — so a
+   * call site that forgets to declare itself gets deferred under budget pressure rather
+   * than running up the bill.
+   */
+  readonly kind?: CallKind;
 }
 
 export type GenerateStructuredResult<T> =
@@ -123,16 +149,50 @@ export type GenerateStructuredResult<T> =
       readonly stamp: AIGenerationStamp;
     };
 
+/**
+ * The literal a caller must type to reach an unmetered model. It is not a password — it is
+ * a speed bump in the type system.
+ *
+ * The point is that no plausible refactor, autocomplete or copy-paste produces this string
+ * by accident, and `grep -r UNMETERED_ACKNOWLEDGEMENT` enumerates every remaining hole in
+ * the M1 DoD in one command. Wave 4 deletes both escape hatches when the metered streaming
+ * wrapper lands; until then this is what keeps "it bypasses `ai_generations`" a stated
+ * decision rather than an accident.
+ */
+export const UNMETERED_ACKNOWLEDGEMENT = "i-will-meter-this-call-myself" as const;
+export type UnmeteredAcknowledgement = typeof UNMETERED_ACKNOWLEDGEMENT;
+
 export interface AIRuntime {
-  /** Job → `(provider, model)`, with the `AI_MAX_TIER` clamp applied. */
+  /** Job → `(provider, model)`, with the `AI_MAX_TIER` clamp applied. Pure; spends nothing. */
   resolve(job: JobId): ModelResolution;
-  /** Job → an AI SDK language model. For `streamText` (chat/RAG, lesson prose). */
-  languageModel(job: JobId): ReturnType<typeof languageModelFor>;
   /** Job → structured output through the §2 failure ladder, fully stamped and metered. */
   generateStructured<TVars extends PromptVars, TSchema extends z.ZodType>(
     options: GenerateStructuredOptions<TVars, TSchema>,
   ): Promise<GenerateStructuredResult<z.infer<TSchema>>>;
-  readonly providers: AIProviders;
+  /**
+   * ⚠ A raw AI SDK model. **Nothing built on this reaches `ai_generations`** — no stamp,
+   * no usage, no cost, invisible to the budget guard. It exists only because `streamText`
+   * (chat/RAG, lesson prose) has no metered wrapper yet.
+   *
+   * The kill switch and budget guard are NOT applied here either, because there is no call
+   * for them to gate — the caller makes the call. A caller reaching for this owes both:
+   * check `guardCheck()` before streaming, and write the row from `onFinish`.
+   */
+  unmeteredLanguageModel(
+    job: JobId,
+    acknowledgement: UnmeteredAcknowledgement,
+  ): ReturnType<typeof languageModelFor>;
+  /** ⚠ Both raw providers. Same warning as `unmeteredLanguageModel`. */
+  unmeteredProviders(acknowledgement: UnmeteredAcknowledgement): AIProviders;
+  /**
+   * The §6 guard decision on its own, without making a call.
+   *
+   * For the two callers that cannot go through `generateStructured`: a chat route that
+   * must render "AI features are paused" instead of streaming, and any future metered
+   * streaming wrapper. Returns rather than throws, because a chat endpoint wants to answer
+   * politely rather than 500.
+   */
+  guardCheck(job: JobId, kind?: CallKind): Promise<GuardDecision>;
 }
 
 /** SHA-256 hex via Web Crypto — available in node 18+, edge and the browser alike. */
@@ -186,10 +246,35 @@ export function createAIRuntime(config: AIRuntimeConfig): AIRuntime {
 
   const resolve = (job: JobId): ModelResolution => getModel(job, { maxRank: config.maxRank });
 
+  /**
+   * §6, in the one place every metered call passes through.
+   *
+   * The kill switch is checked **first**, synchronously, before the rollup is read and
+   * before a job is even resolved — flipping one env var must not still cost a database
+   * round trip, and it must not depend on any query succeeding.
+   */
+  const decide = async (job: JobId, kind: CallKind): Promise<GuardDecision> => {
+    if (config.guard.killSwitch) return { allowed: false, reason: "kill-switch" };
+    const monthToDateUsd = await config.guard.monthToDateSpendUsd();
+    return guardDecision({
+      killSwitch: false,
+      posture: spendPosture({
+        monthToDateUsd,
+        monthlyBudgetUsd: config.guard.monthlyBudgetUsd,
+      }),
+      // The clamped rank, not the pinned one: if AI_MAX_TIER already forced a deep job
+      // down to `fast`, deferring it as though it were still deep would be wrong.
+      rank: resolve(job).rank,
+      kind,
+    });
+  };
+
   return {
-    providers,
     resolve,
-    languageModel: (job) => languageModelFor(providers, resolve(job).model),
+    guardCheck: (job, kind) => decide(job, kind ?? "background"),
+    unmeteredLanguageModel: (job, _acknowledgement) =>
+      languageModelFor(providers, resolve(job).model),
+    unmeteredProviders: (_acknowledgement) => providers,
 
     async generateStructured<TVars extends PromptVars, TSchema extends z.ZodType>({
       prompt,
@@ -197,12 +282,15 @@ export function createAIRuntime(config: AIRuntimeConfig): AIRuntime {
       schema,
       system,
       job: jobOverride,
+      kind,
     }: GenerateStructuredOptions<TVars, TSchema>): Promise<
       GenerateStructuredResult<z.infer<TSchema>>
     > {
-      // ⇦ Agent 3: AI_KILL_SWITCH and the AI_MONTHLY_BUDGET_USD guard go HERE, before any
-      // model is resolved and before any token is spent. Failing fast at this line is what
-      // makes "flip one Vercel env var" stop all spend.
+      // ── AI_KILL_SWITCH (§6) ──────────────────────────────────────────────────────
+      // Absolutely first: before a job is resolved, before the prompt is rendered, before
+      // the rollup is read, before any token is spent. Failing fast at this line is what
+      // makes "flip one Vercel env var + redeploy" stop all spend within minutes.
+      if (config.guard.killSwitch) throw new AIPausedError("kill-switch");
 
       const job = jobOverride ?? jobForPromptId(prompt.id);
       if (job === undefined) {
@@ -211,12 +299,18 @@ export function createAIRuntime(config: AIRuntimeConfig): AIRuntime {
         );
       }
 
+      // ── AI_MONTHLY_BUDGET_USD (§6) ───────────────────────────────────────────────
+      // Also before any token is spent. Job resolution above is pure and free, and the
+      // guard needs the resolved rank to know whether this job is one of the ones deferred
+      // at 100% / 125%.
+      const decision = await decide(job, kind ?? "background");
+      if (!decision.allowed) throw new AIPausedError(decision.reason, { job });
+
       const rendered = prompt.render(vars);
       const inputHash = await sha256Hex(`${prompt.id}@${prompt.version}\n${rendered}`);
       const start = resolve(job);
 
       const emit = async (record: AttemptRecord): Promise<void> => {
-        if (config.log === undefined) return;
         await config.log({
           promptId: prompt.id,
           promptVersion: prompt.version,

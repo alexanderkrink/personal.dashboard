@@ -10,6 +10,18 @@
  */
 
 export {
+  AI_PAUSED_USER_MESSAGE,
+  AIPausedError,
+  type AISpendGuardConfig,
+  type CallKind,
+  type GuardDecision,
+  guardDecision,
+  type PausedReason,
+  SPEND_THRESHOLDS,
+  type SpendPosture,
+  spendPosture,
+} from "./guard";
+export {
   type AttemptRecord,
   type AttemptRequest,
   type AttemptResult,
@@ -73,5 +85,7 @@ export {
   type GenerateStructuredOptions,
   type GenerateStructuredResult,
   sha256Hex,
+  UNMETERED_ACKNOWLEDGEMENT,
+  type UnmeteredAcknowledgement,
 } from "./runtime";
 export * from "./schemas/index";
