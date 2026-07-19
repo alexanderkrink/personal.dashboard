@@ -1674,6 +1674,56 @@ fresh. This keeps merges effectively idempotent despite being LLM-driven.
 >
 > Not fixed at the gate: this is a design call between the two options above, and both touch
 > the merge write path on a branch with zero documents in the database to re-verify against.
+>
+> ---
+>
+> ⚠ **CORRECTED 2026-07-20 (Wave 4, follow-up) — the second option was taken. A re-run now
+> converges; the strip is still not built.**
+>
+> The design call above was decided in favour of the idempotency key, not the strip, and the
+> reason is that the two triggers that exist today both want *the unfinished topics
+> finished*, not the finished ones redone. Stripping and re-running is the correct response to
+> a deliberate "Reprocess"; it is the wrong response to a step timeout, because it throws away
+> work that succeeded and re-bills all of it.
+>
+> What shipped:
+>
+> - `topic_sources.merged_at_revision` (migration `20260719224933`) records which
+>   `topics.revision` a document's merge left the topic at. Together with the table's existing
+>   `unique (topic_id, document_id)` that is the key this note said was missing.
+> - `topic_revisions_one_merge_per_document`, a `before insert` trigger, **refuses** a second
+>   `source = 'merge'` snapshot for a pair `topic_sources` already records as merged. The
+>   invariant is in the database because the writer is an Inngest job holding the service key,
+>   where RLS and Server Actions are both out of the path. It raises `P0001`, deliberately not
+>   `23505` — the persist swallows `23505` as "this exact step already ran", so borrowing
+>   unique_violation would have made the guard silent.
+> - `planMergeWork` in `@study/core` (pure, 12 tests) partitions the pass's targets before any
+>   money is spent, reading two witnesses: this document's merge snapshot for the topic, and
+>   its `topic_sources` row. Two, because Step C's three writes are not transactional and the
+>   two crash windows between them pull in opposite directions — provenance alone re-merges a
+>   topic whose page update landed; the snapshot alone silently skips one whose page update
+>   did not.
+> - `route-and-merge.ts:636`'s docstring claimed a safety property the code did not have. It is
+>   now marked ⚠ CORRECTED and says what actually makes a re-run safe.
+>
+> Measured, on the real database inside a rolled-back transaction: the compounding insert is
+> rejected `P0001`; an identical re-run still hits `23505` from `unique (topic_id, revision)`;
+> a `deep_review` revision on the same topic is unaffected; and deleting the `topic_sources`
+> row re-opens the path — i.e. **the strip's own documented action is this guard's release
+> valve**, which is why it is a trigger keyed on `topic_sources` rather than a partial unique
+> index on `topic_revisions` (that would have had to be released by deleting immutable
+> history). 12 further tests run the real `runRouteAndMerge` twice over the same document
+> against an in-memory Postgres: second pass = 0 merge calls, 0 critic calls, 0 new revisions,
+> no `revision` bump; the mid-loop-retry case pays for exactly the two topics that did not
+> persist.
+>
+> **Still owed, and this note is the record of it:** the strip itself — replay-forward from
+> the pre-merge snapshot, `topic_sources` delete, chunk delete. Until it exists there is no
+> "Reprocess": a retry cannot rebuild a topic page from a *changed* extraction, because the
+> page it already contributed to is skipped rather than stripped. The bleeding is stopped;
+> the promised feature is not built. One bounded re-billing remains and is deliberate — a
+> re-run still pays for one `topic-routing` call and the segment embeddings, which is what
+> tells the pass which topics the document belongs to in the first place.
 
 ---
 
