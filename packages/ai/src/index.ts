@@ -10,6 +10,26 @@
  */
 
 export {
+  createEmbeddingClient,
+  EMBEDDING_DIMENSIONS,
+  EMBEDDING_MODEL,
+  EMBEDDING_PURPOSES,
+  EMBEDDING_RECIPE_VERSION,
+  type EmbeddingClient,
+  type EmbeddingClientConfig,
+  type EmbeddingGenerationRecord,
+  type EmbeddingInputType,
+  type EmbeddingLogger,
+  type EmbeddingPurpose,
+  EmbeddingsPausedError,
+  type EmbedOptions,
+  type EmbedResult,
+  type FetchLike,
+  type FetchRequestInit,
+  type FetchResponse,
+  VoyageEmbeddingError,
+} from "./embeddings";
+export {
   AI_PAUSED_USER_MESSAGE,
   AIPausedError,
   type AISpendGuardConfig,
@@ -34,6 +54,21 @@ export {
   type ExtractSyllabusComponentsOptions,
   extractSyllabusComponents,
 } from "./jobs/syllabus-components";
+export {
+  type CriticiseMergeOptions,
+  criticiseMerge,
+  type MergeTopicOptions,
+  mergeTopic,
+  type RemergeTopicOptions,
+  type RoutableSegment,
+  type RouteSegmentsOptions,
+  remergeTopic,
+  renderMergeSegments,
+  renderRoutableSegments,
+  renderTopicIndex,
+  routeSegments,
+  type TopicIndexEntry,
+} from "./jobs/topic-pipeline";
 export {
   type AttemptRecord,
   type AttemptRequest,
@@ -64,6 +99,8 @@ export {
 } from "./models";
 export {
   EMBEDDING_PRICING,
+  type EmbeddingModelId,
+  embeddingPriceUsd,
   type IntroductoryPricing,
   type ModelPricing,
   PRICING,

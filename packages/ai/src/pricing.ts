@@ -120,6 +120,36 @@ export const EMBEDDING_PRICING = {
   { provider: EmbeddingProviderName; inputPerMTok: number; freeAllowanceTokens: number }
 >;
 
+export type EmbeddingModelId = keyof typeof EMBEDDING_PRICING;
+
+/**
+ * Cost of one embedding call in USD.
+ *
+ * ## Why this bills at the sticker rather than at $0
+ *
+ * Voyage's first 200M tokens per account are free, and at this project's volume that is
+ * years of runway — so the *tempting* implementation returns 0 and the budget page shows a
+ * clean zero. That is the same mistake `ratesFor` refuses to make with Sonnet's
+ * introductory rates, one axis over: **the free allowance is an account credit, not a
+ * rate.** It is consumed exactly once, it is invisible from inside this function (nothing
+ * here knows the account's lifetime token count), and the day it runs out every embedding
+ * call silently starts costing money that a hard-coded 0 would keep reporting as free.
+ *
+ * So `cost_usd` records what the tokens are worth at the published rate and the free
+ * allowance is treated as what it is — a credit applied to the bill, not a property of the
+ * call. The number is tiny either way (1M tokens = $0.02), which is precisely why paying
+ * the honesty is cheap.
+ *
+ * This closes the gap flagged when `ai_generations.provider` was widened to admit
+ * `voyage`: there was a provider column that could name the vendor and no `priceUsd` path
+ * that could price it, so the first embedding row would have landed with `cost_usd = NULL`
+ * and quietly spent the guard's `UNPRICED_TOLERANCE` budget on calls that are in fact
+ * perfectly priceable.
+ */
+export function embeddingPriceUsd(model: EmbeddingModelId, tokens: number): number {
+  return (tokens * EMBEDDING_PRICING[model].inputPerMTok) / PER_MILLION;
+}
+
 /** Token counts for one call, as reported by the provider. */
 export interface TokenUsage {
   readonly input: number;

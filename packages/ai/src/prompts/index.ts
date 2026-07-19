@@ -22,6 +22,12 @@
 import type { AnyPromptTemplate } from "./define";
 import { docStructuringPrompt, docStructuringSlideTextPrompt } from "./documents";
 import { syllabusComponentsPrompt } from "./syllabus";
+import {
+  mergeCriticPrompt,
+  topicMergePrompt,
+  topicMergeRepairPrompt,
+  topicRoutingPrompt,
+} from "./topics";
 
 export {
   type AnyPromptTemplate,
@@ -45,6 +51,10 @@ export const PROMPT_REGISTRY: readonly AnyPromptTemplate[] = [
   syllabusComponentsPrompt,
   docStructuringPrompt,
   docStructuringSlideTextPrompt,
+  topicRoutingPrompt,
+  topicMergePrompt,
+  topicMergeRepairPrompt,
+  mergeCriticPrompt,
 ];
 
 export {
@@ -53,3 +63,12 @@ export {
   docStructuringSlideTextPrompt,
 } from "./documents";
 export { SYLLABUS_COMPONENTS_SYSTEM, syllabusComponentsPrompt } from "./syllabus";
+export {
+  MERGE_CRITIC_SYSTEM,
+  mergeCriticPrompt,
+  TOPIC_MERGE_SYSTEM,
+  TOPIC_ROUTING_SYSTEM,
+  topicMergePrompt,
+  topicMergeRepairPrompt,
+  topicRoutingPrompt,
+} from "./topics";
