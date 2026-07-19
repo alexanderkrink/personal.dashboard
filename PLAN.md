@@ -2424,6 +2424,26 @@ below.) Two observations from the real feed drive the **fallback** path:
 > `total_sessions_source = 'syllabus'` is written **only on human confirm** — so the day a
 > fall-2026 syllabus exists, one paste and one confirm breaks the tie for real.
 >
+> **Measured cost of the three runs** (recorded here because it lives only in
+> `ai_generations` rows owned by the fixture account, which `on delete cascade` takes with
+> the user the day that account is removed). All three: `claude-sonnet-5`, prompt v1,
+> `step = initial`, `attempt = 1`, `outcome = success`, no cache tokens, priced at the
+> durable $3/$15 per-Mtok rate:
+>
+> | in | out | cost |
+> | --- | --- | --- |
+> | 18 030 | 1 840 | $0.081690 |
+> | 8 677 | 1 375 | $0.046656 |
+> | 16 483 | 2 676 | $0.089589 |
+> | | **total** | **$0.217935** |
+>
+> ⚠ **The LOES evidence is already gone.** Browser-testing Discard consumed the LOES
+> extraction — the run that carried BOTH of the distinctive claims above (`SESSIONS 28/29 →
+> null`, and the only session count with no header field). Two of the three extractions
+> survive (ABM confirmed, Marketing pending); the LOES `ai_generations` row survives because
+> that log is append-only, but the extracted values it produced do not. Re-running LOES is
+> one paste if that evidence is wanted before the account is deleted.
+>
 > **Transcribed evaluation tables** (verbatim weights; `session_number` only where the
 > syllabus states it inline; sanitized — no instructor names or contact details):
 >
