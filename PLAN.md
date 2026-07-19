@@ -1642,6 +1642,39 @@ snapshot taken before this document's first merge, re-applying only the revision
 documents. `topic_sources` rows deleted, chunks deleted — then runs the pipeline
 fresh. This keeps merges effectively idempotent despite being LLM-driven.
 
+> 🔴 **DISPROVEN 2026-07-20 (Wave 4 Agent 6, final gate) — the strip does not exist, so
+> merges are NOT idempotent across a re-run.** Every mechanism this paragraph relies on is
+> unbuilt: there is no replay-forward from a `topic_revisions` snapshot, no `topic_sources`
+> delete (grep for one returns nothing), and no strip helper anywhere in the tree.
+> `retryDocument` (`documents/actions.ts:356-365`) does exactly two things — sets the row to
+> `queued` and re-sends `document/uploaded`.
+>
+> What actually happens on the *Retry the rest* button, or on any Inngest step retry that
+> lands after at least one topic has persisted: `runRouteAndMerge` re-reads
+> `topics.revision` fresh (`route-and-merge.ts:129-141`), so `target.currentRevision` is the
+> value the previous attempt already bumped. The `unique (topic_id, revision)` guard at
+> `route-and-merge.ts:707` — documented at :636 as what makes the persist idempotent — cannot
+> fire, because the write it is meant to protect against is the one that moved the key. Each
+> pass therefore appends a new `topic_revisions` row and bumps `topics.revision` again, and
+> the merge prompt is handed a `currentPage` that already contains this document's
+> contribution plus the same segments a second time.
+>
+> Consequences, in order of cost: the merge and critic calls are re-billed for topics that
+> already succeeded (measured ~$0.06/topic, plus a full re-extraction at $0.15–0.47);
+> revisions inflate, which is what `exam_reviews.topic_snapshot` staleness compares against;
+> and the page is re-merged from content it already holds, which is a content risk the
+> additive-edit rules mitigate but do not prevent.
+>
+> Note this does **not** contradict §7's ✅ DECIDED note declining `document/retry-merges` —
+> that note is about which *event* drives a retry, and its reasoning (replaying only the
+> failed topic replays the failure) still holds. It assumed the strip described here was in
+> place. It is not. Either the strip gets built, or the merge persist needs its own
+> idempotency key — `topic_sources` already carries `(topic_id, document_id)` and would only
+> need the revision it was written at.
+>
+> Not fixed at the gate: this is a design call between the two options above, and both touch
+> the merge write path on a branch with zero documents in the database to re-verify against.
+
 ---
 
 ### 6. Chunking + embeddings + pgvector
