@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildDocx, buildPptx, buildZip, bytesOf } from "./__fixtures__/build-zip";
 import { formatBytes, MAX_ARCHIVE_INFLATED_BYTES, MAX_DOCUMENT_BYTES } from "./limits";
-import { looksEncrypted, looksLikePdf } from "./pdf";
+import { countPdfPages, looksEncrypted, looksLikePdf } from "./pdf";
 import { guessDocumentKind, validateDocument, validateDocumentSize } from "./validate";
 import { readZipDirectory } from "./zip";
 
@@ -343,5 +343,48 @@ describe("guessDocumentKind", () => {
    */
   it("misses a real syllabus whose filename carries no syllabus signal", () => {
     expect(guessDocumentKind({ filename: "marketing-fundamentals-sem1.pdf" })).toBe("reading");
+  });
+});
+
+describe("countPdfPages", () => {
+  /**
+   * A hint to the extraction prompt, never a gate — so the interesting behaviour is the
+   * `null`. A confidently wrong page count would make the model's own coverage accounting
+   * wrong, which is worse than not telling it.
+   */
+  const pdf = (body: string): Uint8Array => new TextEncoder().encode(`%PDF-1.7\n${body}\n%%EOF`);
+
+  it("counts pages when the object count and the declared /Count agree", () => {
+    expect(
+      countPdfPages(pdf("/Type /Pages /Count 3\n/Type /Page x\n/Type /Page y\n/Type /Page z")),
+    ).toBe(3);
+  });
+
+  it("returns null when the two signals disagree", () => {
+    expect(countPdfPages(pdf("/Type /Pages /Count 9\n/Type /Page x\n/Type /Page y"))).toBeNull();
+  });
+
+  it("returns null when page objects are not visible (object streams)", () => {
+    expect(countPdfPages(pdf("/Type /Pages /Count 12\n<compressed object stream>"))).toBeNull();
+  });
+
+  it("returns null when nothing declares a count", () => {
+    expect(countPdfPages(pdf("/Type /Page x\n/Type /Page y"))).toBeNull();
+  });
+
+  it("does not mistake /Pages for a page object", () => {
+    // `/Type /Pages` is the tree node, not a page. Counting it would be off by one on
+    // every PDF in existence.
+    expect(countPdfPages(pdf("/Type /Pages /Count 1\n/Type /Page a"))).toBe(1);
+  });
+
+  it("takes the root's count when nested /Pages nodes declare their own", () => {
+    expect(
+      countPdfPages(
+        pdf(
+          "/Type /Pages /Count 4\n/Type /Pages /Count 2\n/Type /Page a\n/Type /Page b\n/Type /Page c\n/Type /Page d",
+        ),
+      ),
+    ).toBe(4);
   });
 });

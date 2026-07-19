@@ -28,6 +28,14 @@ catalog:
   # ICS parsing (Deadlines & Calendar Hub §3.7). Pure JS, zero runtime deps,
   # timezone-aware recurrence expansion — the reason `rrule` was rejected.
   ical.js: ^2.2.1
+  # PPTX extraction (Document Pipeline §4.2). A .pptx is a zip of XML: jszip
+  # inflates it, fast-xml-parser reads `ppt/slides/slide{N}.xml` and
+  # `ppt/notesSlides/notesSlide{N}.xml`. Both are pure JS with no Node builtins,
+  # which is what lets the parser live in `packages/core` — verified by
+  # typecheck: core still has no `@types/node`, and `import "node:fs"` there
+  # still fails to resolve after adding both.
+  jszip: ^3.10.1
+  fast-xml-parser: ^5.10.1
   "@supabase/supabase-js": ^2.110.6
   "@supabase/ssr": ^0.12.3
   "@phosphor-icons/react": ^2.1.10
