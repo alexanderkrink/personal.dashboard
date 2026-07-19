@@ -188,7 +188,7 @@ contrast checker at implementation.
   --primary-foreground:oklch(0.99 0.005 237);
   --accent:            oklch(0.58 0.17 237);    /* bright azure: focus ring, wordmark dot, hover/selected bg */
   --accent-foreground: oklch(0.15 0.02 237);    /* DARK ink on solid --accent chips: light-mode --accent (L 0.58) is too light for white text. CORRECTED 2026-07-18 (was 0.20, which fails AA — see the gamut note below) */
-  --accent-text:       oklch(0.50 0.15 237);    /* AA-safe azure for link/interactive TEXT (~5.5:1 on canvas) */
+  --accent-text:       oklch(0.50 0.15 237);    /* 🔴 DISPROVEN 2026-07-19 (Wave 3): NOT AA-safe. "~5.5:1 on canvas" is the composite on the BARE canvas; on --accent-subtle at 11px/400 it samples 4.04, and 4.31 at weight 500. Now oklch(0.44 0.15 237) — worst site 5.00. Hue/chroma untouched. */
   --ring:              oklch(0.58 0.17 237);    /* = --accent (bright azure); focus rings are non-text, 3:1 suffices */
 
   --radius:            0.375rem;                /* 6px cockpit base */
@@ -271,10 +271,36 @@ percentile of cumulative distance mass):
 
 | tier | composite | sampled | verdict |
 | --- | --- | --- | --- |
-| `overdue` | 4.89 | 4.74 | ok |
+| `overdue` | 4.89 | 4.74 | ok 🔴 DISPROVEN 2026-07-19 — see below |
 | `high` | 4.68 | **4.42** | **FAILS** — the loudest rung, and what §7 ranks by |
 | `medium` | 4.80 | 4.55 | thin |
 | `done` | 4.76 | **4.50** | on the floor, zero headroom |
+
+🔴 **DISPROVEN 2026-07-19 (Wave 3) — `overdue`'s "ok" was an artefact of measuring one
+site.** Every row in the table above is the 11px **weight-500** badge with the uniform probe
+label. Production also writes `--urgency-overdue` at **weight 400**, and a 400-weight glyph
+surrenders more of its body to anti-aliasing than a 500-weight one. Re-measured across all
+five sites that write with the token, same method, DPR 1, both themes, both widths:
+
+| site | weight | composite | sampled (light) | sampled (dark) |
+| --- | --- | --- | --- | --- |
+| `sync-fail-chip` | 400 | 4.89 / 4.86 | **4.20 FAILS** | **3.99 FAILS** |
+| `overdue-badge` | 500 | 4.89 / 4.86 | 4.54 | **4.35 FAILS** |
+| `overdue-header` | 500 | 5.08 / 5.48 | 5.06 | 5.39 |
+| `exam-conflict` | 400 | 5.80 / 6.16 | 4.81 | 4.75 |
+| `due-in` | 400 | 5.80 / 6.16 | 5.19 | 5.22 |
+
+`sync-fail-chip` is the worst reading in the system, and it is the one label on screen saying
+the calendar data is stale. So `overdue` gets the same treatment as the other three:
+`--urgency-overdue-text` `oklch(0.48 0.2 27)` light / `oklch(0.78 0.16 25)` dark. ⚠ Unlike
+`high`/`medium`/`done`, the dark column does **not** alias its paint — overdue is the only
+tier that fails in both themes, and dark red at L 0.68 C 0.19 on a 20% wash of itself
+composites to only 4.86 before anti-aliasing. Chroma drops to 0.16 there because red at
+L 0.78 C 0.19 is outside sRGB. Hue is untouched in both columns.
+
+The general lesson, which outlives these two tokens: **a ramp spec that measures one render
+site per token measures the best case.** `e2e/thin-token-contrast.spec.ts` enumerates every
+site instead, and carries no per-site allowance.
 
 So the ramp now splits paint from ink, the same rule as `--accent` / `--accent-text`:
 `--urgency-high-text` `oklch(0.48 0.14 65)` and `--urgency-done-text` `oklch(0.45 0.13 155)`
@@ -1843,6 +1869,25 @@ skipping work, in three layers:
   gets `missing_since = now()` (tombstone) and is hidden from views after 24 h; the row
   is hard-deleted after 7 days of continuous absence. If the UID reappears, the
   tombstone clears. This prevents a flaky feed generation from wiping the calendar.
+- 🔴 **DISPROVEN 2026-07-19 (Wave 3) — "hard-deleted after 7 days" destroys past
+  sessions, and the clause above contains its own refutation.** It correctly says
+  *"ICS feeds are windowed"*, then treats every disappearance as a cancellation. Those
+  are two different events: a **future** event that vanishes was cancelled, but a
+  **past** one vanished because the window's trailing edge rolled past it. The spec had
+  no way to tell them apart, and neither did the implementation — `TombstoneCandidate`
+  carried no occurrence date at all.
+  Found live: all 5 tombstoned items started `2026-01-19` while the feed's
+  `earliest_live` had moved to `2026-01-21`. Nothing was cancelled. First hard delete
+  was due **2026-07-26**, and 220 of 374 occurrences were on the same timer. Since M1
+  item 9 hangs `attendance_records` and `participation_logs` off `calendar_occurrences`,
+  from September this would have silently destroyed **graded** participation history as
+  sessions aged out.
+  **Corrected rule: cancellation is only meaningful for something that has not happened
+  yet.** A vanished item whose LAST occurrence is past is retained permanently — no
+  clock, no delete (`{action: "retain"}`, distinct from `keep`). An item with no
+  occurrences is retained too: deletion requires positive evidence of future-ness, and
+  the destructive path must not be the one that fires when the data is most broken. The
+  7-day lifecycle is unchanged for future events, which is where it was always correct.
 - Manual items (`feed_id is null`) are never touched by sync.
 
 #### 3.4 Timezones: Europe/Madrid + DST, done once at write time
