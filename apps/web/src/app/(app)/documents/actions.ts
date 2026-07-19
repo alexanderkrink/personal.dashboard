@@ -198,8 +198,21 @@ export async function registerUpload(input: unknown): Promise<RegisterResult> {
    * carries `metadata.size` — the length Storage actually stored. So the fix
    * costs nothing beyond raising the page limit enough to find the right entry
    * by name.
+   *
+   * ⚠ The entry is matched on the name Storage actually holds, which is the LAST
+   * SEGMENT OF `storagePath` — i.e. `safeStorageFilename(upload.filename)`, not
+   * `upload.filename`. The two differ whenever the raw name carries a `/`, `\`,
+   * `%`, a leading dot, a control character, surrounding whitespace, or more than
+   * 200 characters — `Unit 4 — 50% margin.pptx` is stored as
+   * `Unit 4 — 50- margin.pptx`. Matching the raw name means `find` returns
+   * `undefined` for exactly those files, the reconciliation silently falls back to
+   * the client's claim, and the cap re-check below goes back to measuring the
+   * client against its own number — the circularity this block exists to close,
+   * restored without a symptom. Deriving the segment from `storagePath` rather
+   * than re-deriving it keeps this correct if the sanitiser ever changes.
    */
-  const entry = listed.find((object) => object.name === upload.filename);
+  const storedName = storagePath.slice(storagePath.lastIndexOf("/") + 1);
+  const entry = listed.find((object) => object.name === storedName);
   const listedSize = entry?.metadata?.size;
   const sizeBytes =
     typeof listedSize === "number" && listedSize > 0 ? listedSize : upload.sizeBytes;

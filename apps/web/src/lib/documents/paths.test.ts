@@ -111,4 +111,44 @@ describe("storagePathFor", () => {
       expect(safeStorageFilename(once)).toBe(once);
     }
   });
+
+  /**
+   * `registerUpload` reconciles `size_bytes` against `metadata.size` from a
+   * `storage.list()` of the document's prefix, and has to pick its entry out of
+   * that listing by name. The name Storage holds is the LAST SEGMENT OF THE
+   * PATH — the sanitised one — never the raw filename the browser sent.
+   *
+   * Matching the raw name instead is silent: `find` returns `undefined`, the
+   * reconciliation falls back to the client's self-reported size, and the 50 MB
+   * re-check goes back to measuring the client against its own claim. Nothing
+   * throws and nothing logs, so this pins the invariant the action depends on.
+   */
+  it("names the stored object by the path's last segment, which is not always the raw filename", () => {
+    const parts = {
+      userId: "11111111-1111-4111-8111-111111111111",
+      courseId: "22222222-2222-4222-8222-222222222222",
+      documentId: "33333333-3333-4333-8333-333333333333",
+    };
+
+    // Realistic names whose sanitised form differs from what the browser sent.
+    for (const filename of [
+      "Unit 4 — 50% margin.pptx",
+      "notes/chapter 3.pdf",
+      ".hidden deck.pptx",
+      `${"a".repeat(500)}.pdf`,
+    ]) {
+      const path = storagePathFor({ ...parts, filename });
+      const lastSegment = path.slice(path.lastIndexOf("/") + 1);
+
+      expect(lastSegment).toBe(safeStorageFilename(filename));
+      // The point of the test: the raw name would NOT have matched the listing.
+      expect(lastSegment).not.toBe(filename);
+    }
+
+    // …and for an ordinary name the two coincide, which is why matching on the
+    // raw filename passed every manual check it was ever given.
+    const ordinary = "Micro - Unit 3- Elasticities (2026).pptx";
+    const ordinaryPath = storagePathFor({ ...parts, filename: ordinary });
+    expect(ordinaryPath.slice(ordinaryPath.lastIndexOf("/") + 1)).toBe(ordinary);
+  });
 });
