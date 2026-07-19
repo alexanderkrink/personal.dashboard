@@ -39,6 +39,22 @@ export const env = createEnv({
     // not safety. Optional also keeps `inngest-cli dev` and CI buildable, since
     // the dev server issues its own local key and ignores this value entirely.
     INNGEST_EVENT_KEY: z.string().min(1).optional(),
+    // Inngest dev mode. LOCAL ONLY, and validated here even though the SDK reads
+    // it straight off `process.env` rather than through this file — because the
+    // SDK's parse is dangerously lenient. `Inngest.mode` tries `parseAsBoolean`
+    // first, and if that yields `undefined` it falls through to `explicitDevUrl`,
+    // which runs the raw value through `new URL(normalizeUrl(value))`. Almost any
+    // non-empty string survives that: `INNGEST_DEV=yes` becomes `http://yes`,
+    // which is a valid URL, which means DEV MODE — and dev mode skips signature
+    // verification entirely, turning the `/api/inngest` gate carve-out into an
+    // unauthenticated, RLS-bypassing write endpoint. Confirmed by experiment
+    // against a production build, not inferred.
+    //
+    // Constraining the value to the four strings `parseAsBoolean` actually
+    // understands means a typo fails the build instead of silently opening the
+    // endpoint. The runtime half of this defence is the production assertion in
+    // `src/inngest/client.ts`.
+    INNGEST_DEV: z.enum(["0", "1", "true", "false"]).optional(),
     // Auth emails via Resend (Supabase Send Email Hook). Optional so local dev
     // and CI build without them; the hook route 500s with a clear message if unset.
     RESEND_API_KEY: z.string().min(1).optional(),
@@ -56,6 +72,7 @@ export const env = createEnv({
     CRON_SECRET: process.env.CRON_SECRET,
     INNGEST_SIGNING_KEY: process.env.INNGEST_SIGNING_KEY,
     INNGEST_EVENT_KEY: process.env.INNGEST_EVENT_KEY,
+    INNGEST_DEV: process.env.INNGEST_DEV,
     RESEND_API_KEY: process.env.RESEND_API_KEY,
     SEND_EMAIL_HOOK_SECRET: process.env.SEND_EMAIL_HOOK_SECRET,
     EMAIL_FROM: process.env.EMAIL_FROM,

@@ -58,6 +58,33 @@ describe("startsWithAny matches whole segments, not characters", () => {
     expect(ungated("/api/cron-jobs")).toBe(false);
     expect(ungated("/api/hooks2")).toBe(false);
   });
+
+  it.each(["/API/INNGEST", "/Api/Inngest", "/api/Inngest"])(
+    "does not exempt the case variant %s",
+    (pathname) => {
+      // Matching is case-sensitive and the routes are lowercase, so these fail
+      // closed twice over: gated here, and 404 at the router even if they were not.
+      expect(ungated(pathname)).toBe(false);
+    },
+  );
+
+  it.each(["/api/inngest%2Fadmin", "//api/inngest", " /api/inngest"])(
+    "does not exempt the malformed variant %s",
+    (pathname) => {
+      expect(ungated(pathname)).toBe(false);
+    },
+  );
+
+  it("matches traversal strings, which Next normalises away before we see them", () => {
+    // Documented, not celebrated. `startsWithAny` is a string function and does
+    // no normalisation, so the literal `/api/inngest/../dashboard` matches the
+    // prefix. Next resolves `..` before populating `nextUrl.pathname`, so the
+    // proxy is handed `/dashboard` and gates it — confirmed against a production
+    // build with `curl --path-as-is` (raw, `%2e%2e` and mixed-case variants all
+    // 307 to `/`). This assertion exists so the borrowed guarantee is visible:
+    // if it ever changes, the failure lands here rather than in production.
+    expect(ungated("/api/inngest/../dashboard")).toBe(true);
+  });
 });
 
 describe("UNGATED_PATHS membership", () => {

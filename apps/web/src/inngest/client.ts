@@ -39,3 +39,35 @@ export const inngest = new Inngest({
   id: "study-dashboard",
   eventKey: env.INNGEST_EVENT_KEY,
 });
+
+/**
+ * Dev mode must never survive into a production deployment.
+ *
+ * Defaulting to cloud (above) makes dev mode something you have to opt into, but
+ * it does not make opting in *loud*, and the cost of a silent opt-in here is not
+ * a degraded feature — it is a full authentication bypass. In dev mode `serve()`
+ * skips signature verification, and `/api/inngest` has no other authentication:
+ * it is exempt from the access-code gate and it accepts POST. An unsigned POST
+ * from anyone on the internet then runs function code, which reaches the database
+ * through `createAdminSupabaseClient` and therefore bypasses RLS. That is not
+ * hypothetical — it was reproduced against a production build with `INNGEST_DEV=1`
+ * set: an unauthenticated request wrote a `job_heartbeats` row for a user id it
+ * chose itself.
+ *
+ * So the guard is a throw, not a warning. A route that refuses to load is a
+ * loud, contained outage; a route that loads without checking signatures is a
+ * quiet, uncontained one.
+ *
+ * Scoped to `VERCEL_ENV === "production"` deliberately: that is set only in a
+ * real production deployment on Vercel, so this cannot fire during a local
+ * `pnpm build` or in CI, where `INNGEST_DEV=1` is legitimate and expected.
+ * Preview deploys are left alone for the same reason they are elsewhere — they
+ * are not the environment holding real data.
+ */
+if (process.env.VERCEL_ENV === "production" && inngest.mode !== "cloud") {
+  throw new Error(
+    "Inngest is in dev mode in a production deployment, which disables signature " +
+      "verification on /api/inngest — the only authentication that endpoint has. " +
+      "Unset INNGEST_DEV in the production environment.",
+  );
+}

@@ -1079,8 +1079,19 @@ placeholders). The Anthropic key is already fully wired from M0.
 >
 > ⚠ **CORRECTED 2026-07-19** — a sixth Inngest variable exists that this section does not
 > mention: **`INNGEST_DEV=1`, required in `.env.local` for local development**, and it must stay
-> unset in production. It is read by the SDK, not by `env.ts`, so it is deliberately not on the
-> four-location checklist. See the dev-mode note under the sketch below.
+> unset in production. See the dev-mode note under the sketch below.
+>
+> ⚠ **AMENDED 2026-07-19 (review gate 2)** — `INNGEST_DEV` was initially left off the
+> four-location checklist on the grounds that the SDK reads it directly rather than through
+> `env.ts`. That reasoning was wrong, and it was wrong in the dangerous direction. The SDK's
+> parse is lenient: `Inngest.mode` tries `parseAsBoolean`, and on `undefined` falls through to
+> `explicitDevUrl`, which runs the raw value through `new URL(normalizeUrl(value))`. Nearly any
+> non-empty string survives that — `INNGEST_DEV=yes` becomes `http://yes`, a valid URL, therefore
+> **dev mode, therefore no signature verification on a gate-exempt POST endpoint**. Reproduced
+> against a production build: an unsigned POST wrote a real `job_heartbeats` row for a user id of
+> the caller's choosing, through the RLS-bypassing admin client. `INNGEST_DEV` is now in `env.ts`
+> constrained to `0|1|true|false`, in `turbo.json`, and deliberately unset in CI; and
+> `src/inngest/client.ts` throws at startup if dev mode is ever live with `VERCEL_ENV=production`.
 >
 > ⚠ **CORRECTED 2026-07-19** — `createAdminSupabaseClient` was *not* unused before this item.
 > Wave 2 already calls it from `api/cron/calendar-sync/route.ts` and `server/calendar/refresh.ts`;

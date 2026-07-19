@@ -77,6 +77,17 @@ const GATE_PATH = "/gate";
  * deliberate carve-out into a namespace of accidental ones. Exported so
  * `proxy-session.test.ts` can pin that behaviour directly, since the widening
  * would be invisible in any test that only checked the paths we do exempt.
+ *
+ * ONE THING THIS FUNCTION DOES NOT DO: it does not normalise. Given the literal
+ * string `/api/inngest/../dashboard` it returns true, because that string really
+ * does start with `/api/inngest/`. It is not exploitable, and the reason is
+ * external to this file: Next resolves `..` segments before populating
+ * `request.nextUrl.pathname`, so the proxy is handed `/dashboard` and gates it.
+ * Verified against a production build with `curl --path-as-is` — the raw,
+ * URL-encoded (`%2e%2e`) and mixed-case variants all 307 to `/` rather than
+ * slipping through. Written down because it is a property we are *borrowing*
+ * from the framework rather than one this function guarantees: if the proxy is
+ * ever fed a pathname from somewhere other than `nextUrl`, normalise it first.
  */
 export function startsWithAny(pathname: string, prefixes: readonly string[]): boolean {
   return prefixes.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
