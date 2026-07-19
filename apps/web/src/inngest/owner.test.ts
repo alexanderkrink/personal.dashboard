@@ -190,3 +190,54 @@ describe("the locator type makes an unowned source unrepresentable", () => {
     ).resolves.toBeDefined();
   });
 });
+
+/**
+ * Wave 4 Agent 1 (schema) pinning the contract Agent 2's `process-document` handler is
+ * written against. `OwnedTable` is DERIVED from the generated `Database` type, which means
+ * it moves whenever someone regenerates types — so "documents is a legal ownership source"
+ * is a property of the schema, not of this file, and it deserves a test that fails if a
+ * future migration takes it away.
+ */
+describe("the document pipeline's tables are usable as ownership sources", () => {
+  it("resolves `documents` with no cast — the locator Agent 2 passes", async () => {
+    const { client, from, select } = stubClient({ data: { user_id: BOB } });
+
+    // The point of the assertion is that this line COMPILES. `"documents"` is a bare
+    // string literal: no `as OwnedTable`, no satisfies, nothing papering over a gap
+    // between the schema and the helper.
+    await expect(
+      deriveOwner(client, { table: "documents", id: ROW }, { job: "process-document" }),
+    ).resolves.toEqual({ userId: BOB, table: "documents", rowId: ROW });
+
+    expect(from).toHaveBeenCalledWith("documents");
+    // `documents` carries user_id (it is not `profiles`), so the owner column is user_id.
+    expect(select).toHaveBeenCalledWith("user_id");
+  });
+
+  it("still refuses a claimed userId that contradicts the document's owner", async () => {
+    const { client } = stubClient({ data: { user_id: BOB } });
+    await expect(
+      deriveOwner(
+        client,
+        { table: "documents", id: ROW },
+        { claimed: ALICE, job: "process-document" },
+      ),
+    ).rejects.toBeInstanceOf(OwnerMismatchError);
+  });
+
+  it("accepts document_processing_events, whose id is a bigint", async () => {
+    // `document_processing_events.id` is `bigint generated always as identity`, so its
+    // generated Row type has `id: number` while `OwnedRowLocator.id` is `string`. That
+    // mismatch does NOT break the helper: `OwnedTable` is selected on the presence of
+    // `user_id` and never looks at `id`, and the runtime call only ever passes the id
+    // through to `.eq()`.
+    //
+    // It is nonetheless the wrong table to derive from, and the migration says so. A job
+    // holds a document id and asks who owns THE DOCUMENT; nothing should ever need the
+    // owner of a single log line. This test pins the type behaviour, not a recommendation.
+    const { client } = stubClient({ data: { user_id: BOB } });
+    await expect(
+      deriveOwner(client, { table: "document_processing_events", id: "42" }, { job: "j" }),
+    ).resolves.toEqual({ userId: BOB, table: "document_processing_events", rowId: "42" });
+  });
+});
