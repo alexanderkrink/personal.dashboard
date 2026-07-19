@@ -1,0 +1,54 @@
+-- Close the budget-guard reset hole: `ai_generations` is a cost ledger, and an
+-- authenticated user must not be able to erase their own spend history.
+--
+-- ## What was wrong
+--
+-- 20260719113023 gave `ai_generations` the standard four per-operation policies,
+-- including `for delete to authenticated using ((select auth.uid()) = user_id)`.
+-- The stated justification for leaving DELETE open was the auth cascade:
+-- `user_id references auth.users (id) on delete cascade` means deleting a user
+-- issues a DELETE against this table, so a *raising DELETE trigger* would break
+-- user deletion.
+--
+-- That reasoning is correct about the TRIGGER and does not transfer to the POLICY.
+-- Referential actions (ON DELETE CASCADE) are performed by the system on behalf of
+-- the constraint, not by the invoking role, and RLS is not consulted for them.
+-- Measured 2026-07-19 on this project rather than assumed: a child table with RLS
+-- enabled and SELECT/INSERT policies only — no DELETE policy at all — still had its
+-- rows removed by the parent's ON DELETE CASCADE. The cascade never needed a policy.
+--
+-- What the policy DID buy was this, also measured, as `authenticated` with the real
+-- `auth.uid()`: `delete from public.ai_generations` removed all 5 rows. A user could
+-- therefore zero `ai_daily_cost`, which is the sole input to the
+-- AI_MONTHLY_BUDGET_USD guard — resetting the cap to $0 spent and re-arming the full
+-- budget on demand. For a table whose entire purpose is to be the durable record of
+-- what has been spent, that is the one write it must refuse.
+--
+-- ## Why three policies and not four here
+--
+-- The repo convention is four per-operation policies per user-owned table, and this
+-- is a deliberate, documented exception rather than an oversight. The convention
+-- exists so that ownership scoping is uniform and a MISSING policy reads as an
+-- anomaly; it is not a requirement that every table grant every verb. On an
+-- append-only ledger the convention and the invariant are in genuine tension, and
+-- integrity wins: a table that any authenticated user can empty is not append-only
+-- in any sense that a budget guard can rely on.
+--
+-- UPDATE keeps its policy. It is inert — `ai_generations_no_update` refuses every
+-- UPDATE for every role including `postgres` — so dropping it would change no
+-- behaviour, and leaving it keeps the table's shape recognisable next to its peers.
+-- DELETE is dropped because, unlike UPDATE, nothing else was stopping it.
+--
+-- ## Nothing legitimate loses a capability
+--
+--   * the auth cascade  — never consulted RLS (measured above);
+--   * the writer        — `createAdminSupabaseClient` bypasses RLS, and only inserts;
+--   * retention pruning — would run through that same admin client;
+--   * "delete my data"  — is account deletion, i.e. the cascade.
+--
+-- No application code issues a user-scoped DELETE against this table.
+
+drop policy "Users can delete own ai generations" on public.ai_generations;
+
+comment on table public.ai_generations is
+  'Append-only log of every LLM attempt: the §3 five-column stamp, token usage, latency, cost priced at write time, and raw text/error on failure. One row per ladder ATTEMPT, not per logical call. UPDATE is blocked by a trigger and there is deliberately NO user DELETE policy — this is the input to the budget guard, so a user must not be able to erase their own spend history. The auth.users cascade still prunes rows, because referential actions do not consult RLS. There is no updated_at by design.';

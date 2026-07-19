@@ -132,6 +132,35 @@ export const assignCourseSchema = z.object({
   courseId: z.uuid("Pick a course."),
 });
 
+/**
+ * Re-filing, un-filing or un-deciding **one** item.
+ *
+ * The counterpart to `assignCourseSchema`, and deliberately a different schema
+ * rather than a widening of it. `assignCourse` is a **bulk pattern** operation:
+ * it files every unassigned item matching a hint and writes a `course_matchers`
+ * row so future ones file themselves. This is a **per-item** operation that
+ * writes no matcher and speaks only about the row named. Sharing a schema would
+ * be the first step toward sharing a code path, and the bulk rule — *never
+ * re-file an item the user already filed elsewhere* — is only correct for bulk.
+ *
+ * A discriminated union for the same reason `examDecisionSchema` is one: the
+ * three moves do not take the same input, and a shared object would have to make
+ * `courseId` optional, which is how `clear` and a `set` with a missing course
+ * become indistinguishable.
+ *
+ * - `set` — assign, or **move** to a different course. The gap that made a course
+ *   link write-once.
+ * - `clear` — un-assign. A positive statement that this belongs to no course.
+ * - `reset` — hand the decision back to sync's matcher. The undo for both of the
+ *   above, without which `clear` would be the one-way door that rejecting an exam
+ *   used to be.
+ */
+export const setItemCourseSchema = z.discriminatedUnion("intent", [
+  z.object({ intent: z.literal("set"), itemId: z.uuid(), courseId: z.uuid("Pick a course.") }),
+  z.object({ intent: z.literal("clear"), itemId: z.uuid() }),
+  z.object({ intent: z.literal("reset"), itemId: z.uuid() }),
+]);
+
 /* -------------------------------------------------------------------------- */
 /* Inline edits on a week row                                                 */
 /* -------------------------------------------------------------------------- */

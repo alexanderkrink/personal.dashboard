@@ -56,6 +56,15 @@ export type SyncOutcome =
       occurrencesUnchanged: number;
       tombstoned: number;
       resurrected: number;
+      /**
+       * Vanished from the feed, already in the past, kept permanently (§3.3).
+       *
+       * Reported separately from `tombstoned` because the two are opposites: one
+       * counts rows now on a deletion timer, the other counts rows that can never
+       * be on one. Collapsing them would hide the entire distinction this field
+       * exists to make visible.
+       */
+      retained: number;
       deleted: number;
       cancelled: number;
     }
@@ -230,8 +239,29 @@ async function runSync(
 
   /* ---- occurrences (§3.2 layer 3) ------------------------------------- */
 
-  const itemIds = [...itemIdByUid.values()];
+  // Deliberately a SUPERSET of the items present in this snapshot: every item of
+  // this feed, including the ones that just vanished from it. The vanished ones
+  // are precisely the tombstone candidates, and §3.3 now needs each candidate's
+  // last occurrence date to tell a cancellation from a feed-window roll-off — so
+  // the rows it needs are exactly the rows the old, snapshot-scoped query left
+  // out. One query either way; the extra rows are ignored by both consumers
+  // below, which key on `item_id`.
+  const itemIds = [...new Set([...itemIdByUid.values(), ...feedItems.map((item) => item.id)])];
   const storedOccurrences = await store.listOccurrences(itemIds);
+
+  // Latest, not earliest — an item is only safely "past" once its LAST occurrence
+  // is past. See `TombstoneCandidate.latestOccurrenceStartsAt`.
+  const latestOccurrenceByItem = new Map<string, string>();
+  for (const occurrence of storedOccurrences) {
+    const current = latestOccurrenceByItem.get(occurrence.item_id);
+    // Compared as instants, not strings: PostgREST spells a timestamptz
+    // `…T08:00:00+00:00` and the parser spells it `…T08:00:00.000Z`, so a
+    // lexicographic max over mixed spellings picks the wrong row. Same trap that
+    // made the row diff rewrite all 374 occurrences every sync.
+    if (current === undefined || Date.parse(occurrence.starts_at) > Date.parse(current)) {
+      latestOccurrenceByItem.set(occurrence.item_id, occurrence.starts_at);
+    }
+  }
   const storedByKey = new Map(
     storedOccurrences.map((occurrence) => [
       `${occurrence.item_id}\u0000${occurrence.recurrence_id}`,
@@ -301,10 +331,18 @@ async function runSync(
   /* ---- tombstones (§3.3) ---------------------------------------------- */
 
   const presentUids = new Set(events.map((event) => event.uid));
-  const actions = planTombstones(feedItems, presentUids, nowIso);
+  const actions = planTombstones(
+    feedItems.map((item) => ({
+      ...item,
+      latestOccurrenceStartsAt: latestOccurrenceByItem.get(item.id) ?? null,
+    })),
+    presentUids,
+    nowIso,
+  );
 
   let tombstoned = 0;
   let resurrected = 0;
+  let retained = 0;
   const toDelete: string[] = [];
 
   for (const action of actions) {
@@ -316,6 +354,13 @@ async function runSync(
       resurrected += 1;
     } else if (action.action === "delete") {
       toDelete.push(action.id);
+    } else if (action.action === "retain") {
+      // Gone from the feed, but in the past — a window roll-off, not a
+      // cancellation. Nothing is scheduled for deletion. The only write is
+      // undoing a mark the OLD rule made, which is how the 5 rows already
+      // tombstoned on the live database heal themselves on the next sync.
+      if (action.clearMissingSince) await store.patchItem(action.id, { missing_since: null });
+      retained += 1;
     }
     // "keep" is genuinely nothing: the row stays exactly as it is, ORIGINAL
     // missing_since intact, so the 7-day clock keeps running instead of being
@@ -343,6 +388,7 @@ async function runSync(
     occurrencesUnchanged,
     tombstoned,
     resurrected,
+    retained,
     deleted: toDelete.length,
     cancelled,
   };
@@ -452,6 +498,7 @@ async function markExamCandidates(
           title: assessment.title,
           kind: assessment.kind,
           sessionNumber: assessment.session_number,
+          confirmed: assessment.confirmed,
         })),
       semesters,
     });

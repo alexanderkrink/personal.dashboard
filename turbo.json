@@ -12,7 +12,16 @@
         "SUPABASE_*",
         "ACCESS_CODE",
         "ANTHROPIC_API_KEY",
+        "GOOGLE_GENERATIVE_AI_API_KEY",
+        "VOYAGE_API_KEY",
+        "AI_KILL_SWITCH",
+        "AI_MAX_TIER",
+        "AI_MONTHLY_BUDGET_USD",
         "CRON_SECRET",
+        "INNGEST_SIGNING_KEY",
+        "INNGEST_EVENT_KEY",
+        "INNGEST_DEV",
+        "VERCEL_ENV",
         "RESEND_API_KEY",
         "SEND_EMAIL_HOOK_SECRET",
         "EMAIL_FROM",
@@ -20,7 +29,9 @@
         "VERCEL_*"
       ]
     },
-    "typecheck": {},
+    "typecheck": {
+      "dependsOn": ["build"]
+    },
     "test": {},
     "dev": {
       "cache": false,

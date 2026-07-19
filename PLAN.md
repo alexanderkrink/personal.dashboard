@@ -188,7 +188,7 @@ contrast checker at implementation.
   --primary-foreground:oklch(0.99 0.005 237);
   --accent:            oklch(0.58 0.17 237);    /* bright azure: focus ring, wordmark dot, hover/selected bg */
   --accent-foreground: oklch(0.15 0.02 237);    /* DARK ink on solid --accent chips: light-mode --accent (L 0.58) is too light for white text. CORRECTED 2026-07-18 (was 0.20, which fails AA — see the gamut note below) */
-  --accent-text:       oklch(0.50 0.15 237);    /* AA-safe azure for link/interactive TEXT (~5.5:1 on canvas) */
+  --accent-text:       oklch(0.50 0.15 237);    /* 🔴 DISPROVEN 2026-07-19 (Wave 3): NOT AA-safe. "~5.5:1 on canvas" is the composite on the BARE canvas; on --accent-subtle at 11px/400 it samples 4.04, and 4.31 at weight 500. Now oklch(0.44 0.15 237) — worst site 5.00. Hue/chroma untouched. */
   --ring:              oklch(0.58 0.17 237);    /* = --accent (bright azure); focus rings are non-text, 3:1 suffices */
 
   --radius:            0.375rem;                /* 6px cockpit base */
@@ -271,10 +271,36 @@ percentile of cumulative distance mass):
 
 | tier | composite | sampled | verdict |
 | --- | --- | --- | --- |
-| `overdue` | 4.89 | 4.74 | ok |
+| `overdue` | 4.89 | 4.74 | ok 🔴 DISPROVEN 2026-07-19 — see below |
 | `high` | 4.68 | **4.42** | **FAILS** — the loudest rung, and what §7 ranks by |
 | `medium` | 4.80 | 4.55 | thin |
 | `done` | 4.76 | **4.50** | on the floor, zero headroom |
+
+🔴 **DISPROVEN 2026-07-19 (Wave 3) — `overdue`'s "ok" was an artefact of measuring one
+site.** Every row in the table above is the 11px **weight-500** badge with the uniform probe
+label. Production also writes `--urgency-overdue` at **weight 400**, and a 400-weight glyph
+surrenders more of its body to anti-aliasing than a 500-weight one. Re-measured across all
+five sites that write with the token, same method, DPR 1, both themes, both widths:
+
+| site | weight | composite | sampled (light) | sampled (dark) |
+| --- | --- | --- | --- | --- |
+| `sync-fail-chip` | 400 | 4.89 / 4.86 | **4.20 FAILS** | **3.99 FAILS** |
+| `overdue-badge` | 500 | 4.89 / 4.86 | 4.54 | **4.35 FAILS** |
+| `overdue-header` | 500 | 5.08 / 5.48 | 5.06 | 5.39 |
+| `exam-conflict` | 400 | 5.80 / 6.16 | 4.81 | 4.75 |
+| `due-in` | 400 | 5.80 / 6.16 | 5.19 | 5.22 |
+
+`sync-fail-chip` is the worst reading in the system, and it is the one label on screen saying
+the calendar data is stale. So `overdue` gets the same treatment as the other three:
+`--urgency-overdue-text` `oklch(0.48 0.2 27)` light / `oklch(0.78 0.16 25)` dark. ⚠ Unlike
+`high`/`medium`/`done`, the dark column does **not** alias its paint — overdue is the only
+tier that fails in both themes, and dark red at L 0.68 C 0.19 on a 20% wash of itself
+composites to only 4.86 before anti-aliasing. Chroma drops to 0.16 there because red at
+L 0.78 C 0.19 is outside sRGB. Hue is untouched in both columns.
+
+The general lesson, which outlives these two tokens: **a ramp spec that measures one render
+site per token measures the best case.** `e2e/thin-token-contrast.spec.ts` enumerates every
+site instead, and carries no per-site allowance.
 
 So the ramp now splits paint from ink, the same rule as `--accent` / `--accent-text`:
 `--urgency-high-text` `oklch(0.48 0.14 65)` and `--urgency-done-text` `oklch(0.45 0.13 155)`
@@ -1054,7 +1080,60 @@ full t3-env checklist. ⚠ As of 2026-07-18 all five sit in `.env.local` only, w
 **0 of the 4** required locations (`env.ts`, `.env.example`, `turbo.json` `env`, CI
 placeholders). The Anthropic key is already fully wired from M0.
 
+> ⚠ **CORRECTED 2026-07-19 (item 2 shipped)** — 2 of those 5 are now fully wired through all
+> four locations: `INNGEST_SIGNING_KEY` (**required**, `min(32)` — `/api/inngest` is gate-exempt
+> and accepts POST, so the key is its entire authentication boundary; same reasoning as
+> `CRON_SECRET`) and `INNGEST_EVENT_KEY` (**optional** — it points outward, so it follows the
+> `ANTHROPIC_API_KEY` pattern; CI leaves it unset on purpose to prove the app builds without it).
+> Still at 0 of 4: `VOYAGE_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `CLOUDCONVERT_API_KEY`.
+>
+> ⚠ **CORRECTED 2026-07-19** — a sixth Inngest variable exists that this section does not
+> mention: **`INNGEST_DEV=1`, required in `.env.local` for local development**, and it must stay
+> unset in production. See the dev-mode note under the sketch below.
+>
+> ⚠ **AMENDED 2026-07-19 (review gate 2)** — `INNGEST_DEV` was initially left off the
+> four-location checklist on the grounds that the SDK reads it directly rather than through
+> `env.ts`. That reasoning was wrong, and it was wrong in the dangerous direction. The SDK's
+> parse is lenient: `Inngest.mode` tries `parseAsBoolean`, and on `undefined` falls through to
+> `explicitDevUrl`, which runs the raw value through `new URL(normalizeUrl(value))`. Nearly any
+> non-empty string survives that — `INNGEST_DEV=yes` becomes `http://yes`, a valid URL, therefore
+> **dev mode, therefore no signature verification on a gate-exempt POST endpoint**. Reproduced
+> against a production build: an unsigned POST wrote a real `job_heartbeats` row for a user id of
+> the caller's choosing, through the RLS-bypassing admin client. `INNGEST_DEV` is now in `env.ts`
+> constrained to `0|1|true|false`, in `turbo.json`, and deliberately unset in CI; and
+> `src/inngest/client.ts` throws at startup if dev mode is ever live with `VERCEL_ENV=production`.
+>
+> ⚠ **CORRECTED 2026-07-19** — `createAdminSupabaseClient` was *not* unused before this item.
+> Wave 2 already calls it from `api/cron/calendar-sync/route.ts` and `server/calendar/refresh.ts`;
+> the health check is its third call site, not its first.
+
 #### The pipeline as an Inngest function (sketch)
+
+> 🔴 **DISPROVEN 2026-07-19 — the sketch below does not compile on the version we shipped.**
+> It uses inngest **v3**'s three-argument form, `createFunction(options, trigger, handler)`.
+> We are on **inngest 4.13.0**, where triggers moved *into* the options object:
+>
+> ```ts
+> inngest.createFunction({ id: "process-document", triggers: [documentUploaded], retries: 3 }, handler)
+> ```
+>
+> This is not a soft deprecation. v4 throws `"createFunction" expected a handler function as the
+> second argument` **at import time**, so the mistake takes down the whole `/api/inngest` route
+> rather than one function. Item 5 must use the two-argument form. Everything else in the sketch
+> — `step.run`, `concurrency`, `onFailure`, `step.sendEvent`, per-step retries — is unchanged.
+>
+> 🔴 **DISPROVEN 2026-07-19 — v4 does not infer dev mode from `NODE_ENV`.** v3 did; v4's
+> `Inngest.mode` checks the `isDev` option, then `INNGEST_DEV`, then whether `INNGEST_DEV` holds a
+> URL, and otherwise **defaults to `"cloud"`**. With nothing set, `next dev` runs the production
+> path and answers `inngest-cli dev` with **401 on every GET and 400 on every PUT** — the app never
+> syncs and no function ever runs, with no error naming the cause. `INNGEST_DEV=1` in `.env.local`
+> is what fixes it. Defaulting to cloud is the safer default and we do not override it: a
+> misconfigured deploy fails closed with a 401 instead of silently skipping signature verification.
+>
+> ✅ **VERIFIED 2026-07-19** — the round trip runs. `system/health-check.requested` →
+> `inngest-cli dev` → `POST /api/inngest?fnId=study-dashboard-health-check` → **Completed**;
+> a run with a non-existent `userId` fails as intended with `NonRetriableError: No such user`,
+> which is what proves the admin client reaches Postgres rather than a mock.
 
 ```ts
 export const processDocument = inngest.createFunction(
@@ -1853,6 +1932,25 @@ skipping work, in three layers:
   gets `missing_since = now()` (tombstone) and is hidden from views after 24 h; the row
   is hard-deleted after 7 days of continuous absence. If the UID reappears, the
   tombstone clears. This prevents a flaky feed generation from wiping the calendar.
+- 🔴 **DISPROVEN 2026-07-19 (Wave 3) — "hard-deleted after 7 days" destroys past
+  sessions, and the clause above contains its own refutation.** It correctly says
+  *"ICS feeds are windowed"*, then treats every disappearance as a cancellation. Those
+  are two different events: a **future** event that vanishes was cancelled, but a
+  **past** one vanished because the window's trailing edge rolled past it. The spec had
+  no way to tell them apart, and neither did the implementation — `TombstoneCandidate`
+  carried no occurrence date at all.
+  Found live: all 5 tombstoned items started `2026-01-19` while the feed's
+  `earliest_live` had moved to `2026-01-21`. Nothing was cancelled. First hard delete
+  was due **2026-07-26**, and 220 of 374 occurrences were on the same timer. Since M1
+  item 9 hangs `attendance_records` and `participation_logs` off `calendar_occurrences`,
+  from September this would have silently destroyed **graded** participation history as
+  sessions aged out.
+  **Corrected rule: cancellation is only meaningful for something that has not happened
+  yet.** A vanished item whose LAST occurrence is past is retained permanently — no
+  clock, no delete (`{action: "retain"}`, distinct from `keep`). An item with no
+  occurrences is retained too: deletion requires positive evidence of future-ness, and
+  the destructive path must not be the one that fires when the data is most broken. The
+  7-day lifecycle is unchanged for future events, which is where it was always correct.
 - Manual items (`feed_id is null`) are never touched by sync.
 
 #### 3.4 Timezones: Europe/Madrid + DST, done once at write time
@@ -2307,6 +2405,54 @@ below.) Two observations from the real feed drive the **fallback** path:
 > against a fall-2026 course would have fabricated a syllabus→course link the evidence
 > contradicts. The transcriptions are recorded below instead, ready to insert if and when the
 > matching courses exist (the 2025/26 term has no `semesters` row — see the 2025/26 gap).
+
+> **✅ VALIDATED 2026-07-19 (Wave 3, item 11) — the syllabus oracle now works, and the
+> circularity is unchanged.** `syllabus-components` (`claude-sonnet-5`, prompt v1) was run
+> against all **3 of 3** real syllabi through the real UI. Measured against the verbatim
+> transcriptions below: **17 of 17 components correct** on title, weight and kind, **4 of 4
+> session numbers correct** (ABM final `#30` / midterm `#12`; LOES final `30` / midterm `19`),
+> and **3 of 3 total session counts correct** — resolved by *both* routes the chain
+> describes, header field (`NUMBER OF SESSIONS: 30`, ABM and Marketing) and in-body heading
+> (`SESSION 30 (LIVE IN-PERSON) Final Exam`, LOES, which has no header field. The step-2
+> parser is therefore no longer theoretical).
+>
+> Three things worth recording because they were predicted here and held:
+> - **The re-take trap is real and was avoided.** All three documents state a second scheme.
+>   The model excluded each one and said so — including ABM's third-attempt
+>   `Deliverables 20 / Midterm 35 / Final 45`, which is exactly the transcription warned
+>   about below. It also recovered both pass gates verbatim (ABM ≥4.0, LOES ≥3.5).
+> - **The `SESSIONS 28/29` range did not fit and was not forced to.** It landed
+>   `session_number = null` plus a stated range, per the single-int column's limit.
+> - **Reading the whole body mattered.** LOES yields nothing from its header.
+>
+> ⚠ **This does NOT de-circularize the live 7 fall courses, and the M1 DoD clause stays
+> MET-CIRCULARLY.** The validation ran against courses created *for the three 2025-26
+> documents* under a separate fixture account, precisely so it would not fabricate the
+> syllabus→course link this block disproves. All 7 fall-2026 courses still read
+> `total_sessions_source = 'feed_derived'` and still resolve only through step 3. What
+> changed is that the mechanism is now built and proven against real documents, and
+> `total_sessions_source = 'syllabus'` is written **only on human confirm** — so the day a
+> fall-2026 syllabus exists, one paste and one confirm breaks the tie for real.
+>
+> **Measured cost of the three runs** (recorded here because it lives only in
+> `ai_generations` rows owned by the fixture account, which `on delete cascade` takes with
+> the user the day that account is removed). All three: `claude-sonnet-5`, prompt v1,
+> `step = initial`, `attempt = 1`, `outcome = success`, no cache tokens, priced at the
+> durable $3/$15 per-Mtok rate:
+>
+> | in | out | cost |
+> | --- | --- | --- |
+> | 18 030 | 1 840 | $0.081690 |
+> | 8 677 | 1 375 | $0.046656 |
+> | 16 483 | 2 676 | $0.089589 |
+> | | **total** | **$0.217935** |
+>
+> ⚠ **The LOES evidence is already gone.** Browser-testing Discard consumed the LOES
+> extraction — the run that carried BOTH of the distinctive claims above (`SESSIONS 28/29 →
+> null`, and the only session count with no header field). Two of the three extractions
+> survive (ABM confirmed, Marketing pending); the LOES `ai_generations` row survives because
+> that log is append-only, but the extracted values it produced do not. Re-running LOES is
+> one paste if that evidence is wanted before the account is deleted.
 >
 > **Transcribed evaluation tables** (verbatim weights; `session_number` only where the
 > syllabus states it inline; sanitized — no instructor names or contact details):
@@ -4741,13 +4887,17 @@ feature's migration, never ahead of need.
 
 ## AI Strategy
 
-⚠ **This whole section is SPEC, NOT SHIPPED — it lands with M1 item 2b, which has not started.** Verified 2026-07-18: `packages/ai/package.json` depends only on `@ai-sdk/anthropic`, `provider.ts` wires only `createAnthropic`, and `env.ts` declares no Google key at all (`GOOGLE_GENERATIVE_AI_API_KEY` sits in `.env.local`, wired into 0 of 4 checklist locations). Read the present tense below as the target state.
+✅ **SHIPPED 2026-07-19 (M1 item 2b).** The provider layer described below is live in `packages/ai`: both providers wired, the job registry replacing the 3-tier map, the widened `definePrompt`, `src/prompts/` + `src/schemas/`, per-provider price tables, and the §2 failure ladder (68 unit tests). `GOOGLE_GENERATIVE_AI_API_KEY` and `VOYAGE_API_KEY` are wired into all 4 checklist locations, and CLAUDE.md's rule was rewritten from "by tier" to "by job" in the same change. Real calls to **both** providers verified end-to-end through `createAIRuntime`. Present tense below is now literal — with the two exceptions marked 🔴/⚠ inline. **Still spec, and owned by later agents:** the `ai_generations` table, the cost rollup, the kill switch and budget guard (§6, item 2c), and every prompt/schema (`src/prompts/` and `src/schemas/` ship empty on purpose — see §3).
 
-All LLM interaction lives in `packages/ai` (providers, prompt templates, Zod output schemas, the model registry). It *will* wire **two providers** through the Vercel AI SDK — `@ai-sdk/anthropic` (wired today) and `@ai-sdk/google` (**not yet installed**) — and no `@ai-sdk/*` import or model ID appears anywhere else in the repo; the package never reads `process.env` — `apps/web/src/env.ts` injects configuration (both provider keys included). That boundary is what makes the multi-provider network below enforceable: one place to swap models *or providers*, one place to version prompts, one place to meter and kill spend. (The boundary governs prompts, providers, schemas, and model calls — UI streaming hooks like `useChat` from `@ai-sdk/react` live in `apps/web`, pointed at endpoints backed by this package.)
+⚠ **Metering covers `generateStructured` only.** (⚠ UPDATED 2026-07-19 by item 8: the two escapes are now named `AIRuntime.unmeteredLanguageModel()` / `unmeteredProviders()` and require an explicit `UNMETERED_ACKNOWLEDGEMENT` literal, so `grep -r UNMETERED_ACKNOWLEDGEMENT` enumerates every remaining hole and no accidental refactor reaches one. The hole itself is unchanged and still Wave 4's to close.) They hand out a raw AI SDK model, and anything built on them — `streamText` for chat/RAG and lesson prose (§2) — bypasses the logger entirely. The M1 DoD ("every AI call appears in `ai_generations` with cost") is therefore **not** satisfiable for streaming until a metered streaming wrapper exists; that has to land with chat/RAG in Wave 4, not after it. Likewise, an attempt that dies with a *transport* error produces no record in `packages/ai` (it never completes) — §6 wants that error persisted, and that belongs in the Inngest step wrapper where the `NonRetriableError` decision already lives.
+
+All LLM interaction lives in `packages/ai` (providers, prompt templates, Zod output schemas, the model registry). It wires **two providers** through the Vercel AI SDK — `@ai-sdk/anthropic` and `@ai-sdk/google` — and no `@ai-sdk/*` import or model ID appears anywhere else in the repo; the package never reads `process.env` — `apps/web/src/env.ts` injects configuration (both provider keys included). That boundary is what makes the multi-provider network below enforceable: one place to swap models *or providers*, one place to version prompts, one place to meter and kill spend. (The boundary governs prompts, providers, schemas, and model calls — UI streaming hooks like `useChat` from `@ai-sdk/react` live in `apps/web`, pointed at endpoints backed by this package.)
 
 ### 1. Model-per-job network
 
-⚠ **SPEC, NOT SHIPPED (M1 item 2b).** Today `packages/ai/src/models.ts` is still the 3-tier registry `MODELS = { fast: "claude-haiku-4-5", balanced: "claude-sonnet-5", deep: "claude-opus-4-8" }` (Anthropic-only) with the signature `getModel(provider, tier)`. **When 2b lands, CLAUDE.md's "model selection by tier" rule must be rewritten to "by job" in the same change** — until then, code written against the job API below violates the repo conventions.
+✅ **SHIPPED 2026-07-19 (M1 item 2b).** `packages/ai/src/models.ts` is the job registry below; the 3-tier map and `getModel(provider, tier)` are gone. `getModel(job)` is now pure — it returns `{ job, model, provider, rank }` with no SDK instance and no key, so it is unit-testable and the `AI_MAX_TIER` clamp lives in it as an option. `AIRuntime.languageModel(job)` is what turns a resolution into an SDK model. CLAUDE.md's "model selection by tier" rule was rewritten to "by job" in the same change, as required.
+
+🔴 **DISPROVEN 2026-07-19 — the model ID `gemini-3.1-pro` does not exist.** Probed live against the Generative Language API: `POST /v1beta/models/gemini-3.1-pro:generateContent` returns **HTTP 404** (`"models/gemini-3.1-pro is not found for API version v1beta"`), and `ListModels` has no such entry. The only live Gemini 3.1 Pro ID is **`gemini-3.1-pro-preview`** (1,048,576 input tokens, `generateContent` + `batchGenerateContent` + `createCachedContent` supported), which was called successfully. **The shipped registry pins `doc-structuring` to `gemini-3.1-pro-preview`**; the code block and pricing table below are corrected to match, and every *other* `gemini-3.1-pro` mention in this document (§Document pipeline, §1b, §2b, §4, §6) should be read as that ID until Google promotes a stable one. The other four §1 IDs were probed and all resolve: `claude-sonnet-5` and `claude-opus-4-8` exactly, and `claude-haiku-4-5` resolves as an alias to `claude-haiku-4-5-20251001` (it is absent from `ListModels` but accepted by the Messages API). ⚠ Note the shipped ID is a **preview**: preview IDs get retired, so this pin needs re-checking rather than trusting.
 
 Call sites select a **job**, never a model ID — `getModel("topic-merge")` resolves the job to its pinned `(provider, model)`. The registry in `packages/ai/src/models.ts` pins each job to an explicit model across two providers; coarse capability **ranks** (`fast < balanced < deep`) survive only to drive confidence escalation, the `AI_MAX_TIER` clamp (§6), and 429 failover:
 
@@ -4758,13 +4908,13 @@ export const MODELS = {
   "gemini-3.1-flash-lite": { provider: "google",    rank: "fast"     },
   "claude-haiku-4-5":      { provider: "anthropic", rank: "fast"     },
   "claude-sonnet-5":       { provider: "anthropic", rank: "balanced" },
-  "gemini-3.1-pro":        { provider: "google",    rank: "deep"     }, // long-context/multimodal specialist
+  "gemini-3.1-pro-preview": { provider: "google",   rank: "deep"     }, // long-context/multimodal specialist (🔴 see marker above: `gemini-3.1-pro` 404s)
   "claude-opus-4-8":       { provider: "anthropic", rank: "deep"     },
 } as const;
 
 // Every job names its model explicitly — the single source of truth for call sites.
 export const JOBS = {
-  "doc-structuring":     "gemini-3.1-pro",         // long-context + multimodal extraction
+  "doc-structuring":     "gemini-3.1-pro-preview", // long-context + multimodal extraction
   "deep-review-audit":   "claude-opus-4-8",        // independent 2nd reader — different family from the extractor
   "topic-routing":       "gemini-3.1-flash-lite",
   "topic-merge":         "claude-sonnet-5",
@@ -4834,7 +4984,7 @@ Rules of thumb encoded in the registry doc comment: **Google Gemini for long-con
 | Google · gemini-3.1-flash-lite | `fast` | $0.25 | $1.50 | ~$0.025 | Flat pricing, 1M ctx; cheapest capable classifier |
 | Anthropic · claude-haiku-4-5 | `fast` | $1.00 | $5.00 | $0.10 | 200K ctx; cache write $1.25; Anthropic cross-family critic |
 | Anthropic · claude-sonnet-5 | `balanced` | $3.00 ¹ | $15.00 ¹ | $0.30 | 1M ctx; cache write $3.75; batch −50% |
-| Google · gemini-3.1-pro | `deep` | $2.00 (<200K) / **$4.00 (>200K)** | $12.00 / **$18.00** | $0.20 | 1M ctx; long-context surcharge above 200K tokens; native multimodal |
+| Google · gemini-3.1-pro-preview | `deep` | $2.00 (<200K) / **$4.00 (>200K)** | $12.00 / **$18.00** | $0.20 | 1M ctx; long-context surcharge above 200K tokens; native multimodal. ⚠ §1 states one cache-read rate and no surcharged variant; `pricing.ts` carries $0.20 through both brackets rather than inventing a >200K figure. No per-token cache-*write* rate is stated for Google (its context caching bills storage per hour), so `pricing.ts` models it as `null`, not `0`. |
 | Anthropic · claude-opus-4-8 | `deep` | $5.00 | $25.00 | $0.50 | 1M ctx; cache write $6.25; batch −50% |
 
 ¹ Introductory pricing of $2.00/$10.00 applies through 2026-08-31; all math below uses the durable $3/$15 sticker.
@@ -4867,9 +5017,9 @@ The network runs on **two providers**, each used where it is strongest:
 
 Convention (already in CLAUDE.md): **every LLM call that produces data (not prose) goes through a Zod schema via the AI SDK's `generateObject`**. Chat/RAG and lesson prose use `streamText`; everything else is `generateObject`.
 
-- **Schemas live in `packages/ai`** — `src/schemas.ts` today, splitting into one file per feature area (`src/schemas/flashcards.ts`, `src/schemas/documents.ts`, …) as M1 lands, re-exported from the package index. Callers import the schema *and* its inferred type from `@study/ai`; the schema is the single source of truth for both the model contract and the TypeScript type.
+- **Schemas live in `packages/ai`** — ✅ split as of 2026-07-19 into `src/schemas/`, one file per feature area (`src/schemas/flashcards.ts`, `src/schemas/documents.ts`, …), re-exported from `src/schemas/index.ts` and the package index. ⚠ The directory ships **empty**: the M0 placeholder `documentSummarySchema` was retired rather than moved, because a plausible-looking `documents.ts` with no prompt and no job behind it would have read as the real document-pipeline contract. Nothing outside the package imported it. First real schemas arrive with `syllabus-components`. Callers import the schema *and* its inferred type from `@study/ai`; the schema is the single source of truth for both the model contract and the TypeScript type.
 - **Schema design constraints**: keep schemas flat-ish and non-recursive; skip numeric/string min-max constraints the provider can't enforce (the AI SDK strips unsupported JSON Schema keywords and Zod still validates them client-side, so `z.string().min(1)` is fine — it just means validation, not generation-time constraint). Use `.describe()` on every field; descriptions are prompt surface.
-- **Failure handling**, in order:
+- **Failure handling** — ✅ shipped 2026-07-19 as `runStructuredLadder` in `packages/ai/src/ladder.ts`, driven by `AIRuntime.generateStructured`. The control flow is separated from the SDK call (`attempt` is injected) so all three rungs are unit-tested with no network. Transport errors (429/500/529) deliberately propagate instead of entering the ladder — Inngest owns backoff (§6). Because they propagate, metering is **eager**: the ladder hands each completed attempt to `onAttempt` as it finishes rather than returning them in a batch, so a transport error on rung 3 still leaves rungs 1 and 2 in `ai_generations`. Batching the emits until after the ladder returned dropped both — found and fixed at review gate 3. In order:
   1. `generateObject` throws `NoObjectGeneratedError` when the model's output doesn't parse/validate (it carries `.text`, `.cause`, `.usage`). First response: **one corrective retry** — re-send with the validation error message appended ("Your previous output failed validation: … Return only corrected JSON."). This fixes the large majority of failures.
   2. If the corrective retry fails: **one rank escalation** to a higher-rank model, deliberately *cross-provider* where the job allows it (e.g. `gemini-3.1-flash-lite → claude-sonnet-5`) — a schema failure on one model family often clears on another. Failures that both a Gemini *and* a Claude model reject are almost always schema bugs, not model flakiness.
   3. Then **dead-letter**: mark the job failed, persist the raw `.text` and error in the `ai_generations` log (§5) for debugging, surface a "regenerate" affordance in the UI. Never loop.
@@ -4889,11 +5039,11 @@ Two models from the same family can share blind spots, so the whole verification
 
 ### 3. Prompt versioning and traceability
 
-`packages/ai/src/prompts.ts` already defines the registry primitive:
+`packages/ai/src/prompts/define.ts` defines the registry primitive (⚠ moved 2026-07-19 from `src/prompts.ts`, which would otherwise be an ambiguous module specifier next to the new `src/prompts/` directory). `TVars` is constrained to JSON-shaped values — objects and arrays, not just `string | number` — because real prompts pass TopicPage JSON, segment lists and critic verdicts. It is deliberately not `Record<string, unknown>`: that would type-check every call but erase the variable names, so a misspelled var would compile and interpolate `undefined`. JSON-shaped also keeps `input_hash` stable, which is what the §5 idempotency short-circuit rests on.
 
 ```ts
 definePrompt<{ subject: string }>({
-  id: "echo-example",      // stable kebab-case id
+  id: "quick-add",          // stable kebab-case id — equal to the JOB key that runs it
   version: 1,               // bump on ANY semantic change
   description: "…",
   render: (vars) => `…`,
@@ -4902,8 +5052,8 @@ definePrompt<{ subject: string }>({
 
 Policy built on top of it:
 
-- **One file per feature area** under `src/prompts/`, all templates exported through the registry. No inline prompt strings at call sites — a prompt that isn't a `definePrompt` doesn't ship.
-- **Id convention (normative):** a prompt's `id` is **kebab-case, stable, and equal to the key of the job that runs it** (`topic-merge`, `cards-basic`, `quick-add`, `case-brief`, `glossary-extract`, …). One job may own several prompt *versions*, never several ids. The version **never** appears in the id — it lives in the separate `version` field, which is what makes the targeted-regeneration query below possible. The one job that legitimately owns two prompts — `lesson-generate`, which has a generation prompt and a repair prompt — distinguishes them by a `variant` suffix on the id (`lesson-generate`, `lesson-generate-repair`), both pinned to the same model.
+- **One file per feature area** under `src/prompts/`, all templates exported through the registry. No inline prompt strings at call sites — a prompt that isn't a `definePrompt` doesn't ship. ✅ `src/prompts/index.ts` ships with `PROMPT_REGISTRY`, and it is **empty on purpose**: the M0 placeholder `echo-example` was retired because its id named no job, so it could not satisfy the very convention the registry exists to enforce — a placeholder needing an exemption from the rule is worse than none. First real entry is `syllabus-components`.
+- **Id convention (normative)** — ✅ enforced in code as of 2026-07-19, not just in prose: the type `PromptId = JobId | `${JobId}-${string}`` is the compiler half, and `promptIdViolation()` + `src/prompts/registry.test.ts` are the other half (they reject `cards-basic-v2`, `echo-example`, `topic_merge`, and duplicate ids — the template-literal type alone would accept a version suffix). `jobForPromptId()` resolves a variant-suffixed id back to its job, longest-match first, which is how the call wrapper gets from prompt → job → model without the caller naming either. The rule: a prompt's `id` is **kebab-case, stable, and equal to the key of the job that runs it** (`topic-merge`, `cards-basic`, `quick-add`, `case-brief`, `glossary-extract`, …). One job may own several prompt *versions*, never several ids. The version **never** appears in the id — it lives in the separate `version` field, which is what makes the targeted-regeneration query below possible. The one job that legitimately owns two prompts — `lesson-generate`, which has a generation prompt and a repair prompt — distinguishes them by a `variant` suffix on the id (`lesson-generate`, `lesson-generate-repair`), both pinned to the same model.
 - **Every persisted AI artifact is stamped** with five columns at write time: `prompt_id`, `prompt_version`, `provider` + `model` (the *concrete* `(provider, model)` resolved from the job at call time — a job can be re-pointed to a different provider/model later, so the stamp must record what actually ran), and `input_hash` (SHA-256 of the rendered prompt inputs). Flashcards, structured docs, lessons, exam reviews — every generated row carries these. The same `(provider, model)` stamp is what lets the §6 cost rollup price each call against its own provider's table.
 - **What the stamp buys us**:
   - *Traceability*: any bad output in the UI resolves to the exact template text (git history of the prompt file at that version) and the exact provider + model.
@@ -4964,14 +5114,25 @@ Three distinct layers, cheapest first:
 | `documents` | source metadata + `content_hash`, pipeline status |
 | `document_chunks` | chunk text, `chunk_hash`, `embedding vector(1024)` |
 | generated-artifact tables (`cards`, `topics`, `coding_lessons`, `exam_reviews`, …) | the artifact + the §3 five-column stamp (`prompt_id`, `prompt_version`, `provider`, `model`, `input_hash`) |
-| `ai_generations` | append-only call log: stamp, token usage (`input`, `output`, `cache_read`, `cache_write`), latency, error/raw-text on failure — feeds the cost rollup in §6 |
+| `ai_generations` | append-only call log: stamp, token usage (`input`, `output`, `cache_read`, `cache_write`), latency, error/raw-text on failure — feeds the cost rollup in §6. ✅ **Shipped 2026-07-19.** One row per ladder *attempt*, not per logical call — each rung costs money. `cost_usd` is priced at write time by `priceUsd()` rather than recomputed in SQL, so `pricing.ts` stays the single source of truth for the Gemini >200K bracket and Sonnet's opt-in intro rates, and a later price change cannot retroactively rewrite what a past call cost. `NULL` cost means "the provider reported no usage", which the rollup must not confuse with a genuine $0.00. |
 
 ### 6. Rate limits, failure handling, and the kill switch
+
+✅ **SHIPPED 2026-07-19 (M1 item 8).** `ai_generations` and the `ai_daily_cost` rollup are live on the linked project; the kill switch, the `AI_MAX_TIER` clamp and the `AI_MONTHLY_BUDGET_USD` guard are wired through all four env locations and enforced inside `packages/ai`. Verified against the live database, not in memory:
+
+- **A real ladder, fully metered.** One forced schema failure produced three rows — `initial` and `corrective-retry` on `gemini-3.1-flash-lite` (both `schema-failure`, raw text persisted), then `escalation` to `claude-sonnet-5`. Cross-provider escalation and the escalated-model stamp are therefore observed, not just unit-tested.
+- **Cost is right per provider.** Every row's `cost_usd` matches an independent SQL recomputation against the §1 table to 8 decimal places, across both providers ($0.00003525 Flash-Lite, $0.001245 Sonnet).
+- **The kill switch demonstrably stops spend.** With `AI_KILL_SWITCH` set, `generateStructured` threw `AIPausedError` with the row count unchanged and — measured — *zero* provider calls and zero rollup reads. It is the first statement in the function, before job resolution and before the prompt renders.
+- **Append-only is structural.** A `BEFORE UPDATE` trigger refuses `UPDATE` for `postgres` itself (`SQLSTATE 23001`), which is the only form of the invariant that binds the RLS-bypassing admin client that writes the table. `DELETE` is deliberately left open: `user_id` cascades from `auth.users`, and a trigger raising on `DELETE` would make user deletion fail.
+
+⚠ **CORRECTED 2026-07-19 — the rollup is a plain view, not a materialized one.** §6 below says "materializes"; a matview cannot carry RLS (it is owned by the definer, so policies do not apply) and would leak spend across tenants the moment a second user exists. It would also be *stale*, and a lagging rollup is wrong exactly when spend is spiking — the only moment the guard matters. At this volume (thousands of rows/month) live aggregation is microseconds. Shipped as `create view public.ai_daily_cost with (security_invoker = true)`.
+
+🔴 **DISPROVEN 2026-07-19 — PostgREST does not return `numeric` as a JSON string here.** The widely-cited precision-preserving string encoding was expected for `cost_usd`; measured against this project, PostgREST returns a JSON **number** (`0.00005625`), so the generated `number | null` type is honest and no concatenation bug was latent. The Supabase SQL editor / MCP path renders the same column as `"0.00005625"`, which is what made the wrong reading plausible — the difference is in those tools' result encoding, not in the column. `apps/web/src/lib/ai/spend.ts` keeps a `z.coerce.number()` at the boundary anyway, per the repo's Zod-at-every-boundary rule.
 
 - **All non-interactive AI work runs inside Inngest steps** (one step per pipeline stage). Retry policy = the pipeline's: 3 attempts per step with Inngest-managed exponential backoff, applied to retryable errors only (`429` — honoring `retry-after` — `500`, `529`, network); non-retryable `4xx` throws `NonRetriableError` and dead-letters immediately with the error persisted to `ai_generations`. Each provider SDK's built-in retries stay at the default for interactive calls; Inngest owns retries for background work so backoff is visible and bounded in one place.
 - **Idempotency.** Inngest event ids + step memoization make re-delivery safe; the artifact layer adds the `(content_hash, prompt_id, prompt_version, provider, model)` short-circuits from §5 so a re-run never double-writes. The feature job tables that do exist (`card_generation_jobs`, `export_jobs`) each carry a `dedupe_key text unique` column = `hash(prompt_id, prompt_version, provider, model, input_hash)` to collapse double-enqueues (declared with those tables in their feature sections).
 - **Interactive degradation.** Chat under sustained Anthropic 429s **fails over across the provider boundary** — `claude-sonnet-5 → gemini-3.1-pro`, a wholly separate provider with an independent rate-limit pool (a genuine multi-provider win) — before showing an error. Failover trades the Anthropic prompt cache for availability and is logged.
-- **Metering.** Every call writes token usage to `ai_generations` stamped with the concrete `(provider, model)`; a daily rollup materializes cost-per-day per `(provider, model)` using the per-provider §1 price table. This is the input to the budget guard.
+- **Metering.** Every call writes token usage to `ai_generations` stamped with the concrete `(provider, model)`; a daily rollup materializes cost-per-day per `(provider, model)` using the per-provider §1 price table. This is the input to the budget guard. (⚠ see the CORRECTED marker above: shipped as a plain `security_invoker` view, not a materialized one, and the price lookup happens at *write* time in `priceUsd()` rather than in the view.)
 - **Kill switch and budget guard** (env vars defined in `apps/web/src/env.ts` and *injected* into `packages/ai` — the package never reads `process.env`, per repo convention):
   - `AI_KILL_SWITCH=true` — hard stop. `createAIProvider` callers receive a guard that fails fast; queue workers pause AI jobs (jobs remain queued, nothing is lost); chat returns a friendly "AI features are paused" message. Flipping one Vercel env var + redeploy stops all spend within minutes — this is the runaway-cost circuit breaker.
   - `AI_MAX_TIER=fast|balanced|deep` — clamps the resolved model's **rank** in `getModel` (e.g. `fast` forces every job down to its cheapest same-or-lower-rank model — Gemini Flash-Lite / Haiku — to keep the app alive cheaply while investigating a spend spike).
@@ -5262,10 +5423,10 @@ uploads every lecture's materials (topic pages appear minutes later).
 | 5 | Document pipeline: upload (TUS) → validate (rejects >50 MB with a specific, actionable message — no splitting, no re-compression) → extract (PDF via **Gemini** vision; PPTX routed by word density at a **40 words/slide** threshold — text decks via XML, **visual decks via CloudConvert render → PDF → Gemini vision, in scope for M1** per the 2026-07-18 decision, with `CLOUDCONVERT_API_KEY` through the full env checklist) → route (**Gemini Flash-Lite**) → merge (**Sonnet 5**) → **cross-family merge critic (block-diff loss-detect + Gemini verify, auto-retry)** → embed → **coverage map + syllabus checklist** → status UX w/ Realtime; **opt-in Deep-review toggle** (**Opus 4.8** 2nd-reader audit) | L (the big one) | Document & notes pipeline |
 | 6 | Topic pages UI: rendered page, provenance chips, revision history/revert | M | Document & notes pipeline §8 |
 | 7 | Exam review v1: weight computation + Opus generation + staleness banner | S–M | Document & notes pipeline §9 |
-| 8 | `ai_generations` log + cost rollup + kill-switch env vars | S | AI strategy §5–6 |
+| 8 | `ai_generations` log + cost rollup + kill-switch env vars — ✅ **shipped 2026-07-19** (live table + `ai_daily_cost` view, per-provider costing verified against the live DB, kill switch proven to make zero provider calls). ⚠ The DoD's "every AI call" clause is **not yet fully met**: `streamText` still has no metered wrapper (Wave 4, with chat/RAG) and a transport-killed attempt is still unlogged (Inngest step wrapper) | S | AI strategy §5–6 |
 | 9 | Participation & Attendance Ledger (PWA manifest, 2-tap logging) | M | Additional #4 |
 | 10 | Case-brief slice (pipeline step for `case`-tagged docs) — 🟡 **descoped to opportunistic 2026-07-18**: real case studies are much rarer in this program than the plan assumed, so this must not gate M1. Build it if a case lands; otherwise slide to M2 | S–M | Additional #2 |
-| 11 | *Stretch:* NL quick-add (CAL-3), syllabus → `assessments` extraction | S+S | Calendar §6, Additional #3 |
+| 11 | *Stretch:* NL quick-add (CAL-3), syllabus → `assessments` extraction — ✅ **syllabus half SHIPPED 2026-07-19 (Wave 3)**: `syllabus-components` v1 on `claude-sonnet-5`, validated 17/17 components against all 3 real syllabi, behind the §2b confirm gate. Takes document **text**; upload/conversion stays with item 5. NL quick-add still open. | S+S | Calendar §6, Additional #3 |
 | 12 | ✅ **DONE** Auth v2: access-code gate (landing page + `proxy.ts` enforcement) → email+password sign-up/login (email verify + password reset via the Resend hook) → analyst-terminal `/login` redesign. Shipped Wave 1 (`eed1b12`, `8cb4c68`, `53c560c`). Single `ACCESS_CODE` env var, **not** per-invite (deferred to M4); constant-time Web Crypto comparison (Edge has no `node:crypto`); cookie derived from the code so rotation revokes. ✅ **All clauses met** — sign-up confirmed working end to end 2026-07-18; the earlier 500s were an `@example.com` artifact (Resend refuses that reserved domain) and a retest with a deliverable address passed. Lesson: never probe the Resend path with `example.com`; use a real `+alias` inbox or `generate_link` | M | Vision § Identity & design; Roadmap M0.5 |
 | 13 | ✅ **DONE** **Design-system migration**, split into 13a (tokens) + 13b (shell). 13a (`6603b3e`, `06ed42b`): `globals.css` ported to the azure tokens in both themes, Newsreader + JetBrains Mono, Geist Mono retired, Phosphor migrated (lucide gone, lockfile included), email button `#1c74d8`, `courses.color` → palette key. 13b (`2bfde9b`, `f404812`): `(app)` route group, collapsible sidebar + mobile tab bar, ⌘K palette, 12 shadcn components, `loading.tsx`/`error.tsx`, jsdom + RTL test infrastructure, motion + type-scale tokens. ⚠ `.reading` wrapper exists but has **no consumer** until topic pages (item 6) | M | Vision § Identity & design |
 

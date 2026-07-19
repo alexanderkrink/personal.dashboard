@@ -277,6 +277,19 @@ export interface TombstoneCandidate {
   /** Null = manual quick-add. Sync must never touch these. */
   feed_id: string | null;
   missing_since: string | null;
+  /**
+   * The start of this item's **last** occurrence, or null when it has none.
+   *
+   * Load-bearing, and the reason this interface has a fourth field at all: without
+   * a date the planner cannot tell a cancellation from a feed-window roll-off, and
+   * it was deleting both. See `planTombstones`.
+   *
+   * **Last, not first.** An item with several occurrences is only safely "past"
+   * when the final one is past — a weekly lecture whose first session was in
+   * January is still live in May, and dating it by its earliest occurrence would
+   * put the entire term's worth of a recurring class on the delete timer.
+   */
+  latestOccurrenceStartsAt: string | null;
 }
 
 export type TombstoneAction =
@@ -287,24 +300,144 @@ export type TombstoneAction =
   /** Absent, still inside the 7-day grace period. Left exactly as it is. */
   | { action: "keep"; id: string; missingSince: string }
   /** Absent for more than 7 continuous days. Now it really is gone. */
-  | { action: "delete"; id: string };
+  | { action: "delete"; id: string }
+  /**
+   * Absent, and **not a cancellation** — kept forever, no clock started.
+   *
+   * Deliberately NOT folded into `keep`. `keep` means "the deletion clock is
+   * running and has not expired"; `retain` means "there is no clock and never will
+   * be". They differ in the only way that matters — whether this row can ever be
+   * deleted — and a reader who cannot see that difference cannot review it.
+   *
+   * `clearMissingSince` is true when the row was tombstoned under the old rule and
+   * that mark is now known to have been wrong. Leaving it set would keep the item
+   * hidden at 24 h (`isTombstoneVisible`), so a row that is safe from deletion
+   * would still have silently vanished from the UI.
+   *
+   * ⚠ It is NOT true for every past item that carries a mark — see
+   * `markPredatesOccurrence`. A mark made while the event was still in the future
+   * is a real cancellation and must survive the event's own date passing.
+   */
+  | { action: "retain"; id: string; clearMissingSince: boolean };
+
+/**
+ * Whether a vanished item is one the feed simply stopped covering.
+ *
+ * ## 🔴 The data loss this closes — found 2026-07-19
+ *
+ * The IE feed emits zero `STATUS:CANCELLED`, so a cancelled lecture just vanishes.
+ * `planTombstones` was built on that fact and drew the obvious conclusion: absent
+ * means cancelled, start the 7-day clock, then delete. But an ICS feed is a
+ * **rolling window**, and an event also vanishes when the window's trailing edge
+ * slides past it. Those two look identical from inside the diff, and both were
+ * being deleted.
+ *
+ * On the live database this was not hypothetical. All 5 tombstoned items started
+ * `2026-01-19`; the feed's `earliest_live` had moved to `2026-01-21`. Nothing was
+ * cancelled — the window rolled forward and the oldest day fell off the end. First
+ * hard delete was due 2026-07-26. 220 of 374 occurrences are already in the past
+ * and were on the same timer, and M1 item 9 hangs `attendance_records` and
+ * `participation_logs` off `calendar_occurrences` — so from September this would
+ * have been quietly destroying **graded** participation history as sessions aged
+ * out of the window.
+ *
+ * The rule that separates them: **cancellation is only meaningful for something
+ * that has not happened yet.** "The professor cancelled Thursday" is a statement
+ * about a future Thursday. A session that already took place cannot be cancelled;
+ * it can only be forgotten by the feed, and the feed forgetting it is not
+ * permission to forget it too. So a vanished item whose last occurrence is in the
+ * past is retained — permanently, with no clock.
+ *
+ * ## Why null is retained rather than deleted
+ *
+ * An item with no occurrence rows is a degenerate row, not a dated one: it carries
+ * no evidence either way. The whole point of this function is that **deletion
+ * requires positive evidence of future-ness**, and "we do not know when this was"
+ * is the absence of evidence, not evidence of absence. Deleting on null would also
+ * make the destructive path the one that fires when the data is most broken, which
+ * is exactly backwards. It is retained, and if that ever accumulates junk, the
+ * cleanup is a deliberate operation and not a side effect of a sync.
+ */
+function isFeedWindowRolloff(item: TombstoneCandidate, nowMs: number): boolean {
+  if (item.latestOccurrenceStartsAt === null) return true;
+  const startsAtMs = Date.parse(item.latestOccurrenceStartsAt);
+  if (Number.isNaN(startsAtMs)) return true;
+  return startsAtMs < nowMs;
+}
+
+/**
+ * Whether an existing tombstone was set while the event was still in the future.
+ *
+ * ## 🔴 The resurrection this closes — found 2026-07-19 (review)
+ *
+ * `isFeedWindowRolloff` asks *"is this item past?"*, and an item does not answer
+ * that question once and for all — it answers `false` today and `true` next week,
+ * because the item stands still while `now` moves. Every genuinely cancelled event
+ * therefore crosses from one branch to the other **while its own deletion clock is
+ * still running**, and the clock is 7 days:
+ *
+ *   Mon — the professor cancels Thursday, the feed drops it → `mark`, hidden at 24 h.
+ *   Fri — Thursday is now in the past → `retain`, `clearMissingSince: true`.
+ *
+ * The mark is erased, so the cancelled class comes **back into the calendar**, and
+ * it can never be deleted because every later sync takes the same branch. Two bad
+ * outcomes at once: the deletion path is unreachable for the ordinary cancellation
+ * (a class cancelled fewer than 7 days ahead — i.e. almost all of them), and a
+ * lecture that never happened is rendered as one that did. M1 item 9 hangs
+ * `attendance_records` off exactly these rows, so it would become an attendable
+ * session.
+ *
+ * ## The discriminator
+ *
+ * The mark's own timestamp says which it is, and it is already stored:
+ *
+ * - `missing_since` **before** the last occurrence → the feed dropped the event
+ *   while it was still upcoming. Only a cancellation looks like that. The mark is
+ *   correct and is kept, so the item stays hidden — but it is still `retain`, so it
+ *   is never deleted and the row survives for item 9.
+ * - `missing_since` **at or after** the last occurrence → the event had already
+ *   happened when the feed stopped carrying it. That is the window sliding, and the
+ *   mark is the old rule's mistake. Cleared, so the item returns to view.
+ *
+ * The 5 rows this branch healed take the second branch and are unaffected: they
+ * started 2026-01-19 and were marked 2026-07-19, six months later.
+ *
+ * A null occurrence date cannot be compared, and "no evidence" keeps its existing
+ * reading — the mark is cleared rather than left to hide the row forever.
+ */
+function markPredatesOccurrence(item: TombstoneCandidate): boolean {
+  if (item.missing_since === null || item.latestOccurrenceStartsAt === null) return false;
+  const markedMs = Date.parse(item.missing_since);
+  const startsAtMs = Date.parse(item.latestOccurrenceStartsAt);
+  if (Number.isNaN(markedMs) || Number.isNaN(startsAtMs)) return false;
+  return markedMs < startsAtMs;
+}
 
 /**
  * Decides what happens to every stored item of one feed, given the set of UIDs
  * the feed just returned.
  *
- * The three rules, in the order they matter:
+ * The four rules, in the order they matter:
  *
  *  1. **Reappearance clears the tombstone.** A UID that comes back is the same
  *     item it always was — same row, same id, so its `course_id`, its
  *     `completed_at` and every occurrence hanging off it survive untouched.
  *     Nothing is re-created, because nothing was destroyed.
- *  2. **Absence starts a clock, it does not delete.** `missing_since` is only
- *     set when it was null, so a row absent for three days keeps its ORIGINAL
- *     timestamp instead of having the clock reset by every sync — otherwise the
- *     7-day deadline would never arrive and nothing would ever be cleaned up.
- *  3. **Only continuous absence deletes.** Any reappearance in between resets
- *     the clock via rule 1, which is exactly the intent.
+ *  2. **A vanished PAST item is never deleted, and never even marked.** It is a
+ *     feed-window roll-off, not a cancellation. See `isFeedWindowRolloff` for the
+ *     full argument and the data loss it closes.
+ *  3. **Absence of a FUTURE item starts a clock, it does not delete.**
+ *     `missing_since` is only set when it was null, so a row absent for three days
+ *     keeps its ORIGINAL timestamp instead of having the clock reset by every sync
+ *     — otherwise the 7-day deadline would never arrive and nothing would ever be
+ *     cleaned up.
+ *  4. **Only continuous absence deletes.** Any reappearance in between resets the
+ *     clock via rule 1, which is exactly the intent.
+ *
+ * Rule 2 is checked BEFORE rule 3, and the order is the fix. Under the old
+ * ordering a past item was marked on the first sync that missed it and deleted
+ * seven days later, and nothing downstream could tell that from a real
+ * cancellation.
  *
  * Manual items (`feed_id === null`) are filtered out before any of this. They
  * are not in any feed's snapshot, so without this guard every single one would
@@ -326,6 +459,23 @@ export function planTombstones(
 
     if (presentUids.has(item.ics_uid)) {
       if (item.missing_since !== null) actions.push({ action: "clear", id: item.id });
+      continue;
+    }
+
+    // Rule 2, and it comes before the clock deliberately. A past item never
+    // enters the tombstone lifecycle at all — not marked, not counted down, not
+    // deleted. The `clearMissingSince` flag undoes a mark made under the old
+    // rule, which is what lets an existing tombstone heal on the next sync
+    // instead of needing a migration.
+    if (isFeedWindowRolloff(item, nowMs)) {
+      actions.push({
+        action: "retain",
+        id: item.id,
+        // A mark made while the event was still upcoming is a cancellation and
+        // survives the event's date passing; only a mark made after it had already
+        // happened is the old rule's roll-off mistake. See `markPredatesOccurrence`.
+        clearMissingSince: item.missing_since !== null && !markPredatesOccurrence(item),
+      });
       continue;
     }
 

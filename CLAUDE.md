@@ -12,7 +12,7 @@ starting feature work — it defines every feature, the data model, and the road
   - `packages/db` — Supabase clients, generated types, SQL migrations. Never reads
     `process.env`; apps inject config.
   - `packages/ai` — ALL LLM interaction lives here: providers, prompt templates,
-    Zod output schemas, model tier registry. No direct `@ai-sdk/*` or model-ID usage
+    Zod output schemas, the model-per-job registry. No direct `@ai-sdk/*` or model-ID usage
     outside this package (exception: UI streaming hooks like `useChat` from
     `@ai-sdk/react` live in apps/web, against endpoints backed by this package).
     Never reads `process.env`.
@@ -52,10 +52,23 @@ starting feature work — it defines every feature, the data model, and the road
 
 ## AI
 
-- Model selection by tier (`fast` / `balanced` / `deep`) via `MODELS` in `packages/ai` —
-  never hardcode model IDs at call sites.
-- Every production prompt is a versioned `definePrompt` template; bump `version` on any
-  semantic change. LLM calls that produce data (not prose) must use a Zod schema.
+- **Model selection by job**, never by tier and never by model ID: `getModel("topic-merge")`
+  resolves a job to its pinned `(provider, model)` via `JOBS` in `packages/ai/src/models.ts`.
+  Re-pointing a job is a one-line change there. Ranks (`fast` / `balanced` / `deep`) survive
+  only to drive escalation, the `AI_MAX_TIER` clamp, and 429 failover — they are not a
+  selection API.
+- **Two providers**, both injected (never `process.env`): `@ai-sdk/anthropic` for generation,
+  coding, chat and high-stakes synthesis; `@ai-sdk/google` for long-context/multimodal
+  extraction and the cheap high-volume tier. `@ai-sdk/openai` is deliberately unwired.
+  Critics run on a *different family* than the generator they check — that rule is what the
+  two-provider split buys, so don't re-point a critic onto its generator's family.
+- Every LLM call goes through `createAIRuntime`, which builds the five-column stamp
+  (`prompt_id`, `prompt_version`, `provider`, `model`, `input_hash`), runs the structured-output
+  failure ladder, and meters the call. Don't call `generateObject` directly.
+- Every production prompt is a versioned `definePrompt` template registered in
+  `packages/ai/src/prompts/`; bump `version` on any semantic change. A prompt's `id` equals
+  the key of the job that runs it, and the version NEVER appears in the id. LLM calls that
+  produce data (not prose) must use a Zod schema from `packages/ai/src/schemas/`.
 
 ## Tooling
 

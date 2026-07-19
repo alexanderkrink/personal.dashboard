@@ -14,6 +14,75 @@ export type Database = {
   }
   public: {
     Tables: {
+      ai_generations: {
+        Row: {
+          attempt: number
+          cache_read_tokens: number
+          cache_write_tokens: number
+          cost_usd: number | null
+          created_at: string
+          error_message: string | null
+          id: string
+          input_hash: string
+          input_tokens: number
+          job: string
+          latency_ms: number
+          model: string
+          outcome: string
+          output_tokens: number
+          prompt_id: string
+          prompt_version: number
+          provider: string
+          raw_text: string | null
+          step: string
+          user_id: string
+        }
+        Insert: {
+          attempt: number
+          cache_read_tokens?: number
+          cache_write_tokens?: number
+          cost_usd?: number | null
+          created_at?: string
+          error_message?: string | null
+          id?: string
+          input_hash: string
+          input_tokens?: number
+          job: string
+          latency_ms: number
+          model: string
+          outcome: string
+          output_tokens?: number
+          prompt_id: string
+          prompt_version: number
+          provider: string
+          raw_text?: string | null
+          step: string
+          user_id: string
+        }
+        Update: {
+          attempt?: number
+          cache_read_tokens?: number
+          cache_write_tokens?: number
+          cost_usd?: number | null
+          created_at?: string
+          error_message?: string | null
+          id?: string
+          input_hash?: string
+          input_tokens?: number
+          job?: string
+          latency_ms?: number
+          model?: string
+          outcome?: string
+          output_tokens?: number
+          prompt_id?: string
+          prompt_version?: number
+          provider?: string
+          raw_text?: string | null
+          step?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       assessments: {
         Row: {
           confirmed: boolean
@@ -377,6 +446,30 @@ export type Database = {
           },
         ]
       }
+      job_heartbeats: {
+        Row: {
+          created_at: string
+          id: string
+          job: string
+          run_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          job: string
+          run_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          job?: string
+          run_id?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           created_at: string
@@ -437,11 +530,154 @@ export type Database = {
         }
         Relationships: []
       }
+      syllabus_extraction_components: {
+        Row: {
+          assessment_id: string
+          created_at: string
+          extraction_id: string
+          id: string
+          session_note: string | null
+          source_snippet: string
+          user_id: string
+        }
+        Insert: {
+          assessment_id: string
+          created_at?: string
+          extraction_id: string
+          id?: string
+          session_note?: string | null
+          source_snippet: string
+          user_id: string
+        }
+        Update: {
+          assessment_id?: string
+          created_at?: string
+          extraction_id?: string
+          id?: string
+          session_note?: string | null
+          source_snippet?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "syllabus_extraction_components_assessment_id_fkey"
+            columns: ["assessment_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "assessments"
+            referencedColumns: ["id", "user_id"]
+          },
+          {
+            foreignKeyName: "syllabus_extraction_components_extraction_id_fkey"
+            columns: ["extraction_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "syllabus_extractions"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
+      syllabus_extractions: {
+        Row: {
+          confirmed_at: string | null
+          course_id: string
+          created_at: string
+          extracted_course_title: string
+          id: string
+          input_hash: string
+          model: string
+          notes: string | null
+          prompt_id: string
+          prompt_version: number
+          proposed_total_sessions: number | null
+          provider: string
+          source_label: string
+          total_sessions_evidence: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          confirmed_at?: string | null
+          course_id: string
+          created_at?: string
+          extracted_course_title: string
+          id?: string
+          input_hash: string
+          model: string
+          notes?: string | null
+          prompt_id: string
+          prompt_version: number
+          proposed_total_sessions?: number | null
+          provider: string
+          source_label: string
+          total_sessions_evidence?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          confirmed_at?: string | null
+          course_id?: string
+          created_at?: string
+          extracted_course_title?: string
+          id?: string
+          input_hash?: string
+          model?: string
+          notes?: string | null
+          prompt_id?: string
+          prompt_version?: number
+          proposed_total_sessions?: number | null
+          provider?: string
+          source_label?: string
+          total_sessions_evidence?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "syllabus_extractions_course_id_fkey"
+            columns: ["course_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "courses"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
     }
     Views: {
-      [_ in never]: never
+      ai_daily_cost: {
+        Row: {
+          cache_read_tokens: number | null
+          cache_write_tokens: number | null
+          calls: number | null
+          cost_usd: number | null
+          day: string | null
+          input_tokens: number | null
+          model: string | null
+          output_tokens: number | null
+          provider: string | null
+          successes: number | null
+          user_id: string | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
+      apply_syllabus_extraction: {
+        Args: {
+          p_components: Json
+          p_course_id: string
+          p_extracted_course_title: string
+          p_input_hash: string
+          p_model: string
+          p_notes: string
+          p_prompt_id: string
+          p_prompt_version: number
+          p_proposed_total_sessions: number
+          p_provider: string
+          p_source_label: string
+          p_total_sessions_evidence: string
+          p_user_id: string
+        }
+        Returns: string
+      }
       claim_calendar_feed: {
         Args: { p_feed_id: string; p_lease_seconds?: number }
         Returns: {
@@ -465,6 +701,14 @@ export type Database = {
           isOneToOne: false
           isSetofReturn: true
         }
+      }
+      confirm_syllabus_extraction: {
+        Args: { p_extraction_id: string }
+        Returns: undefined
+      }
+      reject_syllabus_extraction: {
+        Args: { p_extraction_id: string }
+        Returns: undefined
       }
     }
     Enums: {

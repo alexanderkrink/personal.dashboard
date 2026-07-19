@@ -88,6 +88,22 @@ export interface AssessmentOracleRow {
   kind: string;
   /** `assessments.session_number`; null for participation and for ranges. */
   sessionNumber: number | null;
+  /**
+   * `assessments.confirmed`. **Load-bearing, not informational.**
+   *
+   * An exam DATE is one of exactly two data classes behind a mandatory human
+   * confirm (§2b), and this row is an oracle that picks one. A syllabus
+   * extraction lands its rows `confirmed = false` and deliberately withholds
+   * `courses.total_sessions` until a human confirms — which means step 1 falls
+   * through and step 2 is the FIRST oracle an unconfirmed extraction reaches.
+   * Withholding the session count is precisely what exposes this route.
+   *
+   * So the filter lives here rather than in each query: three call sites load
+   * assessments for this detector, and an invariant that depends on all three
+   * remembering a `.eq("confirmed", true)` is an invariant with a hole in it.
+   * Hand-entered rows are born `confirmed = true`, so nothing manual changes.
+   */
+  confirmed: boolean;
 }
 
 export interface DetectExamInput {
@@ -290,7 +306,11 @@ function selectFinalAssessment(
   assessments: readonly AssessmentOracleRow[],
 ): AssessmentOracleRow | null {
   const sessioned = assessments.filter(
-    (assessment) => assessment.sessionNumber !== null && EXAM_KIND.test(assessment.kind),
+    (assessment) =>
+      // 🔒 §2b: an unconfirmed row is a *proposal*. It must not move a date on the
+      // dashboard, and it must never be labelled `assessment_session_number`, which
+      // `confidenceFor` reports as the highest confidence there is ("syllabus").
+      assessment.confirmed && assessment.sessionNumber !== null && EXAM_KIND.test(assessment.kind),
   );
   if (sessioned.length === 0) {
     return null;
@@ -349,8 +369,11 @@ export function detectExam(input: DetectExamInput): ExamDetection {
     return resolve(totalSessions, "syllabus_total_sessions");
   }
 
-  // Step 2 — an `assessments.session_number` match. Dead today (0 rows), built
-  // for the fall-2026 syllabi that will arrive later.
+  // Step 2 — an `assessments.session_number` match. **No longer dead**: M1 item 11
+  // (syllabus extraction) is what finally writes rows here. Only CONFIRMED rows
+  // count — `selectFinalAssessment` drops the rest, because an extraction lands
+  // unconfirmed and withholds `courses.total_sessions`, which is exactly the state
+  // that makes this step reachable in the first place.
   const finalAssessment = selectFinalAssessment(assessments);
   if (finalAssessment?.sessionNumber != null) {
     return resolve(finalAssessment.sessionNumber, "assessment_session_number");

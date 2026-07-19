@@ -83,11 +83,14 @@ describe("occurrenceFingerprint", () => {
 });
 
 describe("planTombstones", () => {
+  // Defaults to a FUTURE occurrence, so the classic lifecycle cases below read as
+  // they always did. A past date is the interesting input and is always explicit.
   const item = (over: Partial<Parameters<typeof planTombstones>[0][number]> = {}) => ({
     id: "item-1",
     ics_uid: "uid-1",
     feed_id: "feed-1",
     missing_since: null,
+    latestOccurrenceStartsAt: "2026-12-01T09:00:00.000Z",
     ...over,
   });
 
@@ -128,6 +131,147 @@ describe("planTombstones", () => {
 
   it("never touches a manual item", () => {
     expect(planTombstones([item({ feed_id: null })], new Set(), NOW)).toEqual([]);
+  });
+
+  /* -- 🔴 feed-window roll-off must not be read as cancellation ------------ */
+
+  it("retains a vanished PAST item instead of starting the clock", () => {
+    expect(
+      planTombstones(
+        [item({ latestOccurrenceStartsAt: "2026-01-19T08:30:00.000Z" })],
+        new Set(),
+        NOW,
+      ),
+    ).toEqual([{ action: "retain", id: "item-1", clearMissingSince: false }]);
+  });
+
+  it("never deletes a past item, however long it has been absent", () => {
+    // A year of absence. Under the old rule this was a delete on day seven.
+    //
+    // The occurrence predates the mark, which is what makes this a roll-off: the
+    // session had already happened when the feed stopped carrying it. That is also
+    // why the mark is cleared — see the resurrection test below for the mirror case.
+    const result = planTombstones(
+      [
+        item({
+          latestOccurrenceStartsAt: "2024-06-01T08:30:00.000Z",
+          missing_since: ago(365 * DAY),
+        }),
+      ],
+      new Set(),
+      NOW,
+    );
+    expect(result).toEqual([{ action: "retain", id: "item-1", clearMissingSince: true }]);
+  });
+
+  /* -- 🔴 a cancellation must survive its own date passing ----------------- */
+
+  it("keeps the tombstone on an event cancelled BEFORE it was due", () => {
+    // Marked while still upcoming (2026-09-01) for a session on 2026-09-05, and
+    // read after that date has passed. Clearing the mark here would put a lecture
+    // that never happened back on the calendar — and, because every later sync
+    // takes the same branch, would make it undeletable forever.
+    expect(
+      planTombstones(
+        [
+          item({
+            latestOccurrenceStartsAt: "2026-09-05T09:00:00.000Z",
+            missing_since: "2026-09-01T06:00:00.000Z",
+          }),
+        ],
+        new Set(),
+        NOW,
+      ),
+    ).toEqual([{ action: "retain", id: "item-1", clearMissingSince: false }]);
+  });
+
+  it("still clears a mark made AFTER the session had already happened", () => {
+    // The live shape: session 2026-01-19, marked 2026-07-19 when the window rolled.
+    expect(
+      planTombstones(
+        [
+          item({
+            latestOccurrenceStartsAt: "2026-01-19T08:30:00.000Z",
+            missing_since: "2026-07-19T00:00:40.410Z",
+          }),
+        ],
+        new Set(),
+        NOW,
+      ),
+    ).toEqual([{ action: "retain", id: "item-1", clearMissingSince: true }]);
+  });
+
+  it("retains an item with no occurrences rather than deleting it", () => {
+    // No date is no evidence. Deletion requires positive evidence of future-ness,
+    // so the destructive path must not be the one that fires on broken data.
+    expect(
+      planTombstones(
+        [item({ latestOccurrenceStartsAt: null, missing_since: ago(30 * DAY) })],
+        new Set(),
+        NOW,
+      ),
+    ).toEqual([{ action: "retain", id: "item-1", clearMissingSince: true }]);
+  });
+
+  it("dates a recurring item by its LAST occurrence, not its first", () => {
+    // A weekly lecture that started in January is still live in September. Dating
+    // it by the earliest occurrence would put a whole term of classes on the timer.
+    expect(
+      planTombstones(
+        [item({ latestOccurrenceStartsAt: "2026-12-15T08:30:00.000Z" })],
+        new Set(),
+        NOW,
+      ),
+    ).toEqual([{ action: "mark", id: "item-1", missingSince: NOW }]);
+  });
+
+  it("still tombstones and deletes a FUTURE item — cancellation is not broken", () => {
+    // The fix narrows the deletion path; it must not close it. A future event that
+    // vanishes IS a cancellation, and §3.6 still depends on that.
+    const future = item({
+      latestOccurrenceStartsAt: "2026-12-01T09:00:00.000Z",
+      missing_since: ago(7 * DAY),
+    });
+    expect(planTombstones([future], new Set(), NOW)).toEqual([{ action: "delete", id: "item-1" }]);
+  });
+
+  /**
+   * The exact shape found on the live database, 2026-07-19.
+   *
+   * 5 items sharing one `missing_since`, every one starting 2026-01-19, while the
+   * feed's `earliest_live` had moved to 2026-01-21. Nothing was cancelled: the
+   * rolling window slid forward and the oldest day fell off the end. All 5 were
+   * seven days from a hard delete (due 2026-07-26), and 220 of the 374 live
+   * occurrences were in the past and on the same timer.
+   */
+  it("does not delete the 5 real roll-off rows the live feed produced", () => {
+    const missingSince = "2026-07-19T00:00:40.410Z";
+    const rows = [
+      { id: "637bd828", uid: "F154208PLANI3184776P3606C166056S382837A487469", at: "08:30" },
+      { id: "d88e5cf8", uid: "F176752PLANI3184139P3606C166056S382497A488728", at: "10:00" },
+      { id: "29bb991e", uid: "F176995PLANI3192590P2726C166596S399118A510053", at: "14:00" },
+      { id: "a5b9f985", uid: "F154527PLANI3114735P3032C166597S399996A511151", at: "17:00" },
+      { id: "cf20071e", uid: "F175441PLANI3099413P4069C164931S389256A492562", at: "23:00" },
+    ].map((row) => ({
+      id: row.id,
+      ics_uid: row.uid,
+      feed_id: "d085e882-1a23-4007-a2d3-54e59f73dfa6",
+      missing_since: missingSince,
+      // PostgREST's spelling, on purpose: the planner must not depend on the
+      // parser's `.000Z` form to recognise a date as past.
+      latestOccurrenceStartsAt: `2026-01-19T${row.at}:00+00:00`,
+    }));
+
+    // Eight days after the mark — one day past the old 7-day deadline.
+    const actions = planTombstones(rows, new Set(), "2026-07-27T00:00:00.000Z");
+
+    expect(actions.every((action) => action.action === "retain")).toBe(true);
+    expect(actions.some((action) => action.action === "delete")).toBe(false);
+    // Every one also has its wrongly-set tombstone cleared, so they come back into
+    // view instead of staying hidden by the 24-hour rule.
+    expect(actions).toEqual(
+      rows.map((row) => ({ action: "retain", id: row.id, clearMissingSince: true })),
+    );
   });
 });
 

@@ -132,6 +132,7 @@
     --color-destructive-foreground: var(--destructive-foreground);
     --color-destructive-button: var(--destructive-button);
     --color-urgency-overdue: var(--urgency-overdue);
+    --color-urgency-overdue-text: var(--urgency-overdue-text);
     --color-urgency-high: var(--urgency-high);
     --color-urgency-high-text: var(--urgency-high-text);
     --color-urgency-medium: var(--urgency-medium);
@@ -251,7 +252,35 @@
    * L 0.15 measures 4.68:1 and matches the dark theme's value. See PLAN.md
    * line 177, which needs the same correction. */
   --accent-foreground: oklch(0.15 0.02 237);
-  --accent-text: oklch(0.5 0.15 237); /* AA-safe azure for link/interactive TEXT */
+  /*
+   * Azure for link/interactive TEXT. `--accent` paints, `--accent-text` writes.
+   *
+   * DARKENED 0.50 -> 0.44 on 2026-07-19. The old value was described as
+   * "AA-safe" on the strength of a 4.66 sampled reading, which was the uniform
+   * probe on the 11px/500 confidence chip. Re-measured across every site that
+   * writes with this token, DPR 1, p20, both widths (identical at 1280/375):
+   *
+   *   site            weight  background        composite  sampled  @0.44
+   *   day-today       400     --accent-subtle    4.907      4.042 <- FAILS 4.997
+   *   chip-syllabus   500     --accent-subtle    4.907      4.311 <- FAILS 5.421
+   *   auth-link       400     --background       5.299      4.537     thin 5.632
+   *   sync-link       400     --surface          5.538      5.189     ok   ~6.2
+   *
+   * The binding site is `week-grid.tsx`'s `DayHeading` for today: 11px
+   * font-mono at weight 400 sitting INSIDE the `bg-accent-subtle` today
+   * column. That is azure ink on an azure wash at the thinnest weight and the
+   * smallest size in the system — the least contrasting pairing this palette
+   * can produce, and nothing had ever measured it. `--accent-subtle` is
+   * `color-mix(--accent 10%, --surface)`, so it does not move when this token
+   * does; the whole correction has to come from the ink.
+   *
+   * L 0.44 clears the floor at every site with the thinnest at 4.997. Chroma
+   * 0.15 and hue 237 are untouched, so it stays the brand azure rather than
+   * sliding toward navy — which is why this stops at 0.44 and not 0.42 (which
+   * would buy 5.415 on `day-today` but visibly darkens every link on the auth
+   * pages). Dark mode measures 5.975-7.419 sampled and is left alone.
+   */
+  --accent-text: oklch(0.44 0.15 237);
   --ring: oklch(0.58 0.17 237); /* = --accent; focus rings are non-text, 3:1 suffices */
 
   --radius: 0.375rem; /* 6px cockpit base */
@@ -313,6 +342,45 @@
  */
 :root {
   --urgency-overdue: oklch(0.53 0.2 27);
+  /*
+   * Red for small TEXT on a red tint — `--urgency-overdue` paints,
+   * `--urgency-overdue-text` writes. The same split as `--accent` /
+   * `--accent-text`, `--urgency-high` / `--urgency-high-text` and
+   * `--urgency-medium` / `--urgency-medium-text`.
+   *
+   * 322af09 measured `overdue` at 4.74 sampled and left it alone. That number
+   * was the UNIFORM probe label ("From the feed") on the 11px/500 badge — the
+   * best case, not the worst. Re-measured 2026-07-19 across every site that
+   * actually writes with this token, at DPR 1, p20 cumulative threshold, both
+   * widths (identical at 1280 and 375):
+   *
+   *   site             weight  background            composite  sampled
+   *   sync-fail-chip   400     overdue/10 on surface  4.890      4.204  <- FAILS
+   *   overdue-badge    500     overdue/10 on surface  4.890      4.543     no room
+   *   overdue-header   500     overdue/8  on surface  5.078      5.062     ok
+   *   due-in           400     surface                5.796      5.190     ok
+   *   exam-conflict    400     surface                5.796      4.812     ok
+   *
+   * The failing one is `sync-strip.tsx`'s failing-feed chip: the same 10% wash
+   * as the badge, but the status word ("Sync failed" / "Reconnect") is weight
+   * 400, not 500. A 400-weight glyph gives up more of its body to
+   * anti-aliasing than a 500-weight one, so the ramp spec's 500-weight probe
+   * could pass while production did not. 🚨 That chip is the only thing on
+   * screen saying the calendar data is stale — the one label that must not be
+   * hard to read, for the same reason "From the feed" was not.
+   *
+   * L 0.53 -> 0.48 lifts it to 5.846 composite / 5.130 sampled, and the badge
+   * to 5.516. Hue 27 and chroma 0.20 are untouched: this stays the danger red
+   * and never drifts toward `--urgency-high`'s amber (hue 65).
+   *
+   * WIRED at all five call sites: `urgency.ts` TIER_BADGE_CLASS.overdue,
+   * `sync-strip.tsx`, `this-week.tsx`, `deadline-row.tsx` and `exam-panel.tsx`.
+   * The painting uses beside them — `border-urgency-overdue/30`,
+   * `bg-urgency-overdue/8`, the `TIER_DOT_CLASS` dot — deliberately stay on
+   * `--urgency-overdue`: they are graphical objects at the 3:1 floor, and moving
+   * them would darken the washes this text has to stay legible against.
+   */
+  --urgency-overdue-text: oklch(0.48 0.2 27);
   --urgency-high: oklch(0.53 0.14 65);
   /*
    * Amber for small TEXT on an amber tint — `--urgency-high` paints,
@@ -539,6 +607,38 @@
 /* Urgency heat ramp (dark column). green = done ONLY, in the status lane. */
 .dark {
   --urgency-overdue: oklch(0.68 0.19 25);
+  /*
+   * ⚠️ This one does NOT alias its paint, unlike every other `-text` token in
+   * the dark column. `high`, `medium` and `done` alias through because they
+   * were already comfortable here (6.23-7.31 sampled); overdue is not, and it
+   * is the only one that fails in BOTH themes.
+   *
+   * Measured 2026-07-19, DPR 1, p20, both widths:
+   *
+   *   site             weight  background            composite  sampled
+   *   sync-fail-chip   400     overdue/20 on surface  4.864      3.986  <- FAILS
+   *   overdue-badge    500     overdue/20 on surface  4.864      4.346  <- FAILS
+   *   overdue-header   500     overdue/12 on surface  5.476      5.385     ok
+   *   due-in           400     surface                6.157      5.223     ok
+   *   exam-conflict    400     surface                6.157      4.754     ok
+   *
+   * Dark red is the tightest colour in either theme: L 0.68 at chroma 0.19 on
+   * a 20% wash of itself composites to only 4.864 BEFORE anti-aliasing, so
+   * both tint sites land under the floor once rasterised.
+   *
+   * The correction goes the other way here — LIGHTER, not darker, because this
+   * is light ink on a dark surface. L 0.68 -> 0.78 gives 6.082 composite,
+   * 4.970 sampled on the 400-weight chip and 5.440 on the badge. Chroma drops
+   * 0.19 -> 0.16 because red at L 0.78 with chroma 0.19 is well outside sRGB
+   * and would be gamut-mapped unpredictably; 0.16 lands inside and keeps the
+   * hue honest. Hue 25 is untouched, so it stays clearly red and does not
+   * approach `--urgency-high`'s amber (hue 68) even though they now share a
+   * lightness — the same saturation-not-lightness separation the light column
+   * already uses for high vs medium.
+   *
+   * Not yet wired — see the light column.
+   */
+  --urgency-overdue-text: oklch(0.78 0.16 25);
   --urgency-high: oklch(0.78 0.15 68);
   /* 6.62:1 composite / 6.23:1 sampled on the 20% tint. The light column's
    * problem does not exist here, and DARKENING a colour that has to stay light

@@ -2,7 +2,12 @@
 
 import { Check } from "@phosphor-icons/react";
 import { useActionState, useId, useRef, useState } from "react";
-import { setWeightOverride, toggleCompleted } from "@/app/(app)/calendar/item-actions";
+import {
+  setItemCourse,
+  setWeightOverride,
+  toggleCompleted,
+} from "@/app/(app)/calendar/item-actions";
+import { CourseDot } from "@/components/courses/course-dot";
 import { FOCUS_RING } from "@/components/shell/focus-ring";
 import { IDLE_FORM_STATE } from "@/lib/forms/form-state";
 import { cn } from "@/lib/utils";
@@ -169,6 +174,142 @@ export function WeightOverrideField({
           FOCUS_RING,
         )}
       />
+    </form>
+  );
+}
+
+/**
+ * The course line on a row, which doubles as its own re-filing control (§5.1).
+ *
+ * Idle it is what it always was: a dot and a course name, or a muted
+ * "Unassigned". Activated it becomes a `<select>` listing every course plus the
+ * two non-course choices. Same shape as `WeightOverrideField` above — reading
+ * costs no extra chrome, correcting costs one click — and for the same reason:
+ * this text sits on a dense hairline row where a permanently visible control per
+ * item would out-shout the content.
+ *
+ * ## Why a native `<select>`
+ *
+ * Not a Base UI menu: it gets the platform's own mobile picker at 375px, which is
+ * a better control than anything worth rebuilding here, and it is one tab stop
+ * with real type-ahead rather than a listbox that has to reimplement both.
+ *
+ * ⚠ **This control does NOT degrade without JavaScript**, and unlike the other two
+ * in this file it cannot be read as if it did. There is no submit button — the form
+ * is submitted from `onChange` via `requestSubmit()` — and the select's own `choice`
+ * value is never read by the action. `intent` and `courseId` are hidden inputs that
+ * only the change handler fills in, so a no-JS submit would send `intent=set` with
+ * an empty `courseId` and fail the schema. That is an accepted trade (the rest of
+ * the calendar is already interactive), but it is a trade, not a free win, and
+ * anything built on this pattern inherits the same dependency.
+ *
+ * ## The two non-course options are NOT the same
+ *
+ * "No course" (`clear`) is a decision: this belongs to nothing, and sync is
+ * locked out of re-filing it. "Automatic" (`reset`) withdraws the decision and
+ * lets the matcher decide again. Collapsing them would make un-assigning a
+ * one-way door — the exact failure that made rejecting an exam date unrecoverable
+ * before 2026-07-19.
+ */
+export function CourseAssignField({
+  itemId,
+  course,
+  courses,
+  isLocked,
+  label,
+}: {
+  itemId: string;
+  course: { id: string; title: string; color: string } | null;
+  courses: readonly { id: string; title: string; color: string }[];
+  /** `course_id` is in `user_locked_fields` — a human filed this, not the matcher. */
+  isLocked: boolean;
+  /** The item's own title, for the accessible name. */
+  label: string;
+}) {
+  const [, action] = useActionState(setItemCourse, IDLE_FORM_STATE);
+  const [editing, setEditing] = useState(false);
+  const id = useId();
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        onClick={() => setEditing(true)}
+        aria-label={
+          course
+            ? `“${label}” is filed under ${course.title}. Change it.`
+            : `“${label}” is not filed under a course. File it.`
+        }
+        className={cn(
+          "mt-0.5 flex max-w-full items-center gap-1.5 rounded-sm text-ui-sm",
+          FOCUS_RING,
+          course ? "text-muted-foreground" : "text-muted-foreground italic",
+          "hover:text-foreground",
+        )}
+      >
+        {course ? <CourseDot color={course.color} /> : null}
+        <span className="truncate">{course ? course.title : "Unassigned"}</span>
+        {/* A dot, not a word — same convention as the weight badge. Only says
+            "a human decided this" when you are looking straight at it. */}
+        {isLocked ? (
+          <span aria-hidden="true" className="size-1 shrink-0 rounded-full bg-current opacity-60" />
+        ) : null}
+      </button>
+    );
+  }
+
+  return (
+    <form action={action} className="mt-0.5">
+      <input type="hidden" name="itemId" value={itemId} />
+      <label htmlFor={id} className="sr-only">
+        Course for “{label}”
+      </label>
+      <select
+        id={id}
+        name="choice"
+        defaultValue={course?.id ?? "__clear__"}
+        ref={(node) => node?.focus()}
+        onChange={(event) => {
+          const form = event.currentTarget.form;
+          if (!form) return;
+          // The select carries one value; the action takes a discriminated union.
+          // Translating here rather than widening the schema keeps `clear` and
+          // "a `set` whose courseId went missing" from ever being the same input.
+          const value = event.currentTarget.value;
+          const intent = form.elements.namedItem("intent");
+          const courseId = form.elements.namedItem("courseId");
+          if (!(intent instanceof HTMLInputElement) || !(courseId instanceof HTMLInputElement)) {
+            return;
+          }
+          intent.value = value === "__clear__" ? "clear" : value === "__reset__" ? "reset" : "set";
+          courseId.value = value.startsWith("__") ? "" : value;
+          setEditing(false);
+          form.requestSubmit();
+        }}
+        onKeyDown={(event) => {
+          // Escape reverts rather than submitting — the control is entered with a
+          // single click, so an accidental one must cost nothing.
+          if (event.key === "Escape") {
+            event.preventDefault();
+            setEditing(false);
+          }
+        }}
+        onBlur={() => setEditing(false)}
+        className={cn(
+          "h-6 max-w-56 rounded-sm border border-input-border bg-input px-1.5 text-foreground text-ui-sm",
+          FOCUS_RING,
+        )}
+      >
+        {courses.map((option) => (
+          <option key={option.id} value={option.id}>
+            {option.title}
+          </option>
+        ))}
+        <option value="__clear__">— No course —</option>
+        <option value="__reset__">— Automatic (let sync decide) —</option>
+      </select>
+      <input type="hidden" name="intent" value="set" />
+      <input type="hidden" name="courseId" value="" />
     </form>
   );
 }

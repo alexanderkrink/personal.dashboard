@@ -32,8 +32,35 @@ import { GATE_COOKIE_NAME, isGateCookieValid } from "@/lib/auth/access-code";
  * above: `calendar-sync/route.ts` exports GET and nothing else, and
  * authenticates every request against `CRON_SECRET` with a constant-time
  * comparison before it touches the database.
+ *
+ * `/api/inngest` is a DOCUMENTED EXCEPTION to the GET-only half of that rule,
+ * and the only one. Inngest invokes functions with POST and syncs the app with
+ * PUT, so a GET-only exemption would not work at all. It is sound because the
+ * two halves of the rule do different jobs: "route handler, not page" is what
+ * keeps Server Actions out of the exemption, and that half holds — route
+ * handlers have no action surface, so no `$ACTION_ID_…` POST resolves against
+ * this path no matter which methods it exports. "GET-only" was the belt to that
+ * braces, and what replaces it here is `INNGEST_SIGNING_KEY`: `serve()` verifies
+ * Inngest's signature on every request before running any function code, and
+ * `env.ts` makes the key REQUIRED so the build fails rather than shipping the
+ * endpoint unauthenticated. `app/api/inngest/route.test.ts` asserts an unsigned
+ * POST is refused — that test is the justification for this entry, so if it is
+ * ever deleted, this exemption must go with it.
+ *
+ * This is a carve-out, not a precedent. Adding a non-GET route here again needs
+ * its own authentication story and its own test proving that story works.
+ *
+ * Matching is by exact segment (see `startsWithAny`), so this entry covers
+ * `/api/inngest` and `/api/inngest/...` and nothing else — a sibling path like
+ * `/api/inngest-admin` stays gated.
  */
-const UNGATED_PATHS = ["/auth/confirm", "/auth/callback", "/api/hooks", "/api/cron"];
+export const UNGATED_PATHS = [
+  "/auth/confirm",
+  "/auth/callback",
+  "/api/hooks",
+  "/api/cron",
+  "/api/inngest",
+];
 
 /** Reachable with no session, but ONLY once the access-code gate is cleared. */
 const GATED_AUTH_PATHS = ["/login", "/signup", "/forgot-password"];
@@ -41,7 +68,28 @@ const GATED_AUTH_PATHS = ["/login", "/signup", "/forgot-password"];
 /** The access-code screen itself. Served at `/` by rewrite, never linked to. */
 const GATE_PATH = "/gate";
 
-function startsWithAny(pathname: string, prefixes: readonly string[]): boolean {
+/**
+ * Prefix match on whole path SEGMENTS, never on characters.
+ *
+ * The `${prefix}/` half is what makes this safe: a plain
+ * `pathname.startsWith(prefix)` would let `/api/inngest-admin` and
+ * `/api/inngestX` inherit `/api/inngest`'s gate exemption, turning one
+ * deliberate carve-out into a namespace of accidental ones. Exported so
+ * `proxy-session.test.ts` can pin that behaviour directly, since the widening
+ * would be invisible in any test that only checked the paths we do exempt.
+ *
+ * ONE THING THIS FUNCTION DOES NOT DO: it does not normalise. Given the literal
+ * string `/api/inngest/../dashboard` it returns true, because that string really
+ * does start with `/api/inngest/`. It is not exploitable, and the reason is
+ * external to this file: Next resolves `..` segments before populating
+ * `request.nextUrl.pathname`, so the proxy is handed `/dashboard` and gates it.
+ * Verified against a production build with `curl --path-as-is` — the raw,
+ * URL-encoded (`%2e%2e`) and mixed-case variants all 307 to `/` rather than
+ * slipping through. Written down because it is a property we are *borrowing*
+ * from the framework rather than one this function guarantees: if the proxy is
+ * ever fed a pathname from somewhere other than `nextUrl`, normalise it first.
+ */
+export function startsWithAny(pathname: string, prefixes: readonly string[]): boolean {
   return prefixes.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
 }
 

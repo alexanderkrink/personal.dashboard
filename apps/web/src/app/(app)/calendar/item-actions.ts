@@ -9,6 +9,7 @@ import {
   occurrenceIdSchema,
   QUICK_ADD_FIELDS,
   quickAddSchema,
+  setItemCourseSchema,
   weightOverrideSchema,
 } from "@/lib/calendar/item-schemas";
 import { type FormState, formError, toFormState } from "@/lib/forms/form-state";
@@ -129,6 +130,125 @@ export async function assignCourse(_previous: FormState, formData: FormData): Pr
   return {
     status: "success",
     message: `${matching.length} ${matching.length === 1 ? "entry" : "entries"} filed under ${course.data.title}. New ones matching “${parsed.data.pattern}” will link themselves.`,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* §5.1 — per-item re-filing: move, un-assign, or hand back to sync           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Changes ONE item's course link.
+ *
+ * ## The gap this closes
+ *
+ * `assignCourse` above filters `.is("course_id", null)`, so a course link could
+ * be **set once and never changed or removed**. Every route into `course_id` was
+ * write-once: the bulk assign skipped filed items by design, sync's matcher is
+ * additive and never takes a course away (`preserveCourseLink`), and nothing else
+ * wrote the column at all. A mis-filed item — or one filed correctly and then
+ * reorganised — had no correction path.
+ *
+ * ## …without breaking the bulk rule
+ *
+ * The comment on `assignCourse` is right and stays right: a bulk pattern assign
+ * must not re-file an item the user already filed, because that silently undoes a
+ * specific decision with a broader one. That argument is about **inference from a
+ * pattern**. It says nothing about a user pointing at one row and naming its
+ * course, which is the most specific decision available and cannot be overreach.
+ *
+ * So this is a separate action, not a relaxed filter on that one. It writes no
+ * `course_matchers` row: a per-item correction is a statement about this row, and
+ * turning it into a rule would re-introduce exactly the overreach the bulk guard
+ * prevents.
+ *
+ * ## 🔒 Locks, and why `clear` locks where `setWeightOverride` unlocks
+ *
+ * `setWeightOverride` removes its lock on clear, because clearing a weight means
+ * *"go back to the derived value"* — leaving a lock would pin it to the derived
+ * value forever, the opposite of what clearing means.
+ *
+ * Un-assigning is **not** that. *"This belongs to no course"* is a positive claim,
+ * and sync's matcher is additive: a hint that still matches would re-file the row
+ * on the very next run. Without the lock, `clear` would visibly work and then
+ * silently undo itself within the hour. So `clear` locks, and `reset` is the
+ * intent that means "derive it again" — the one that removes the lock.
+ */
+export async function setItemCourse(_previous: FormState, formData: FormData): Promise<FormState> {
+  const parsed = setItemCourseSchema.safeParse({
+    intent: formData.get("intent"),
+    itemId: formData.get("itemId"),
+    ...(formData.has("courseId") ? { courseId: formData.get("courseId") } : {}),
+  });
+  if (!parsed.success) return toFormState(parsed.error);
+
+  const supabase = await createClient();
+  await requireUserId(supabase);
+
+  // RLS scopes this; an item belonging to someone else is simply not found, which
+  // is why no `user_id` filter appears.
+  const item = await supabase
+    .from("calendar_items")
+    .select("id, user_locked_fields")
+    .eq("id", parsed.data.itemId)
+    .maybeSingle();
+  if (item.error) return formError(SAVE_FAILED);
+  if (!item.data) return formError(NOT_FOUND);
+
+  let courseTitle: string | null = null;
+  if (parsed.data.intent === "set") {
+    // Named for the sentence, not for safety — the composite (course_id, user_id)
+    // FK already makes a foreign course structurally impossible. This turns a
+    // constraint violation into a message.
+    const course = await supabase
+      .from("courses")
+      .select("title")
+      .eq("id", parsed.data.courseId)
+      .maybeSingle();
+    if (course.error) return formError(SAVE_FAILED);
+    if (!course.data) return formError("That course no longer exists.");
+    courseTitle = course.data.title;
+  }
+
+  // `set` and `clear` are both decisions the user made and sync must respect.
+  // `reset` is the withdrawal of a decision, so the lock goes with it.
+  const locks =
+    parsed.data.intent === "reset"
+      ? item.data.user_locked_fields.filter((field) => field !== "course_id")
+      : withLockedField(item.data.user_locked_fields, "course_id");
+
+  const { error } = await supabase
+    .from("calendar_items")
+    .update({
+      course_id: parsed.data.intent === "set" ? parsed.data.courseId : null,
+      user_locked_fields: locks,
+    })
+    .eq("id", parsed.data.itemId);
+
+  if (error) {
+    // Moving an item that is this course's exam candidate into a course that
+    // already has one trips `calendar_items_one_exam_per_course`. Worth its own
+    // sentence: "that didn't save" would leave the user retrying a move that can
+    // never succeed until they clear the other exam first.
+    if (error.code === UNIQUE_VIOLATION) {
+      return formError(
+        "That course already has an exam date set. Clear it there first, then move this one.",
+      );
+    }
+    return formError(SAVE_FAILED);
+  }
+
+  revalidatePath("/calendar");
+  revalidatePath("/");
+
+  return {
+    status: "success",
+    message:
+      parsed.data.intent === "set"
+        ? `Filed under ${courseTitle}. Sync won’t re-file it.`
+        : parsed.data.intent === "clear"
+          ? "Unassigned. Sync won’t re-file it."
+          : "Back to automatic — the next sync will decide.",
   };
 }
 
