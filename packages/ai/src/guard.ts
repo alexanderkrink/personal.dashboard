@@ -251,7 +251,7 @@ export function guardDecision(input: {
  * What the app injects so `packages/ai` can enforce §6 without reading `process.env`.
  *
  * `apps/web/src/env.ts` supplies `killSwitch` (`AI_KILL_SWITCH`) and `monthlyBudgetUsd`
- * (`AI_MONTHLY_BUDGET_USD`); `monthToDateSpendUsd` reads the `ai_daily_cost` rollup.
+ * (`AI_MONTHLY_BUDGET_USD`); `monthToDateSpend` reads the `ai_daily_cost` rollup.
  * `AI_MAX_TIER` is the third §6 var and lives separately, as `AIRuntimeConfig.maxRank`,
  * because it clamps model *resolution* rather than gating the call.
  */
