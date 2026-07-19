@@ -64,7 +64,9 @@ export function DeadlineRow({
         isOverridden={row.weightSource === "override"}
         className={cn(
           "shrink-0",
-          row.completed ? "bg-urgency-done/10 text-urgency-done" : TIER_BADGE_CLASS[row.tier],
+          // `-text`, not the painting token: 11px on a 10% wash of its own hue
+          // samples 4.50:1, exactly on the AA floor. See globals.css.
+          row.completed ? "bg-urgency-done/10 text-urgency-done-text" : TIER_BADGE_CLASS[row.tier],
         )}
         tierLabel={TIER_LABEL[row.tier]}
         kind={row.kind}
@@ -81,7 +83,7 @@ export function DeadlineRow({
         >
           {row.label}
           {row.isExamCandidate ? (
-            <span className="ml-2 rounded-sm bg-urgency-high/10 px-1.5 py-0.5 align-middle font-medium text-urgency-high text-ui-xs dark:bg-urgency-high/20">
+            <span className="ml-2 rounded-sm bg-urgency-high/10 px-1.5 py-0.5 align-middle font-medium text-urgency-high-text text-ui-xs dark:bg-urgency-high/20">
               Exam
             </span>
           ) : null}

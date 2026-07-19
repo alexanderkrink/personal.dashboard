@@ -22,11 +22,17 @@ import type { WeightTier } from "@/server/calendar/week-view";
  * All backgrounds are a low-alpha tint of the same hue rather than a second
  * token, so the text colour and its field always agree, and the badge stays
  * legible in both themes without a separate dark-mode ramp.
+ *
+ * ⚠ The BADGE writes with `-text` tokens where they exist (`high`), not the
+ * painting token. 11px glyphs on a 10% wash of their own hue lose contrast to
+ * anti-aliasing, so `--urgency-high` renders at 4.42:1 sampled while measuring
+ * 4.68:1 on the specified colours. `TIER_RULE_CLASS` below is the opposite
+ * case — a solid 2px rule, no glyphs — and keeps the painting tokens.
  */
 export const TIER_BADGE_CLASS: Record<WeightTier, string> = {
   overdue: "bg-urgency-overdue/10 text-urgency-overdue dark:bg-urgency-overdue/20",
-  high: "bg-urgency-high/10 text-urgency-high dark:bg-urgency-high/20",
-  medium: "bg-urgency-medium/10 text-urgency-medium dark:bg-urgency-medium/20",
+  high: "bg-urgency-high/10 text-urgency-high-text dark:bg-urgency-high/20",
+  medium: "bg-urgency-medium/10 text-urgency-medium-text dark:bg-urgency-medium/20",
   low: "bg-muted text-muted-foreground",
   info: "bg-muted text-muted-foreground",
 };
