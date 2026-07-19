@@ -16,11 +16,17 @@
  * - Boundary rule regardless of source: anything read back *out* of the DB that claims to
  *   be a schema type gets `safeParse`d before use. Schemas evolve, stored artifacts don't.
  *
- * Empty right now, and deliberately so. The M0 placeholder (`documentSummarySchema`) was
- * retired with this change rather than moved into `documents.ts`: it had no prompt and no
- * job behind it, and a plausible-looking `documents.ts` would have read as the real
- * document-pipeline contract to Wave 4 instead of as a stub. Nothing outside this package
- * imported it. The first real schemas arrive with `syllabus-components` (Agent 4).
+ * The M0 placeholder (`documentSummarySchema`) was retired rather than moved into
+ * `documents.ts`: it had no prompt and no job behind it, and a plausible-looking
+ * `documents.ts` would have read as the real document-pipeline contract to Wave 4 instead
+ * of as a stub. `syllabus.ts` (M1 item 11) is the first real feature area.
  */
 
-export {};
+export {
+  ASSESSMENT_KINDS,
+  assessmentKindSchema,
+  type SyllabusComponent,
+  type SyllabusComponents,
+  syllabusComponentSchema,
+  syllabusComponentsSchema,
+} from "./syllabus";

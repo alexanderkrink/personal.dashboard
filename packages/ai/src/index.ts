@@ -22,6 +22,10 @@ export {
   spendPosture,
 } from "./guard";
 export {
+  type ExtractSyllabusComponentsOptions,
+  extractSyllabusComponents,
+} from "./jobs/syllabus-components";
+export {
   type AttemptRecord,
   type AttemptRequest,
   type AttemptResult,

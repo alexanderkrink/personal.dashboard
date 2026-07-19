@@ -13,14 +13,14 @@
  *    lets the call wrapper resolve prompt → job → `(provider, model)` with the caller
  *    naming neither.
  *
- * The registry is empty right now, and deliberately so. The M0 placeholder (`echo-example`)
- * was retired with this change rather than carried forward: its id named no job, so it
- * could not satisfy the convention this module exists to enforce, and a placeholder that
- * has to be exempted from the rule is worse than no placeholder. The first real entry is
- * `syllabus-components` (M1 item 2c/Agent 4).
+ * The M0 placeholder (`echo-example`) was retired rather than carried forward: its id named
+ * no job, so it could not satisfy the convention this module exists to enforce, and a
+ * placeholder that has to be exempted from the rule is worse than no placeholder.
+ * `syllabus-components` (M1 item 11) is the first real entry.
  */
 
 import type { AnyPromptTemplate } from "./define";
+import { syllabusComponentsPrompt } from "./syllabus";
 
 export {
   type AnyPromptTemplate,
@@ -40,4 +40,6 @@ export {
  * Add an entry in the same commit that adds the template — the id-convention and
  * uniqueness checks only cover what is listed here.
  */
-export const PROMPT_REGISTRY: readonly AnyPromptTemplate[] = [];
+export const PROMPT_REGISTRY: readonly AnyPromptTemplate[] = [syllabusComponentsPrompt];
+
+export { SYLLABUS_COMPONENTS_SYSTEM, syllabusComponentsPrompt } from "./syllabus";
