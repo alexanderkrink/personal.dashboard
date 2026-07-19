@@ -19,6 +19,7 @@
  * `syllabus-components` (M1 item 11) is the first real entry.
  */
 
+import { coverageChecklistPrompt, deepReviewAuditPrompt } from "./coverage";
 import type { AnyPromptTemplate } from "./define";
 import { docStructuringPrompt, docStructuringSlideTextPrompt } from "./documents";
 import { syllabusComponentsPrompt } from "./syllabus";
@@ -55,8 +56,16 @@ export const PROMPT_REGISTRY: readonly AnyPromptTemplate[] = [
   topicMergePrompt,
   topicMergeRepairPrompt,
   mergeCriticPrompt,
+  coverageChecklistPrompt,
+  deepReviewAuditPrompt,
 ];
 
+export {
+  COVERAGE_CHECKLIST_SYSTEM,
+  coverageChecklistPrompt,
+  DEEP_REVIEW_AUDIT_SYSTEM,
+  deepReviewAuditPrompt,
+} from "./coverage";
 export {
   DOC_STRUCTURING_SYSTEM,
   docStructuringPrompt,

@@ -23,6 +23,18 @@
  */
 
 export {
+  AUDIT_VERDICTS,
+  type AuditFinding,
+  auditFindingSchema,
+  type CoverageChecklist,
+  coverageChecklistSchema,
+  type DeepReviewAudit,
+  deepReviewAuditSchema,
+  OBJECTIVE_COVERAGE,
+  type ObjectiveCoverage,
+  objectiveCoverageSchema,
+} from "./coverage";
+export {
   type DocumentExtraction,
   documentExtractionSchema,
   EXTRACTION_FIDELITIES,

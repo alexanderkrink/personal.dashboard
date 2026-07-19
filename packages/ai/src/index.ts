@@ -44,6 +44,14 @@ export {
   UNPRICED_TOLERANCE,
 } from "./guard";
 export {
+  type AuditDocumentOptions,
+  auditDocument,
+  type CheckSyllabusCoverageOptions,
+  type CompletenessTopic,
+  checkSyllabusCoverage,
+  renderCompletenessIndex,
+} from "./jobs/completeness";
+export {
   PDF_MEDIA_TYPE,
   type StructurePdfOptions,
   type StructureSlideTextOptions,
@@ -110,6 +118,12 @@ export {
   type TokenRates,
   type TokenUsage,
 } from "./pricing";
+export {
+  COVERAGE_CHECKLIST_SYSTEM,
+  coverageChecklistPrompt,
+  DEEP_REVIEW_AUDIT_SYSTEM,
+  deepReviewAuditPrompt,
+} from "./prompts/coverage";
 export {
   type AnyPromptTemplate,
   assertPromptId,
