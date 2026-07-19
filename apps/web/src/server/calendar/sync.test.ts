@@ -488,3 +488,144 @@ describe("cancellations (§3.6)", () => {
     expect(state.occurrences[0]?.status).toBe("cancelled");
   });
 });
+
+/* -------------------------------------------------------------------------- */
+/* The one-exam-per-course invariant, as sync sees it                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * 🔴 Both of these were found by applying the partial unique index
+ * (`calendar_items_one_exam_per_course`, migration 20260718235227) to the live
+ * database and watching the real feed sync **fail outright**:
+ *
+ *   Could not update calendar item: duplicate key value violates unique
+ *   constraint "calendar_items_one_exam_per_course"
+ *
+ * Sync flags exam candidates row by row and checked the user's lock row by row
+ * too, so a detector that picked a different session than the user did wrote a
+ * second candidate for the course — and once that write is rejected, one
+ * course's disagreement takes the entire feed's sync down with it.
+ *
+ * `patchItem` below enforces the index the way Postgres does, so these tests
+ * fail the same way production did rather than only checking the end state.
+ */
+function withExamIndex(made: ReturnType<typeof createMemoryStore>) {
+  const { store, state } = made;
+  const original = store.patchItem.bind(store);
+  store.patchItem = async (itemId: string, patch: object) => {
+    const fields = patch as { is_exam_candidate?: boolean };
+    if (fields.is_exam_candidate === true) {
+      const target = state.items.find((item) => item.id === itemId);
+      const clash = state.items.find(
+        (item) =>
+          item.id !== itemId &&
+          item.course_id !== null &&
+          item.course_id === target?.course_id &&
+          item.is_exam_candidate,
+      );
+      if (clash) {
+        throw new Error(
+          'duplicate key value violates unique constraint "calendar_items_one_exam_per_course"',
+        );
+      }
+    }
+    return original(itemId, patch);
+  };
+  return made;
+}
+
+function session(uid: string, sessionNumber: number, startsAtUtc: string): NormalizedEvent {
+  const event = lecture(uid, startsAtUtc);
+  event.sessionFrom = sessionNumber;
+  event.sessionTo = sessionNumber;
+  event.rawSummary = `ALGORITHMS & DATA STRUCTURES   (Ses. ${sessionNumber}) T-03.01`;
+  return event;
+}
+
+const EXAM_CONTEXT = (totalSessions: number) => ({
+  context: {
+    timezone: "Europe/Madrid",
+    courses: [
+      {
+        id: "course-1",
+        code: null,
+        title: "ALGORITHMS & DATA STRUCTURES",
+        total_sessions: totalSessions,
+      },
+    ],
+    matchers: [],
+    assessments: [],
+    semesters: [],
+  },
+});
+
+describe("sync and the one-exam-per-course invariant", () => {
+  it("stops proposing for a course once the user has ruled on it", async () => {
+    const { store, state } = withExamIndex(createMemoryStore(EXAM_CONTEXT(3)));
+
+    events.current = [
+      session("uid-s1", 1, "2026-09-08T08:00:00.000Z"),
+      session("uid-s2", 2, "2026-09-15T08:00:00.000Z"),
+      session("uid-s3", 3, "2026-09-22T08:00:00.000Z"),
+    ];
+    await syncFeed(store, "feed-1", at(0));
+
+    // The detector picked the last session; the user disagrees and picks s1,
+    // exactly as `planExamDecision` records it.
+    const detected = state.items.find((item) => item.is_exam_candidate);
+    expect(detected?.ics_uid).toBe("uid-s3");
+    if (!detected) throw new Error("unreachable");
+    detected.is_exam_candidate = false;
+    detected.detection_source = null;
+
+    const chosen = state.items.find((item) => item.ics_uid === "uid-s1");
+    if (!chosen) throw new Error("unreachable");
+    chosen.is_exam_candidate = true;
+    chosen.detection_source = "manual";
+    chosen.user_locked_fields = ["is_exam_candidate"];
+
+    // The next sync must not re-flag s3.
+    //
+    // ⚠ Asserting the OUTCOME, not just the rows. `syncFeed` catches everything
+    // and turns it into `{ status: "error" }`, so a version that trips the index
+    // leaves the rows looking correct — the write simply never landed — while
+    // the whole feed reports failure. That is precisely how this shipped: the
+    // live feed's `last_sync_error` read "duplicate key value violates unique
+    // constraint" while the exam panel looked perfectly fine.
+    const outcome = await syncFeed(store, "feed-1", at(1));
+    expect(outcome.status).toBe("ok");
+
+    const flagged = state.items.filter((item) => item.is_exam_candidate);
+    expect(flagged.map((item) => item.ics_uid)).toEqual(["uid-s1"]);
+    expect(flagged[0]?.detection_source).toBe("manual");
+  });
+
+  it("moves the flag without ever holding two, when the detector's answer changes", async () => {
+    const { store, state } = withExamIndex(createMemoryStore(EXAM_CONTEXT(2)));
+
+    events.current = [
+      session("uid-s1", 1, "2026-09-08T08:00:00.000Z"),
+      session("uid-s2", 2, "2026-09-15T08:00:00.000Z"),
+    ];
+    await syncFeed(store, "feed-1", at(0));
+    expect(state.items.find((item) => item.is_exam_candidate)?.ics_uid).toBe("uid-s2");
+
+    // The syllabus count is corrected to 3 and the feed publishes that session,
+    // so the detector's answer genuinely MOVES from s2 to s3. This is the case
+    // that needs no user and no concurrency at all: one sync emits both a clear
+    // and a set for the same course, and the set is rejected if it lands first.
+    const course = state.context.courses[0];
+    if (!course) throw new Error("unreachable");
+    course.total_sessions = 3;
+    events.current = [
+      session("uid-s1", 1, "2026-09-08T08:00:00.000Z"),
+      session("uid-s2", 2, "2026-09-15T08:00:00.000Z"),
+      session("uid-s3", 3, "2026-09-22T08:00:00.000Z"),
+    ];
+    const outcome = await syncFeed(store, "feed-1", at(1));
+    expect(outcome.status).toBe("ok");
+
+    const flagged = state.items.filter((item) => item.is_exam_candidate);
+    expect(flagged.map((item) => item.ics_uid)).toEqual(["uid-s3"]);
+  });
+});

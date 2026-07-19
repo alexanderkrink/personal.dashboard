@@ -459,13 +459,45 @@ async function markExamCandidates(
     if (detection.outcome === "found") examUids.set(detection.uid, detection.source);
   }
 
+  // 🔒 Courses the user has already ruled on.
+  //
+  // The lock lives on the row the user touched, but the DECISION is about the
+  // course: "this session is the exam" and "this course has no exam" both mean
+  // *stop proposing for this course*, which is exactly what the buttons promise
+  // ("Sync won't change it" / "Sync won't flag it again") and exactly what
+  // `reset` undoes by dropping the lock.
+  //
+  // Checking the lock per ITEM instead — as this loop used to — honoured the
+  // decision on the row it was written to and ignored it everywhere else, so a
+  // detector that picked a DIFFERENT session of the same course happily flagged
+  // that one too. Two consequences, both bad and both real:
+  //
+  //   * it produced the second candidate the read path cannot cope with, and
+  //     since 20260718235227 that write is rejected outright by
+  //     `calendar_items_one_exam_per_course` — failing the WHOLE feed sync over
+  //     one course's disagreement. Observed on the live feed, not theorised.
+  //   * after a rejection it would re-propose a different session of a course
+  //     the user had just said has no exam at all.
+  const decidedCourses = new Set(
+    storedItems
+      .filter((item) => item.user_locked_fields.includes("is_exam_candidate"))
+      .map((item) => item.course_id)
+      .filter((courseId): courseId is string => courseId !== null),
+  );
+
+  const writes: { itemId: string; changed: Record<string, unknown> }[] = [];
+
   for (const [uid, itemId] of itemIdByUid) {
     const stored = storedById.get(itemId);
     const locks = locksById.get(itemId) ?? [];
     const patch: Record<string, unknown> = {};
 
+    const courseId = stored?.course_id ?? null;
+    const userDecided =
+      locks.includes("is_exam_candidate") || (courseId !== null && decidedCourses.has(courseId));
+
     const source = examUids.get(uid);
-    if (!locks.includes("is_exam_candidate")) {
+    if (!userDecided) {
       patch.is_exam_candidate = source !== undefined;
       patch.detection_source = source ?? null;
     }
@@ -482,8 +514,19 @@ async function markExamCandidates(
     // inserted: 374 round trips on the real feed, all of them no-ops.
     const current = (stored ?? INSERTED_ITEM_DEFAULTS) as unknown as Record<string, unknown>;
     const changed = changedFields(patch, current);
-    if (Object.keys(changed).length > 0) await store.patchItem(itemId, changed);
+    if (Object.keys(changed).length > 0) writes.push({ itemId, changed });
   }
+
+  // ⚠ Clears before sets, for the same reason `orderExamPatches` exists on the
+  // user path: when the detector's answer MOVES to a different session, this
+  // loop emits both a clear and a set for one course, and the partial unique
+  // index — which cannot be deferred — rejects the set if it lands first.
+  writes.sort(
+    (a, b) =>
+      Number(a.changed.is_exam_candidate === true) - Number(b.changed.is_exam_candidate === true),
+  );
+
+  for (const write of writes) await store.patchItem(write.itemId, write.changed);
 }
 
 /* -------------------------------------------------------------------------- */

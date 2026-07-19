@@ -6,19 +6,28 @@
  * letting detection propose. This module turns one of those into the exact list
  * of row patches, and it exists as a separate pure function for one reason:
  *
- * ## 🔒 The one-candidate-per-course invariant is enforced HERE, not in the UI
+ * ## 🔒 The one-candidate-per-course invariant is PLANNED here and ENFORCED in the DB
  *
- * `is_exam_candidate` is a per-row boolean with no database constraint tying it
- * to at-most-one-per-course, and the read path (`buildExamStatuses`) assumes
- * exactly that. A UI that "only ever offers one choice" is not an enforcement
- * mechanism — a double submit, a stale page, or a sync racing a click all
- * produce two candidates, and the panel would then silently show whichever row
- * came back first.
+ * `is_exam_candidate` is a per-row boolean, and the read path
+ * (`buildExamStatuses`) assumes at most one per course. A UI that "only ever
+ * offers one choice" is not an enforcement mechanism — a double submit, a stale
+ * page, or a sync racing a click all produce two candidates, and the panel would
+ * then silently show whichever row came back first.
  *
  * So `set` does not just flag the chosen row: it **clears every other flagged
  * row of the same course in the same operation**, and `planExamDecision` is
  * unit-tested to assert the invariant holds over its own output. The action
  * layer applies the patches; it does not decide them.
+ *
+ * ⚠ That is necessary but was never sufficient, and this docstring used to claim
+ * otherwise. Planning correctly does not make the invariant true: the action
+ * applies the plan as N separate non-transactional UPDATEs, so two concurrent
+ * `set`s each plan correctly against a one-candidate world and both apply. And
+ * sync runs under `createAdminSupabaseClient`, which never reaches this module
+ * at all. Since 2026-07-19 the guarantee is a partial unique index —
+ * `calendar_items_one_exam_per_course`, migration 20260718235227 — because the
+ * database is the only layer every writer shares. See `orderExamPatches` at the
+ * bottom of this file for what that costs the write path.
  *
  * ## How a decision is recorded, and why it needs no new column
  *
@@ -164,4 +173,27 @@ export function planExamDecision(
   }
 
   return patches;
+}
+
+/**
+ * Orders patches so they can be applied **one statement at a time** without
+ * tripping `calendar_items_one_exam_per_course` (migration 20260718235227).
+ *
+ * `planExamDecision` describes the end state and is free to emit its patches in
+ * any order — it is a pure statement about what the rows should be, and knows
+ * nothing about indexes. But a "move the exam to a different session" emits both
+ * a clear and a set, and applying the set first gives the course two candidates
+ * for the width of one statement, which the partial unique index rejects.
+ *
+ * A DEFERRABLE constraint would be the alternative, but a partial unique key can
+ * only be an index, and indexes cannot be deferred. So: **every clear before
+ * every set**. Within each group the relative order is irrelevant and preserved,
+ * so this stays a stable sort over a boolean key.
+ *
+ * Kept separate from `planExamDecision` so the planner's contract does not
+ * quietly acquire a database dependency — and so this rule is testable on its
+ * own, which is the thing that actually broke.
+ */
+export function orderExamPatches(patches: readonly ExamItemPatch[]): ExamItemPatch[] {
+  return [...patches].sort((a, b) => Number(a.is_exam_candidate) - Number(b.is_exam_candidate));
 }

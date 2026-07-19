@@ -15,7 +15,7 @@ import { type FormState, formError, toFormState } from "@/lib/forms/form-state";
 import { readFormValues } from "@/lib/forms/form-values";
 import { createClient } from "@/lib/supabase/server";
 import { withLockedField } from "@/server/calendar/diff";
-import { planExamDecision } from "@/server/calendar/exam-decision";
+import { orderExamPatches, planExamDecision } from "@/server/calendar/exam-decision";
 
 /**
  * Writes against `calendar_items` / `calendar_occurrences` that a *user* makes.
@@ -29,6 +29,19 @@ import { planExamDecision } from "@/server/calendar/exam-decision";
 
 const SAVE_FAILED = "That didn’t save. Try again — nothing you typed was lost.";
 const NOT_FOUND = "That entry no longer exists. It may have been removed by a sync.";
+
+/**
+ * Postgres `unique_violation`. Surfaced by PostgREST verbatim in `error.code`.
+ *
+ * The only unique key a user write can realistically collide with on
+ * `calendar_items` is `calendar_items_one_exam_per_course` — the one-exam-per-
+ * course invariant — so it is worth its own sentence rather than the generic
+ * "that didn't save".
+ */
+const UNIQUE_VIOLATION = "23505";
+
+const EXAM_RACE_LOST =
+  "Another change set this course’s exam date first. Reload to see the current one, then try again.";
 
 const CLEARED = Object.fromEntries(QUICK_ADD_FIELDS.map((field) => [field, ""]));
 
@@ -240,6 +253,19 @@ export async function setWeightOverride(
  * two-candidate starting state. This function loads the course's full item list,
  * applies the patches it is handed, and adds nothing of its own. The UI is not
  * trusted to maintain the invariant, and neither is this action.
+ *
+ * ## …and since 2026-07-19 it is not this function's to *guarantee* either
+ *
+ * The plan is correct; applying it as N separate non-transactional UPDATEs was
+ * not. Two concurrent `set`s on one course both read a one-candidate world, both
+ * plan correctly, and both apply — leaving two rows at `detection_source =
+ * 'manual'`. And no concurrency is needed for the second hole: sync runs under
+ * `createAdminSupabaseClient`, which never passes through this function at all.
+ *
+ * So the invariant now lives in the database, as a partial unique index
+ * (`calendar_items_one_exam_per_course`, migration 20260718235227) — the only
+ * layer every writer shares. This function's remaining job is to cooperate with
+ * it: apply clears before sets, and turn a rejection into a sentence.
  */
 export async function setExamDate(_previous: FormState, formData: FormData): Promise<FormState> {
   const parsed = examDecisionSchema.safeParse({
@@ -284,10 +310,22 @@ export async function setExamDate(_previous: FormState, formData: FormData): Pro
 
   const patches = planExamDecision(items.data ?? [], parsed.data);
 
-  for (const patch of patches) {
+  // ⚠ ORDER IS LOAD-BEARING against `calendar_items_one_exam_per_course`:
+  // every clear must land before every set, or a legitimate "move the exam"
+  // gives the course two candidates for the width of one statement and is
+  // rejected. See `orderExamPatches`.
+  for (const patch of orderExamPatches(patches)) {
     const { id, ...columns } = patch;
     const { error } = await supabase.from("calendar_items").update(columns).eq("id", id);
-    if (error) return formError(SAVE_FAILED);
+    if (error) {
+      // 23505 here means another writer flagged a different session of this
+      // course between our read and our write — a concurrent submit, or a sync
+      // that re-detected while the panel was open. The user's click is genuinely
+      // lost, so say so plainly and tell them what makes it work: the page they
+      // are looking at is stale, and a reload will show whose write won.
+      if (error.code === UNIQUE_VIOLATION) return formError(EXAM_RACE_LOST);
+      return formError(SAVE_FAILED);
+    }
   }
 
   revalidatePath("/calendar");

@@ -5,6 +5,7 @@ import {
   type ExamDecisionItem,
   isUserChosen,
   isUserRejected,
+  orderExamPatches,
   planExamDecision,
 } from "./exam-decision";
 
@@ -174,5 +175,50 @@ describe("isUserChosen / isUserRejected", () => {
 
   it("an unflagged row carrying the lock is a rejection", () => {
     expect(isUserRejected(item("s1", { user_locked_fields: [EXAM_CANDIDATE_FIELD] }))).toBe(true);
+  });
+});
+
+/**
+ * These patches are applied one UPDATE at a time against a partial unique index
+ * (`calendar_items_one_exam_per_course`). The end state the planner describes is
+ * always legal; the *intermediate* states are not, unless clears go first.
+ */
+describe("orderExamPatches — surviving the one-candidate index mid-flight", () => {
+  it("puts every clear before every set, so a move never doubles up", () => {
+    // Exactly the "move the exam" case: s30 is the old candidate, s29 the new.
+    // The planner is free to emit the set first — here it does.
+    const patches = [
+      { id: "s29", is_exam_candidate: true, detection_source: "manual", user_locked_fields: [] },
+      { id: "s30", is_exam_candidate: false, detection_source: null, user_locked_fields: [] },
+    ];
+
+    expect(orderExamPatches(patches).map((patch) => patch.id)).toEqual(["s30", "s29"]);
+  });
+
+  it("never lets the flagged count exceed one at any point mid-application", () => {
+    // Two stale candidates plus a new pick — the corrupted starting state the
+    // index exists to make unreachable, applied one statement at a time.
+    const start = [
+      item("s28", { is_exam_candidate: true, detection_source: "manual" }),
+      item("s30", { is_exam_candidate: true, detection_source: "syllabus_total_sessions" }),
+      item("s29"),
+    ];
+    const patches = orderExamPatches(planExamDecision(start, { intent: "set", itemId: "s29" }));
+
+    const live = new Map(start.map((row) => [row.id, row.is_exam_candidate]));
+    const peak: number[] = [];
+    for (const patch of patches) {
+      live.set(patch.id, patch.is_exam_candidate);
+      peak.push([...live.values()].filter(Boolean).length);
+    }
+
+    expect(Math.max(...peak)).toBeLessThanOrEqual(1);
+    expect([...live.entries()].filter(([, on]) => on).map(([id]) => id)).toEqual(["s29"]);
+  });
+
+  it("is a no-op on plans that only clear, and preserves their order", () => {
+    const patches = planExamDecision(DETECTED, { intent: "reject", itemId: "s30" });
+
+    expect(orderExamPatches(patches)).toEqual(patches);
   });
 });
