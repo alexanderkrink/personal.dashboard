@@ -153,10 +153,22 @@ function ExamRow({ status, timeZone }: { status: ExamStatus; timeZone: string })
       </span>
 
       {status.conflict ? (
-        <span className="inline-flex w-full items-center gap-1.5 text-urgency-overdue text-ui-xs sm:w-auto">
+        <span className="inline-flex w-full items-center gap-1.5 text-urgency-overdue-text text-ui-xs sm:w-auto">
           <Warning weight="fill" aria-hidden="true" className="size-3.5" />
           Syllabus says {status.conflict.declaredSessions} sessions, feed has{" "}
           {status.conflict.feedMaxSession}
+        </span>
+      ) : null}
+
+      {/* §5.1b guard 2. A softer colour than `conflict` on purpose: a session-count
+          disagreement means one of two numbers is wrong, whereas a date outside the
+          term is usually a real resit or a term boundary we have slightly off. It
+          is a "look at this", not a "this is broken" — and it never hides the date,
+          because guard 2 is skip-and-flag. */}
+      {status.outsideSemester ? (
+        <span className="inline-flex w-full items-center gap-1.5 text-urgency-medium-text text-ui-xs sm:w-auto">
+          <Warning weight="fill" aria-hidden="true" className="size-3.5" />
+          Falls outside your semester dates
         </span>
       ) : null}
 

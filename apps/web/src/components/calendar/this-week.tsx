@@ -58,36 +58,65 @@ export async function ThisWeek({
 }) {
   const supabase = await createClient();
 
-  const [{ data: profile }, { data: feeds }, { data: courses }, { data: unassigned }] =
-    await Promise.all([
-      supabase.from("profiles").select("timezone").maybeSingle(),
-      supabase
-        .from("calendar_feeds")
-        .select("id, label, active, last_synced_at, last_sync_status, last_sync_error")
-        .order("created_at", { ascending: true }),
-      supabase
-        .from("courses")
-        .select("id, code, title, color, total_sessions, total_sessions_source")
-        .eq("archived", false)
-        .order("title", { ascending: true }),
-      // The Unassigned bucket is queried SEPARATELY and is deliberately NOT
-      // bounded by the week window.
-      //
-      // It is a maintenance surface about the whole feed, not a view of this
-      // week: on the live database its 220 rows are 2025/26 spring events
-      // running 19 Jan → 26 Jun, so scoping it to the week's −30d/+180d range
-      // would hide almost all of them and report an empty bucket while 220 rows
-      // sat unmatched. Filing a pattern is also inherently about every event of
-      // that course, past ones included.
-      showUnassigned
-        ? supabase
-            .from("calendar_items")
-            .select("id, raw_summary, title, calendar_occurrences (starts_at)")
-            .is("course_id", null)
-            .eq("hidden", false)
-            .limit(2000)
-        : { data: null },
-    ]);
+  const [
+    { data: profile },
+    { data: feeds },
+    { data: courses },
+    { data: assessments },
+    { data: semesters },
+    { data: unassigned },
+  ] = await Promise.all([
+    supabase.from("profiles").select("timezone").maybeSingle(),
+    supabase
+      .from("calendar_feeds")
+      .select("id, label, active, last_synced_at, last_sync_status, last_sync_error")
+      .order("created_at", { ascending: true }),
+    supabase
+      .from("courses")
+      .select("id, code, title, color, total_sessions, total_sessions_source")
+      .eq("archived", false)
+      .order("title", { ascending: true }),
+    // §5.1b steps 2 and 3, fetched here rather than hardcoded to `[]`.
+    //
+    // The sync path has always loaded both (`store.loadContext`); the read path
+    // did not, and since the chain is deliberately re-run at read time the two
+    // were answering the same question from different inputs. `assessments` has
+    // 0 rows today, so step 2 stays dormant — but it is dormant for want of
+    // syllabi now, rather than structurally unreachable.
+    //
+    // ⚠ `semesters` is NOT inert: there are 2 rows (2026/27 Fall and Spring), so
+    // wiring it actually switches guard 2 on. With `[]` the guard returned
+    // `{ unbounded: true, outsideSemester: false }` for every date — a constant
+    // dressed as a check.
+    //
+    // Both are RLS-scoped and unbounded by the week window on purpose: an
+    // assessment's relevance is to its course, not to a date range, and a
+    // semester filtered by "overlaps this week" would drop exactly the terms
+    // guard 2 needs to test a future exam against.
+    showExams
+      ? supabase.from("assessments").select("id, course_id, title, kind, session_number")
+      : { data: null },
+    showExams
+      ? supabase.from("semesters").select("starts_on, ends_on").order("starts_on")
+      : { data: null },
+    // The Unassigned bucket is queried SEPARATELY and is deliberately NOT
+    // bounded by the week window.
+    //
+    // It is a maintenance surface about the whole feed, not a view of this
+    // week: on the live database its 220 rows are 2025/26 spring events
+    // running 19 Jan → 26 Jun, so scoping it to the week's −30d/+180d range
+    // would hide almost all of them and report an empty bucket while 220 rows
+    // sat unmatched. Filing a pattern is also inherently about every event of
+    // that course, past ones included.
+    showUnassigned
+      ? supabase
+          .from("calendar_items")
+          .select("id, raw_summary, title, calendar_occurrences (starts_at)")
+          .is("course_id", null)
+          .eq("hidden", false)
+          .limit(2000)
+      : { data: null },
+  ]);
 
   const timeZone = profile?.timezone ?? "Europe/Madrid";
 
@@ -180,7 +209,7 @@ export async function ThisWeek({
       {/* 2 — overdue, pinned above everything */}
       {view.overdue.length > 0 ? (
         <section className="mb-6 overflow-hidden rounded-lg border border-urgency-overdue/40 bg-surface">
-          <h3 className="border-urgency-overdue/30 border-b bg-urgency-overdue/8 px-4 py-2 font-medium text-urgency-overdue text-ui-sm dark:bg-urgency-overdue/12">
+          <h3 className="border-urgency-overdue/30 border-b bg-urgency-overdue/8 px-4 py-2 font-medium text-urgency-overdue-text text-ui-sm dark:bg-urgency-overdue/12">
             Overdue
             <span className="ml-2 font-mono tabular-nums">{view.overdue.length}</span>
           </h3>
@@ -257,8 +286,8 @@ export async function ThisWeek({
               // user just declined.
               user_locked_fields: row.item.user_locked_fields,
             })),
-            assessments: [],
-            semesters: [],
+            assessments: assessments ?? [],
+            semesters: semesters ?? [],
           })}
           timeZone={timeZone}
         />

@@ -428,3 +428,77 @@ describe("buildExamStatuses — input hygiene", () => {
     expect(statuses[0]?.course.id).toBe(COURSE_ID);
   });
 });
+
+/**
+ * §5.1b guard 2, which until 2026-07-19 was computed and thrown away.
+ *
+ * `boundsFlags` has always produced `outsideSemester` onto `detection.flags`,
+ * but the read path (`this-week.tsx`) passed `semesters: []` — and with no rows
+ * the guard returns `{ unbounded: true, outsideSemester: false }` unconditionally.
+ * It was a constant wearing the shape of a check. These cases pin the behaviour
+ * now that the real rows are threaded through.
+ */
+describe("buildExamStatuses — semester bounds (guard 2)", () => {
+  // The live rows, 2026-07-19.
+  const FALL = { starts_on: "2026-08-31", ends_on: "2026-12-18" };
+  const SPRING = { starts_on: "2027-01-11", ends_on: "2027-05-21" };
+
+  it("does not flag an exam that falls inside a semester", () => {
+    const [status] = buildExamStatuses({
+      courses: [course()],
+      items: FULL_TERM,
+      assessments: [],
+      semesters: [FALL, SPRING],
+    });
+
+    expect(status?.detection.outcome).toBe("found");
+    expect(status?.outsideSemester).toBe(false);
+  });
+
+  it("flags an exam that falls outside every semester", () => {
+    // Session 30 moved into the Christmas gap between the two terms.
+    const [status] = buildExamStatuses({
+      courses: [course()],
+      items: [item(1, "2026-09-01T07:30:00.000Z"), item(30, "2026-12-29T10:30:00.000Z")],
+      assessments: [],
+      semesters: [FALL, SPRING],
+    });
+
+    expect(status?.detection.outcome).toBe("found");
+    expect(status?.outsideSemester).toBe(true);
+  });
+
+  /**
+   * ⚠ The off-by-one-day trap that wiring real rows exposed.
+   *
+   * `semesters.ends_on` is a DATE. `Date.parse("2026-12-18")` is midnight UTC
+   * *starting* the 18th, so an exam at 10:30 on the final day of term compares as
+   * outside it. Passing the column through raw would have made the guard's very
+   * first real firing a false positive — on the last teaching day, which is
+   * exactly where finals sit.
+   */
+  it("counts the final day of term as inside it, not outside", () => {
+    const [status] = buildExamStatuses({
+      courses: [course()],
+      items: [item(1, "2026-09-01T07:30:00.000Z"), item(30, "2026-12-18T10:30:00.000Z")],
+      assessments: [],
+      semesters: [FALL, SPRING],
+    });
+
+    expect(status?.outsideSemester).toBe(false);
+  });
+
+  it("never flags when no semesters are on file — that is missing config, not a bad date", () => {
+    // `unbounded` is true here, but `outsideSemester` is not, and only the latter
+    // is surfaced. Warning on every row when term dates are simply absent would
+    // train the user to ignore the warning that matters.
+    const [status] = buildExamStatuses({
+      courses: [course()],
+      items: FULL_TERM,
+      assessments: [],
+      semesters: [],
+    });
+
+    expect(status?.outsideSemester).toBe(false);
+  });
+});

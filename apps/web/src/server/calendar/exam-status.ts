@@ -145,6 +145,28 @@ export interface ExamStatus {
    * pick"*. Null when they agree or when only one of them exists.
    */
   conflict: { declaredSessions: number; feedMaxSession: number } | null;
+  /**
+   * §5.1b guard 2: the resolved date sits outside **every** semester on record.
+   *
+   * ⚠ Added 2026-07-19, and until now this was computed and thrown away. Core's
+   * `boundsFlags` has always produced it onto `detection.flags`, but the read path
+   * passed `semesters: []`, which makes the guard structurally unable to fire —
+   * with no rows it returns `{ unbounded: true, outsideSemester: false }` for
+   * every date, so the flag was a constant. Wiring the real rows is what gives it
+   * a value, and this field is what carries that value somewhere a user can see.
+   *
+   * Deliberately surfaces `outsideSemester` and NOT `unbounded`. They mean
+   * different things: `outsideSemester` is *"we have your term dates and this exam
+   * is not inside them"* — a real contradiction worth a warning. `unbounded` is
+   * merely *"no term dates on file"*, which is missing configuration, not a
+   * suspicious date, and warning about it on every row would train the user to
+   * ignore the warning that matters.
+   *
+   * Never suppresses the date. Guard 2 is skip-and-flag by design: hiding an exam
+   * date is worse than showing a questionable one, and the confirm gate stands in
+   * front of it either way.
+   */
+  outsideSemester: boolean;
 }
 
 /**
@@ -266,9 +288,25 @@ export function buildExamStatuses(input: BuildExamStatusesInput): ExamStatus[] {
     byCourse.set(item.course_id, bucket);
   }
 
+  // ⚠ `ends_on` is a DATE, and guard 2 compares it against an INSTANT.
+  //
+  // `Date.parse("2026-12-18")` is midnight UTC *starting* the 18th, so passing the
+  // column through raw makes every exam on the final day of term — 14:00 on the
+  // 18th, say — compare as `outside the semester`. The bound a reader means by
+  // "term ends 18 December" is the end of that day, not its start.
+  //
+  // Extended to the last instant of the day rather than the next day's midnight,
+  // because core's check is inclusive on both ends (`at <= endsAt`) and `+1 day`
+  // would admit midnight of the 19th.
+  //
+  // UTC, not `profiles.timezone`: Madrid's end-of-day is 22:00/23:00Z, so a UTC
+  // day-end is up to two hours generous. That is the correct direction to err —
+  // guard 2 only ever *flags*, never suppresses, so a false `outsideSemester`
+  // undermines a date that is actually fine, while being slightly permissive costs
+  // nothing. Doing it properly needs the tz here and is not worth the coupling.
   const semesters = input.semesters.map((semester) => ({
     startsAt: semester.starts_on,
-    endsAt: semester.ends_on,
+    endsAt: `${semester.ends_on}T23:59:59.999Z`,
   }));
 
   const statuses: ExamStatus[] = [];
@@ -357,6 +395,9 @@ export function buildExamStatuses(input: BuildExamStatusesInput): ExamStatus[] {
         declared !== null && feedMax !== null && declared !== feedMax
           ? { declaredSessions: declared, feedMaxSession: feedMax }
           : null,
+      // Only a `found` detection carries flags — `pending` and `unknown` resolved
+      // no date, and a date that does not exist cannot be outside anything.
+      outsideSemester: detection.outcome === "found" && detection.flags.outsideSemester,
     });
   }
 
