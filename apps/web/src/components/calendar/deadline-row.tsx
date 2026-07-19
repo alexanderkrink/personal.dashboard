@@ -102,7 +102,7 @@ export function DeadlineRow({
       <span className="shrink-0 text-right font-mono text-muted-foreground text-ui-sm tabular-nums">
         {showWeekday ? <span className="hidden sm:inline">{weekday} · </span> : null}
         <span className="hidden sm:inline">{time} · </span>
-        <span className={row.tier === "overdue" ? "text-urgency-overdue" : undefined}>
+        <span className={row.tier === "overdue" ? "text-urgency-overdue-text" : undefined}>
           {formatDueIn(row.daysUntilDue)}
         </span>
       </span>

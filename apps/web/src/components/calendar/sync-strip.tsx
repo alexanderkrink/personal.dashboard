@@ -77,7 +77,7 @@ export function SyncStrip({ feeds, now }: { feeds: readonly SyncStripFeed[]; now
         return (
           <span
             key={feed.id}
-            className="inline-flex items-center gap-1.5 rounded-4xl bg-urgency-overdue/10 px-2 py-0.5 text-urgency-overdue text-ui-xs dark:bg-urgency-overdue/20"
+            className="inline-flex items-center gap-1.5 rounded-4xl bg-urgency-overdue/10 px-2 py-0.5 text-urgency-overdue-text text-ui-xs dark:bg-urgency-overdue/20"
           >
             <WarningCircle weight="fill" aria-hidden="true" className="size-3.5" />
             <span className="font-medium">{feed.label}</span>

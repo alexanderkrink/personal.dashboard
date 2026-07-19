@@ -30,7 +30,7 @@ import type { WeightTier } from "@/server/calendar/week-view";
  * case — a solid 2px rule, no glyphs — and keeps the painting tokens.
  */
 export const TIER_BADGE_CLASS: Record<WeightTier, string> = {
-  overdue: "bg-urgency-overdue/10 text-urgency-overdue dark:bg-urgency-overdue/20",
+  overdue: "bg-urgency-overdue/10 text-urgency-overdue-text dark:bg-urgency-overdue/20",
   high: "bg-urgency-high/10 text-urgency-high-text dark:bg-urgency-high/20",
   medium: "bg-urgency-medium/10 text-urgency-medium-text dark:bg-urgency-medium/20",
   low: "bg-muted text-muted-foreground",
