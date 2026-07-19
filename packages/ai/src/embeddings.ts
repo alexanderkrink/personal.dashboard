@@ -258,8 +258,18 @@ export function createEmbeddingClient(config: EmbeddingClientConfig): EmbeddingC
         // The stamp's `input_hash` covers what was actually sent, in order, plus the two
         // things that change the meaning of the same words: the model and the input type.
         // A `document` vector and a `query` vector of identical text are different vectors.
+        //
+        // ⚠ The batch separator is NUL, written as the escape `\u0000` (six characters) — never as a literal
+        // NUL byte in this file. NUL is the right *separator* (it cannot occur in the text
+        // being embedded, so two batches cannot collide by containing each other's
+        // delimiters), but a raw NUL in the *source* makes this a binary file: `file` reports
+        // it as `data`, and `grep` silently prints nothing for a matching line instead of
+        // matching it. This file spent Wave 4 in that state, invisible to every grep-based
+        // sweep over `packages/ai` — including the ones that check no `@ai-sdk/*` import or
+        // model ID escapes this package. The escape compiles to the identical character, so
+        // the hash — and therefore cross-run embedding reuse — is unchanged.
         const inputHash = await sha256Hex(
-          `${EMBEDDING_MODEL}\n${inputType}\n${EMBEDDING_RECIPE_VERSION}\n${batch.join("\n \n")}`,
+          `${EMBEDDING_MODEL}\n${inputType}\n${EMBEDDING_RECIPE_VERSION}\n${batch.join("\n\u0000\n")}`,
         );
         const startedAt = Date.now();
 
