@@ -36,6 +36,16 @@ env:
   # AI key missing entirely.
   GOOGLE_GENERATIVE_AI_API_KEY: ci_placeholder_google_generative_ai_key
   VOYAGE_API_KEY: ci_placeholder_voyage_key
+  # The §6 kill switch and budget guard. All three have defaults in env.ts, so
+  # they are set here to exercise the validators rather than to satisfy a
+  # requirement — a typo'd name or a loosened schema fails CI instead of
+  # production. AI_KILL_SWITCH is deliberately given the string "false": it is
+  # the value that a truthiness-based parser would misread as ON, so CI proves
+  # the enum+transform reads it as OFF. AI_MAX_TIER uses `fast` rather than the
+  # `deep` production value so the clamp path is the one CI type-checks.
+  AI_KILL_SWITCH: "false"
+  AI_MAX_TIER: fast
+  AI_MONTHLY_BUDGET_USD: "75"
   # INNGEST_DEV is deliberately NOT set here. env.ts constrains it to
   # 0/1/true/false, and leaving it unset means CI builds in the same cloud mode
   # production runs in — so the signature-verification path is the one exercised.

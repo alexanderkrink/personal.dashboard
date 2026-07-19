@@ -27,6 +27,31 @@ export const env = createEnv({
     // breaks vector comparability (§5), so this is a retrieval decision, not a generation
     // one. Wired now so the four env locations stay in step; no embedding code uses it yet.
     VOYAGE_API_KEY: z.string().min(1).optional(),
+    // ── The §6 kill switch and budget guard ─────────────────────────────────────
+    // All three are read HERE and injected into `packages/ai` (which never reads
+    // process.env). That boundary is the whole point of item 2b: one place to swap
+    // models or providers, one place to version prompts, one place to kill spend.
+    //
+    // The runaway-cost circuit breaker. Flip it in Vercel, redeploy, and every
+    // metered call fails fast before a token is spent. Enumerated rather than
+    // coerced, following the INNGEST_DEV precedent: `z.coerce.boolean()` would read
+    // the string "false" as TRUE, which on this particular var means "the app is
+    // silently dead" — and a truthiness bug on a switch whose whole job is to be
+    // trusted is not a bug you want to find in production. A typo fails the build.
+    AI_KILL_SWITCH: z
+      .enum(["0", "1", "true", "false"])
+      .default("false")
+      .transform((value) => value === "1" || value === "true"),
+    // Clamps every job's resolved model rank. `deep` is the top rank, so the default
+    // is "no clamp, circuit breaker only" — set it to `fast` to keep the app alive
+    // cheaply (Flash-Lite / Haiku) while investigating a spend spike.
+    AI_MAX_TIER: z.enum(["fast", "balanced", "deep"]).default("deep"),
+    // Soft cap, checked against the ai_daily_cost rollup before each call. §4's
+    // planning range is $35–60/month; §6's default cap is 75. Positive and finite:
+    // a zero or negative budget makes spendPosture() halt everything, so a typo'd
+    // `0` would take AI down rather than uncap it — but failing the build is still
+    // the clearer outcome.
+    AI_MONTHLY_BUDGET_USD: z.coerce.number().positive().finite().default(75),
     // Shared secret for the daily calendar-sync cron (§3.1). REQUIRED, and a
     // long one: `/api/cron/calendar-sync` is the one route reachable without a
     // session or the access-code gate, so this string is the entire thing
@@ -83,6 +108,9 @@ export const env = createEnv({
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
     GOOGLE_GENERATIVE_AI_API_KEY: process.env.GOOGLE_GENERATIVE_AI_API_KEY,
     VOYAGE_API_KEY: process.env.VOYAGE_API_KEY,
+    AI_KILL_SWITCH: process.env.AI_KILL_SWITCH,
+    AI_MAX_TIER: process.env.AI_MAX_TIER,
+    AI_MONTHLY_BUDGET_USD: process.env.AI_MONTHLY_BUDGET_USD,
     CRON_SECRET: process.env.CRON_SECRET,
     INNGEST_SIGNING_KEY: process.env.INNGEST_SIGNING_KEY,
     INNGEST_EVENT_KEY: process.env.INNGEST_EVENT_KEY,
