@@ -654,6 +654,7 @@ export type Database = {
           output_tokens: number | null
           provider: string | null
           successes: number | null
+          unpriced_calls: number | null
           user_id: string | null
         }
         Relationships: []
@@ -678,6 +679,7 @@ export type Database = {
         }
         Returns: string
       }
+      assert_human_caller: { Args: { p_action: string }; Returns: undefined }
       claim_calendar_feed: {
         Args: { p_feed_id: string; p_lease_seconds?: number }
         Returns: {
