@@ -1051,6 +1051,30 @@ create table exam_reviews (
 );
 ```
 
+> ⚠ **CORRECTED 2026-07-19 (Wave 4 Agent 4) — block `sources` are flat `{documentId, page}`,
+> not `{documentId, locator}`, because Anthropic REFUSED the nested shape.** Measured, not
+> reasoned: the first live `topic-merge` call against `claude-sonnet-5` returned **HTTP 400
+> `invalid_request_error`: "The compiled grammar is too large, which would cause performance
+> issues. Simplify your tool schemas"** — on every topic, before a single token was
+> generated. A TopicPage is six arrays of objects; giving each of them an array of two-level
+> nested source objects (with a nullable `page`/`slide` pair inside) multiplied the
+> constrained-decoding grammar past the provider's ceiling. **No unit test could have caught
+> this** — the schema is valid Zod, parses correctly and round-trips fixtures perfectly; the
+> constraint lives in the provider's grammar compiler and is only observable by making a real
+> call. The nesting was also never earned: `extractedPageSchema` already unifies the
+> vocabulary as "1-based page (PDF) or slide (PPTX) number", so `{page, slide}` was modelling
+> a distinction the extractor had already collapsed. The `{page: n}` shape survives in
+> `topic_sources.locators`, which is a column written by code rather than a grammar a model
+> has to satisfy. `packages/core`'s `BlockSourceLike` reads both forms, per the boundary rule.
+>
+> ⚠ Also shipped: **note blocks carry an `id`**, which PLAN does not mention. The block-diff
+> loss-detector needs a stable identity per block to tell "edited" from "deleted and
+> replaced", and a note's heading and body are both expected to change during an
+> "integrate, don't append" merge — so there is no content-derived key that survives a
+> legitimate edit. The merge prompt and the schema description are both emphatic that
+> existing ids must be carried through unchanged; a merger that re-mints them makes a
+> lossless merge look like a total rewrite.
+
 **TopicPage shape** (Zod schema in `packages/ai/src/schemas.ts`, stored as the `topics.page`
 JSONB): `summary` (3–5 sentences), `notes` (ordered markdown blocks, each block carries
 `sources: [{documentId, locator}]`), `keyTerms[{term, definition, sources}]`,
@@ -1494,6 +1518,30 @@ the complete new `TopicPage`, a `changeSummary`, and per-block `sources`. Prompt
 
 #### Step B2 — Verify the merge (deterministic loss-detector + cross-family Gemini critic)
 
+> ⚠ **CORRECTED 2026-07-19 (Wave 4 Agent 4) — "without the `changeSummary` explicitly
+> flagging it as superseded" is not machine-checkable, so the merge schema carries a
+> structured `removals[{blockKey, reason}]` instead.** Searching the change summary's prose
+> for a block's heading is a string match dressed up as a determinism guarantee: it fails on
+> paraphrase ("consolidated the pricing sections"), fires spuriously on any summary that
+> mentions a block it *kept*, and gives the merger an incentive to name-drop every block it
+> touched. Declaring the removal in a field makes the claim exact, makes "which block, and
+> why" legible in the revision history, and costs the model one array it was already
+> reasoning about. The rule PLAN states is unchanged — an undeclared disappearance is a red
+> flag — only the evidence it is checked against is.
+>
+> ⚠ Also: only **red** findings trigger the automatic re-merge. Amber ones (a removal
+> declared for a block that was never there; a citation that cannot be adjudicated because
+> the extraction dropped pages undeclared) are recorded and surfaced but do not spend a
+> second Sonnet call, because an amber finding is by construction something a re-merge has
+> no way to fix.
+>
+> ⚠ **`skipped[]` is unaudited, so a phantom-locator finding degrades to amber when the
+> extraction lost pages without declaring them.** A merger citing page 14 of a document whose
+> page 14 silently vanished from the extraction is not hallucinating — the evidence is
+> missing, which is a different failure and must not be reported as fabrication.
+> `segmentExtraction` computes the undeclared-loss set (source units in neither `pages` nor
+> `skipped`) and the loss-detector reads it.
+
 Every merge output passes a two-part check **before** it is persisted — this is what lets
 topic pages be trusted without a per-merge approval click:
 
@@ -1849,7 +1897,41 @@ chat with citations, and context retrieval for the exam-review generator.
 > means **extraction cost scales with how much we ask the model to write, not with document
 > size** — the opposite of the assumption here, and the thing to watch if the schema grows.
 >
-> Not yet measured, and therefore not corrected: merge, critics, glossary and embeddings.
+> ⚠ **CORRECTED 2026-07-19 (Wave 4 Agent 4) — merge, the critics and embeddings are now
+> measured, and the merge column is at or below its LOW end.** Two synthetic 5–6 page
+> sessions merged into one course through the live Steps A–C, priced by `pricing.ts` into
+> `ai_generations`:
+>
+> | Stage | Job · Model | Calls | Cost (2 docs) | Per document | §10 estimate |
+> | --- | --- | --- | --- | --- | --- |
+> | Merge | `topic-merge` · claude-sonnet-5 | 4 (2 topics × 2 docs) | **$0.2405** | **~$0.120** | $0.15–0.35 |
+> | Merge critic | `merge-critic` · gemini-3.1-flash-lite | 4 | **$0.0032** | **~$0.0016** | ~$0.005–0.01 (with checklist) |
+> | Routing | `topic-routing` · gemini-3.1-flash-lite | 2 | **$0.0010** | **~$0.0005** | not separately budgeted |
+> | Embeddings | voyage-3.5-lite | 10 | **$0.000028** | **~$0.000014** | <$0.01 |
+>
+> **Route + merge + verify ≈ $0.122 per document** on this corpus. Two consequences:
+>
+> 1. The merge column scales with **the number of affected topics**, not with document size —
+>    it is one Sonnet call per topic, and each call ships the whole current TopicPage plus
+>    the routed segments. A document touching 6 topics costs roughly 3× one touching 2. The
+>    $0.15–0.35 range is right for ~4 topics and should be read per-topic (~$0.06) rather
+>    than per-document.
+> 2. **The critics are essentially free** — $0.0016 against a $0.120 merge is 1.3%, and the
+>    critic call returned in 653 ms against the merge's 29.7 s. The cross-family verify is
+>    the cheapest part of the pipeline by two orders of magnitude, which settles any future
+>    argument about whether it earns its place.
+>
+> Latency, not cost, is the merge's real constraint: **~30 s per topic**, serial, so a
+> document touching 6 topics spends ~3 minutes in the merge step alone.
+>
+> ⚠ **Voyage rate-limits harder than "effectively free" suggests.** Three embedding requests
+> in ~14 seconds — an ordinary two-document run — returned **HTTP 429** and failed the
+> routing step outright. The 200M free allowance says nothing about requests per minute. The
+> client now retries 429/5xx with bounded exponential backoff (4 attempts, 1s/2s/4s) *inside*
+> the call, because an Inngest step retry would re-run the whole `route-and-merge` step and
+> re-bill every Sonnet merge it had already completed.
+>
+> Not yet measured, and therefore not corrected: glossary.
 > The `≈ $0.46–0.76` totals stand until those land, with extraction ~$0.13 rather than
 > ~$0.30 inside them.
 
