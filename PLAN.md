@@ -262,6 +262,37 @@ tint of the same hue with dark foreground text. `--destructive` maps to the `ove
 red; destructive **buttons** deepen to `oklch(0.55 0.20 25)` (dark) / `oklch(0.50 0.20 27)`
 (light) so white text clears AA.
 
+⚠ **CORRECTED 2026-07-19 (Wave 2) — the light column above is a PAINTING column; small text
+needs a darker sibling.** The values as specified clear AA *composited* and still fail *as
+rendered*. A weight badge is 11px 500-weight glyphs on a 10% wash of their own hue, and
+anti-aliasing never resolves the glyph body to the specified colour. Measured from rendered
+browser pixels at **DPR 1** (both themes, 1280px and 375px, uniform probe label, 20th
+percentile of cumulative distance mass):
+
+| tier | composite | sampled | verdict |
+| --- | --- | --- | --- |
+| `overdue` | 4.89 | 4.74 | ok |
+| `high` | 4.68 | **4.42** | **FAILS** — the loudest rung, and what §7 ranks by |
+| `medium` | 4.80 | 4.55 | thin |
+| `done` | 4.76 | **4.50** | on the floor, zero headroom |
+
+So the ramp now splits paint from ink, the same rule as `--accent` / `--accent-text`:
+`--urgency-high-text` `oklch(0.48 0.14 65)` and `--urgency-done-text` `oklch(0.45 0.13 155)`
+join the existing `--urgency-medium-text` `oklch(0.48 0.09 78)`. **Hue and chroma are
+untouched on all three — only lightness moves**, so 🎨 no urgency tier drifts toward green
+(green stays `done` ONLY) and `done` stays green without drifting toward amber. Every badge
+now measures **5.35–5.50 sampled / 5.74–5.83 composite** in light, and the dark column aliases
+each `-text` token straight back to its paint (6.23–7.31 sampled), because darkening a colour
+that must stay light on a dark surface would wreck it.
+
+The painting tokens keep the 2px row rule, the `--warning` / `--success` aliases, and the
+panel icons (a graphical object's floor is 3:1, which they clear). Pinned by
+`e2e/urgency-ramp-contrast.spec.ts`, which asserts **both** numbers for every tier across both
+themes and both widths and fails if a `-text` token is ever aliased back to its paint in light
+mode. ⚠ The failure is **DPR-dependent** — at 2x/3x the glyph core resolves to the full
+composite value and everything passes, which is exactly why token math and retina spot-checks
+missed it. Do not "fix" a future failure by raising `deviceScaleFactor`.
+
 **Course palette — curated 8-hue categorical.** L/C are tuned *per hue* (L 0.68–0.80 dark,
 0.55–0.65 light) rather than held literally constant, because equal L across hues does not
 read as equal weight — yellow-greens need lifting, blues need less. The target is equal
@@ -2466,11 +2497,56 @@ two gates deliberately reserved by the Human-reversible-AI principle.
 >
 > - A rejected course **stays in the panel**, reading *"You said this course has no exam"*,
 >   with Undo beside it. A row that disappears is a decision that cannot be found again.
-> - **Exactly one `is_exam_candidate` per course** is enforced in `planExamDecision`, a pure
+> - **Exactly one `is_exam_candidate` per course** is *planned* in `planExamDecision`, a pure
 >   function unit-tested over its own output — including from a corrupted two-candidate start.
 >   The UI is not trusted to maintain the invariant and neither is the action.
+>
+>   ⚠ **CORRECTED 2026-07-19 (Wave 2) — planning it correctly never made it TRUE.** The line
+>   above said "enforced", and it was not. The action applies the plan as N separate
+>   non-transactional UPDATEs, so two concurrent `set`s each plan correctly against a
+>   one-candidate world and both apply, leaving two rows at `detection_source = 'manual'`;
+>   `items.find(isUserChosen)` then returns whichever comes back first. And no concurrency is
+>   needed for the second hole: **sync runs under `createAdminSupabaseClient`**, which reaches
+>   neither RLS nor the Server Action, so a detector answer that moves after a manual pick
+>   flags a second row on its own.
+>
+>   The guarantee now lives in the database — migration `20260718235227`, a partial unique
+>   index `calendar_items_one_exam_per_course on (course_id, user_id) where is_exam_candidate`
+>   — for the same reason as the tenant-scoped FKs (RLS strategy rule 7): the database is the
+>   only layer every writer shares. `course_id is null` rows are deliberately unconstrained
+>   (NULLs are distinct in a unique index); "one exam per course" says nothing about a row with
+>   no course, and `nulls not distinct` would collapse every unmatched item into one shared
+>   slot. Verified against live data before applying: 6 candidates, one per course, 0 unmatched.
+>
+>   Two consequences the index forced, both now covered by tests:
+>   - **Clears must be applied before sets.** A partial unique key can only be an index, and
+>     indexes cannot be `DEFERRABLE`, so a legitimate "move the exam" that flags the new
+>     session first is rejected. `orderExamPatches` sorts the plan; `planExamDecision` stays a
+>     statement about rows, not about write order.
+>   - **A unique violation is a sentence, not a 500** — *"Another change set this course's exam
+>     date first. Reload to see the current one, then try again."*
 > - Every decision locks `is_exam_candidate` via `user_locked_fields`; **`reset` removes the
 >   lock**, since leaving it would pin the row to its reset value forever.
+>
+>   ⚠ **CORRECTED 2026-07-19 (Wave 2) — the lock is written to a ROW, but the decision is about
+>   the COURSE.** `markExamCandidates` checked the lock per item, so once the user picked a
+>   different session than the detector, sync happily flagged the detector's pick as well — a
+>   second candidate for the same course. Two consequences, and the first was observed on the
+>   live feed rather than theorised: with the new unique index that write is rejected, and
+>   because `syncFeed` turns any throw into `{ status: "error" }`, **one course's disagreement
+>   took the entire feed's sync down** (`last_sync_error` read *"duplicate key value violates
+>   unique constraint calendar_items_one_exam_per_course"* while the exam panel looked fine).
+>   The second: after a rejection it would re-propose a *different* session of a course the
+>   user had just said has no exam.
+>
+>   Sync now skips `is_exam_candidate` for **every item of any course carrying the lock**,
+>   which is what the buttons already promise ("Sync won't change it" / "Sync won't flag it
+>   again") and what `reset` undoes by dropping the lock. It also orders its own writes
+>   clears-before-sets, for the same non-deferrable-index reason as the user path — that case
+>   needs no user and no concurrency at all, only a detector answer that moves. Both are
+>   regression-tested in `sync.test.ts` against a memory store that enforces the index, and
+>   both assert the sync **outcome**, not just the rows: a version that trips the index leaves
+>   the rows looking correct because the write simply never landed.
 > - Two existing columns carry the decision, so this needed **no migration and no new
 >   `detection_source` value**: `'manual'` + flag set = *the user chose this*; the lock + flag
 >   clear = *the user said no*. No oracle writes either, so both are unambiguously human.
