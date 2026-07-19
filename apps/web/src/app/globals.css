@@ -847,6 +847,59 @@
     background-color: var(--accent);
     flex-shrink: 0;
   }
+
+  /*
+   * sync-pulse — the second of the design system's two signature motions
+   * (PLAN.md "Motion": *"a faint azure dot/ring pulse on data refresh (Realtime
+   * updates, 'Synced just now'), ~800ms"*). Specified 2026-07-17, unimplemented
+   * until now; the document pipeline's step checklist is its first real home,
+   * marking the step that is currently running.
+   *
+   * A ring rather than the dot itself. Animating the disc's own opacity makes
+   * the marker read as "flickering / unreliable"; expanding a separate ring out
+   * of a solid dot reads as "emitting", which is the intended meaning — this
+   * step is live and sending. The dot stays at full opacity throughout, so the
+   * checklist never loses its anchor.
+   *
+   * `will-change` is deliberately absent: a handful of 5px rings do not need
+   * their own compositor layers, and promoting them costs more than it saves.
+   */
+  .dot-motif-pulse {
+    position: relative;
+  }
+
+  .dot-motif-pulse::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 9999px;
+    box-shadow: 0 0 0 0 var(--accent);
+    animation: sync-pulse 800ms var(--ease-out-quart) infinite;
+  }
+
+  @keyframes sync-pulse {
+    from {
+      box-shadow: 0 0 0 0 color-mix(in oklab, var(--accent) 55%, transparent);
+    }
+    to {
+      box-shadow: 0 0 0 0.5rem color-mix(in oklab, var(--accent) 0%, transparent);
+    }
+  }
+
+  /*
+   * The DESIGNED reduced-motion alternative, not merely the blanket duration
+   * collapse in `@layer base`. That safety net would leave a ring frozen
+   * mid-expansion at 0.01ms — a permanent halo that reads as a rendering bug.
+   * Here the ring is removed outright and the dot alone carries the state, which
+   * is exactly what PLAN's "pulse -> static state text" prescribes: the step
+   * checklist still names the running step in words, so nothing is lost by
+   * taking the motion away.
+   */
+  @media (prefers-reduced-motion: reduce) {
+    .dot-motif-pulse::after {
+      content: none;
+    }
+  }
 }
 
 /*
