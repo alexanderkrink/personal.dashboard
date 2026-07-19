@@ -1,4 +1,9 @@
-import { MAX_DOCUMENT_BYTES, validateDocument, validateDocumentSize } from "@study/core";
+import {
+  MAX_DOCUMENT_BYTES,
+  outcomeMessage,
+  validateDocument,
+  validateDocumentSize,
+} from "@study/core";
 import { NonRetriableError } from "inngest";
 import { inngest } from "@/inngest/client";
 import {
@@ -12,25 +17,31 @@ import {
 import { documentUploaded, documentUploadedData } from "@/inngest/events";
 import { runExtract } from "@/inngest/extract";
 import { deriveOwner } from "@/inngest/owner";
+import { runRouteAndMerge } from "@/inngest/route-and-merge";
 
 /**
  * The document pipeline (PLAN "Document & Notes Pipeline" §3).
  *
  * ## What this is, right now
  *
- * `validate → finalize`, and both steps do real work: `validate` downloads the
- * bytes Storage actually holds and runs the magic-byte sniff, the encrypted-PDF
- * check, the zip-bomb guard and the 50 MB cap against them; `finalize` marks the
- * document `ready`. A real deck uploaded through the browser walks
- * `queued → validating → ready` through a genuine Inngest run.
+ * `validate → extract → route-and-merge → finalize`, and every step does real
+ * work: `validate` downloads the bytes Storage actually holds and runs the
+ * magic-byte sniff, the encrypted-PDF check, the zip-bomb guard and the 50 MB
+ * cap against them; `extract` turns the file into structured study material
+ * through one metered multimodal call; `route-and-merge` is PLAN §5 Steps A–C —
+ * segment, embed, retrieve, route, duplicate-guard, merge, verify, persist; and
+ * `finalize` computes §7's `ready` / `partial` / `failed`. A real deck uploaded
+ * through the browser walks `queued → validating → extracting → merging →
+ * ready` through a genuine Inngest run and comes out the other side as topic
+ * pages.
  *
- * That is deliberately a **complete two-step pipeline and not a placeholder**.
- * The steps that follow — extract, route, merge, chunk/embed, coverage, deep
- * review — are inserted between `validate` and `finalize` by later agents, into
- * a function that already runs end to end. The alternative, a scaffold that each
- * agent partially fills, is how the previous wave ended up with four working
- * components and no working pipeline: every piece passed its own gate and the
- * connections between them were nobody's deliverable.
+ * Each step was **inserted into a function that already ran end to end**, rather
+ * than filled into a scaffold. The alternative is how the previous wave ended up
+ * with four working components and no working pipeline: every piece passed its
+ * own gate and the connections between them were nobody's deliverable.
+ *
+ * Still to be inserted, at the seam below `route-and-merge`: chunk/embed,
+ * coverage, glossary, and the opt-in deep-review audit.
  *
  * ## 🔴 Two arguments, not three
  *
@@ -238,47 +249,97 @@ export const processDocument = inngest.createFunction(
       }),
     );
 
+    // ── route & merge ────────────────────────────────────────────────────────
+    //
+    // PLAN §5 Steps A–C, the heart of the product invariant: a course's topic
+    // set is a stable, growing index that documents *contribute to*. Segment,
+    // embed, retrieve, one batched routing call, the deterministic duplicate
+    // guard, one Sonnet merge per affected topic, the loss-detector plus a
+    // cross-family Gemini critic, and the per-topic persist.
+    //
+    // One step rather than one per topic — see the note on `runRouteAndMerge`.
+    // The per-topic isolation PLAN §7 asks for comes from the `try` inside it,
+    // which is what makes `partial` reachable at all.
+    const merge = await step.run("route-and-merge", () =>
+      runRouteAndMerge({
+        admin: adminClient(),
+        userId,
+        documentId,
+        courseId: document.course_id,
+        courseTitle: document.courses?.title ?? "this course",
+        filename: document.filename,
+        sessionLabel: extraction.sessionLabel,
+      }),
+    );
+
     // ── The seam ─────────────────────────────────────────────────────────────
     //
-    // segment-and-route → merge:<topic> → chunk-and-embed → coverage → glossary
-    // → (syllabus-components | case-brief) → (deep-review) all go HERE, between
-    // an extract that works and a finalize that works. Each is a `step.run`
-    // inserted into this list; none of them needs to change the steps around it.
-    // `extraction` above carries the route, the fidelity and the page counts;
-    // the extraction itself is on the `documents` row, because it is far too
-    // large to thread through a step's return value.
+    // chunk-and-embed → coverage → glossary → (syllabus-components | case-brief)
+    // → (deep-review) all go HERE, between a merge that works and a finalize
+    // that works. Each is a `step.run` inserted into this list; none of them
+    // needs to change the steps around it. `merge` above carries the outcome and
+    // the failed-topic set; the topic pages themselves are on the `topics` rows,
+    // because they are far too large to thread through a step's return value.
 
     // ── finalize ─────────────────────────────────────────────────────────────
     await step.run("finalize", async () => {
       const admin = adminClient();
 
-      // `ready` unconditionally, and that is currently *correct* rather than
-      // simplified: PLAN §7 computes `partial` from failed per-topic merges and
-      // from embedding failures, and neither of those steps exists yet, so there
-      // is no failure this function can observe that would not already have
-      // failed the run. When the merge steps land, this is where their results
-      // are folded in — `partial` plus `failed_topics`.
+      // §7's three-way computation, and the first thing in this pipeline that
+      // can produce anything other than `ready`. `partial` is a real outcome
+      // now: some topics merged, some did not, and `failed_topics` is the retry
+      // set that `document/retry-merges` will re-run.
+      //
+      // `failure_reason` gets a sentence from `outcomeMessage`, never an error
+      // string — §8's rule, enforced by keeping the per-topic error text in
+      // `failed_topics` (for the retry job) and in the processing feed (for a
+      // human) and out of the column the user reads.
+      const { error } = await admin
+        .from("documents")
+        .update({ failed_topics: merge.outcome.failedTopics })
+        .eq("id", documentId)
+        .eq("user_id", userId);
+      if (error) {
+        throw new Error(`Could not record failed topics for ${documentId}: ${error.message}`);
+      }
+
       await setDocumentStatus(admin, documentId, userId, {
-        status: "ready",
-        failureReason: null,
+        status: merge.outcome.status,
+        failureReason: outcomeMessage(merge.outcome),
         processedAt: new Date().toISOString(),
       });
+
+      const reviewNote =
+        merge.outcome.needsReviewCount === 0
+          ? ""
+          : ` ${merge.outcome.needsReviewCount} flagged for review.`;
 
       await logProcessingEvent(admin, {
         userId,
         documentId,
         courseId: document.course_id,
         step: "finalize",
-        detail: "Done.",
+        level: merge.outcome.status === "ready" ? "info" : "warn",
+        detail:
+          merge.outcome.status === "failed"
+            ? "Finished, but none of the topic pages could be updated."
+            : `Done. ${merge.outcome.mergedCount} topic${merge.outcome.mergedCount === 1 ? "" : "s"} updated${
+                merge.topicsCreated === 0 ? "" : ` (${merge.topicsCreated} new)`
+              }.${reviewNote}${
+                merge.outcome.failedTopics.length === 0
+                  ? ""
+                  : ` ${merge.outcome.failedTopics.length} could not be updated — retry to finish them.`
+              }${merge.costUsd === null ? "" : ` Cost $${merge.costUsd.toFixed(4)}.`}`,
       });
     });
 
     return {
       documentId,
       courseId: document.course_id,
-      status: "ready" as const,
+      status: merge.outcome.status,
       format: validation.format,
       extraction,
+      merge,
     };
   },
 );
