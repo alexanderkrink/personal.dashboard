@@ -31,6 +31,7 @@
 import { serve } from "inngest/next";
 import { inngest } from "@/inngest/client";
 import { healthCheck } from "@/inngest/functions/health-check";
+import { processDocument } from "@/inngest/functions/process-document";
 
 export const runtime = "nodejs";
 
@@ -39,5 +40,5 @@ export const dynamic = "force-dynamic";
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [healthCheck],
+  functions: [healthCheck, processDocument],
 });

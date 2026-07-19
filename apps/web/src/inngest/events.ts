@@ -75,3 +75,44 @@ export const healthCheckRequestedData = z.object({
 export const healthCheckRequested = eventType("system/health-check.requested", {
   schema: healthCheckRequestedData,
 });
+
+/**
+ * A `documents` row has been inserted and its bytes are in Storage. Run the
+ * pipeline (PLAN "Document & Notes Pipeline" §3).
+ *
+ * ## Why this payload is `{ documentId, courseId }` and not `{ …, userId }`
+ *
+ * `documentId` is the subject, and per the ⚠⚠ rule above it is the only thing
+ * that establishes a tenant: `process-document` calls `deriveOwner()` on it and
+ * writes rows with the database's answer. A `userId` here would buy nothing —
+ * the producer (the upload Server Action) knows the owner only *because* it just
+ * wrote that row, so a cross-check would be comparing the database against
+ * itself. The rule says carry a `userId` "only when it buys a genuine
+ * cross-check", and this is the case where it does not, so it is absent.
+ *
+ * ## Why `courseId` is here anyway, and what that costs
+ *
+ * `courseId` is NOT for the handler. It is for Inngest: the function declares
+ * `concurrency: [{ key: "event.data.courseId", limit: 1 }]`, and that expression
+ * is evaluated by the platform against the raw event *before* any of our code
+ * runs. A key that lived only in the database could not be used to serialize
+ * runs, and per-course serialization is load-bearing — it is what lets the merge
+ * step (Agent 4) use a plain incrementing revision counter instead of optimistic
+ * locking.
+ *
+ * The cost is that `courseId` is an unverified claim at the moment it is used.
+ * A forged one would place the run in the wrong concurrency lane, which is a
+ * liveness problem rather than a data one. The handler closes the data half by
+ * checking `courseId` against the document row and refusing when they disagree —
+ * see `DocumentCourseMismatchError`. The lane assignment itself cannot be
+ * verified before the fact, and that is an accepted, bounded limitation of using
+ * a payload field as a concurrency key at all.
+ */
+export const documentUploadedData = z.object({
+  documentId: z.uuid(),
+  courseId: z.uuid(),
+});
+
+export const documentUploaded = eventType("document/uploaded", {
+  schema: documentUploadedData,
+});
