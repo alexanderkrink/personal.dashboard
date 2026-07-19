@@ -2395,6 +2395,34 @@ below.) Two observations from the real feed drive the **fallback** path:
 > against a fall-2026 course would have fabricated a syllabus→course link the evidence
 > contradicts. The transcriptions are recorded below instead, ready to insert if and when the
 > matching courses exist (the 2025/26 term has no `semesters` row — see the 2025/26 gap).
+
+> **✅ VALIDATED 2026-07-19 (Wave 3, item 11) — the syllabus oracle now works, and the
+> circularity is unchanged.** `syllabus-components` (`claude-sonnet-5`, prompt v1) was run
+> against all **3 of 3** real syllabi through the real UI. Measured against the verbatim
+> transcriptions below: **17 of 17 components correct** on title, weight and kind, **4 of 4
+> session numbers correct** (ABM final `#30` / midterm `#12`; LOES final `30` / midterm `19`),
+> and **3 of 3 total session counts correct** — resolved by *both* routes the chain
+> describes, header field (`NUMBER OF SESSIONS: 30`, ABM and Marketing) and in-body heading
+> (`SESSION 30 (LIVE IN-PERSON) Final Exam`, LOES, which has no header field. The step-2
+> parser is therefore no longer theoretical).
+>
+> Three things worth recording because they were predicted here and held:
+> - **The re-take trap is real and was avoided.** All three documents state a second scheme.
+>   The model excluded each one and said so — including ABM's third-attempt
+>   `Deliverables 20 / Midterm 35 / Final 45`, which is exactly the transcription warned
+>   about below. It also recovered both pass gates verbatim (ABM ≥4.0, LOES ≥3.5).
+> - **The `SESSIONS 28/29` range did not fit and was not forced to.** It landed
+>   `session_number = null` plus a stated range, per the single-int column's limit.
+> - **Reading the whole body mattered.** LOES yields nothing from its header.
+>
+> ⚠ **This does NOT de-circularize the live 7 fall courses, and the M1 DoD clause stays
+> MET-CIRCULARLY.** The validation ran against courses created *for the three 2025-26
+> documents* under a separate fixture account, precisely so it would not fabricate the
+> syllabus→course link this block disproves. All 7 fall-2026 courses still read
+> `total_sessions_source = 'feed_derived'` and still resolve only through step 3. What
+> changed is that the mechanism is now built and proven against real documents, and
+> `total_sessions_source = 'syllabus'` is written **only on human confirm** — so the day a
+> fall-2026 syllabus exists, one paste and one confirm breaks the tie for real.
 >
 > **Transcribed evaluation tables** (verbatim weights; `session_number` only where the
 > syllabus states it inline; sanitized — no instructor names or contact details):
@@ -5368,7 +5396,7 @@ uploads every lecture's materials (topic pages appear minutes later).
 | 8 | `ai_generations` log + cost rollup + kill-switch env vars — ✅ **shipped 2026-07-19** (live table + `ai_daily_cost` view, per-provider costing verified against the live DB, kill switch proven to make zero provider calls). ⚠ The DoD's "every AI call" clause is **not yet fully met**: `streamText` still has no metered wrapper (Wave 4, with chat/RAG) and a transport-killed attempt is still unlogged (Inngest step wrapper) | S | AI strategy §5–6 |
 | 9 | Participation & Attendance Ledger (PWA manifest, 2-tap logging) | M | Additional #4 |
 | 10 | Case-brief slice (pipeline step for `case`-tagged docs) — 🟡 **descoped to opportunistic 2026-07-18**: real case studies are much rarer in this program than the plan assumed, so this must not gate M1. Build it if a case lands; otherwise slide to M2 | S–M | Additional #2 |
-| 11 | *Stretch:* NL quick-add (CAL-3), syllabus → `assessments` extraction | S+S | Calendar §6, Additional #3 |
+| 11 | *Stretch:* NL quick-add (CAL-3), syllabus → `assessments` extraction — ✅ **syllabus half SHIPPED 2026-07-19 (Wave 3)**: `syllabus-components` v1 on `claude-sonnet-5`, validated 17/17 components against all 3 real syllabi, behind the §2b confirm gate. Takes document **text**; upload/conversion stays with item 5. NL quick-add still open. | S+S | Calendar §6, Additional #3 |
 | 12 | ✅ **DONE** Auth v2: access-code gate (landing page + `proxy.ts` enforcement) → email+password sign-up/login (email verify + password reset via the Resend hook) → analyst-terminal `/login` redesign. Shipped Wave 1 (`eed1b12`, `8cb4c68`, `53c560c`). Single `ACCESS_CODE` env var, **not** per-invite (deferred to M4); constant-time Web Crypto comparison (Edge has no `node:crypto`); cookie derived from the code so rotation revokes. ✅ **All clauses met** — sign-up confirmed working end to end 2026-07-18; the earlier 500s were an `@example.com` artifact (Resend refuses that reserved domain) and a retest with a deliverable address passed. Lesson: never probe the Resend path with `example.com`; use a real `+alias` inbox or `generate_link` | M | Vision § Identity & design; Roadmap M0.5 |
 | 13 | ✅ **DONE** **Design-system migration**, split into 13a (tokens) + 13b (shell). 13a (`6603b3e`, `06ed42b`): `globals.css` ported to the azure tokens in both themes, Newsreader + JetBrains Mono, Geist Mono retired, Phosphor migrated (lucide gone, lockfile included), email button `#1c74d8`, `courses.color` → palette key. 13b (`2bfde9b`, `f404812`): `(app)` route group, collapsible sidebar + mobile tab bar, ⌘K palette, 12 shadcn components, `loading.tsx`/`error.tsx`, jsdom + RTL test infrastructure, motion + type-scale tokens. ⚠ `.reading` wrapper exists but has **no consumer** until topic pages (item 6) | M | Vision § Identity & design |
 
