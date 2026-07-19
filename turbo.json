@@ -12,6 +12,8 @@
         "SUPABASE_*",
         "ACCESS_CODE",
         "ANTHROPIC_API_KEY",
+        "GOOGLE_GENERATIVE_AI_API_KEY",
+        "VOYAGE_API_KEY",
         "CRON_SECRET",
         "INNGEST_SIGNING_KEY",
         "INNGEST_EVENT_KEY",

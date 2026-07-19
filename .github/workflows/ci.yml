@@ -28,6 +28,14 @@ env:
   # authentication. INNGEST_EVENT_KEY is optional in env.ts and stays unset, so
   # CI also proves the app builds without it.
   INNGEST_SIGNING_KEY: signkey-test-ci_placeholder_inngest_signing_key_value
+  # AI provider keys (PLAN.md §AI Strategy §1b). Placeholders only — the real keys live in
+  # Vercel's env, and `packages/ai` never reads process.env anyway. Both are `.optional()`
+  # in env.ts, so these exist to exercise the `.min(1)` validator rather than to satisfy a
+  # requirement: a typo'd var name in env.ts fails here instead of in production.
+  # ANTHROPIC_API_KEY is deliberately left unset, so CI also proves the app builds with an
+  # AI key missing entirely.
+  GOOGLE_GENERATIVE_AI_API_KEY: ci_placeholder_google_generative_ai_key
+  VOYAGE_API_KEY: ci_placeholder_voyage_key
   # INNGEST_DEV is deliberately NOT set here. env.ts constrains it to
   # 0/1/true/false, and leaving it unset means CI builds in the same cloud mode
   # production runs in — so the signature-verification path is the one exercised.

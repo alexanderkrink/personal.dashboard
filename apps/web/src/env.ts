@@ -14,7 +14,19 @@ export const env = createEnv({
     // internet, so the build must fail instead. Rotating = changing this value;
     // every issued gate cookie is derived from it and dies with it.
     ACCESS_CODE: z.string().min(8),
+    // Provider keys for the two-provider AI core (PLAN.md §AI Strategy §1b). Both are
+    // injected into `packages/ai` via `createAIRuntime` — that package never reads
+    // process.env, which is what keeps it runnable in node, edge, a test or a script.
+    // Optional for the same reason ANTHROPIC_API_KEY always was: an unset key costs an AI
+    // feature, never safety, and local dev plus CI must still build without them.
+    // OpenAI is deliberately absent — a deferred third family, §1b.
     ANTHROPIC_API_KEY: z.string().min(1).optional(),
+    GOOGLE_GENERATIVE_AI_API_KEY: z.string().min(1).optional(),
+    // Voyage AI, for `pgvector` embeddings (§1 "Embeddings", Wave 4). Embeddings stay
+    // single-vendor regardless of the two-provider LLM split — mixing embedding models
+    // breaks vector comparability (§5), so this is a retrieval decision, not a generation
+    // one. Wired now so the four env locations stay in step; no embedding code uses it yet.
+    VOYAGE_API_KEY: z.string().min(1).optional(),
     // Shared secret for the daily calendar-sync cron (§3.1). REQUIRED, and a
     // long one: `/api/cron/calendar-sync` is the one route reachable without a
     // session or the access-code gate, so this string is the entire thing
@@ -69,6 +81,8 @@ export const env = createEnv({
     SUPABASE_SECRET_KEY: process.env.SUPABASE_SECRET_KEY,
     ACCESS_CODE: process.env.ACCESS_CODE,
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+    GOOGLE_GENERATIVE_AI_API_KEY: process.env.GOOGLE_GENERATIVE_AI_API_KEY,
+    VOYAGE_API_KEY: process.env.VOYAGE_API_KEY,
     CRON_SECRET: process.env.CRON_SECRET,
     INNGEST_SIGNING_KEY: process.env.INNGEST_SIGNING_KEY,
     INNGEST_EVENT_KEY: process.env.INNGEST_EVENT_KEY,
