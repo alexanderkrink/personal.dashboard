@@ -76,7 +76,26 @@ function toEmbeddingRow(
   };
 }
 
-export function createStudyEmbeddingClient({ userId }: { userId: string }): EmbeddingClient {
+export interface StudyEmbeddingClientOptions {
+  readonly userId: string;
+  /**
+   * Inputs per HTTP request. Defaults to the client's own 96.
+   *
+   * Exposed for the chunking step, which is the first caller whose input can exceed one
+   * request by a lot: routing embeds a handful of segments, chunking embeds a whole
+   * document. Being able to *choose* the request size is what lets that caller pace itself
+   * — see the rate-limit note in `inngest/chunk-and-embed.ts`.
+   */
+  readonly batchSize?: number;
+  /** First rate-limit backoff step, doubling per retry. Defaults to the client's 1 s. */
+  readonly retryDelayMs?: number;
+}
+
+export function createStudyEmbeddingClient({
+  userId,
+  batchSize,
+  retryDelayMs,
+}: StudyEmbeddingClientOptions): EmbeddingClient {
   const apiKey = env.VOYAGE_API_KEY;
   if (apiKey === undefined) throw new EmbeddingsNotConfiguredError();
 
@@ -87,6 +106,8 @@ export function createStudyEmbeddingClient({ userId }: { userId: string }): Embe
 
   return createEmbeddingClient({
     apiKey,
+    ...(batchSize === undefined ? {} : { batchSize }),
+    ...(retryDelayMs === undefined ? {} : { retryDelayMs }),
     // Tighten-only, same asymmetry as the runtime's: the environment can stop spend, and
     // nothing here can restart it.
     killSwitch: env.AI_KILL_SWITCH,

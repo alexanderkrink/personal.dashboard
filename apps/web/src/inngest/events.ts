@@ -116,3 +116,62 @@ export const documentUploadedData = z.object({
 export const documentUploaded = eventType("document/uploaded", {
   schema: documentUploadedData,
 });
+
+/**
+ * A document reached a terminal state (PLAN §8). Emitted once, at the end of every run.
+ *
+ * ## Why this exists even though `documents.status` already says so
+ *
+ * The status column is *state*; this is an *event*. Anything that needs to act at the
+ * moment a document finishes — as opposed to needing to know whether it has — cannot get
+ * that from a column without polling it. The status UI is a Realtime subscriber and does
+ * not need this; a future consumer that wants to act once (a digest, a notification, a
+ * downstream regeneration) does.
+ *
+ * ⚠ **The name is deliberately `document/ready` even though it also fires for `partial` and
+ * `failed`.** Agent 2 chose the name, nothing consumed it, and renaming it later would be a
+ * silent breakage for any consumer subscribed by string. The `status` field carries the
+ * actual outcome; the event name means "this document is done being processed".
+ *
+ * Carries `courseId` for the same reason `document/uploaded` does — so a consumer can
+ * concurrency-key on it — and no `userId`, per rule 8: a handler re-derives the owner from
+ * `documentId`.
+ */
+export const documentReadyData = z.object({
+  documentId: z.uuid(),
+  courseId: z.uuid(),
+  status: z.enum(["ready", "partial", "failed"]),
+});
+
+export const documentReady = eventType("document/ready", {
+  schema: documentReadyData,
+});
+
+/**
+ * A course's topic set changed (PLAN §9's staleness rule).
+ *
+ * > `exam_reviews.topic_snapshot` (topic id + revision pairs) is compared against current
+ * > revisions; the UI shows "Based on materials through Lecture 9 — 2 topics changed since"
+ * > with a *Regenerate* button.
+ *
+ * This is the trigger for **marking reviews stale**, and emphatically not for regenerating
+ * them. §9 is explicit that reviews are expensive (~$0.50–1.50 on Opus) and that students
+ * regenerate near exams anyway, so auto-regeneration on every upload would be the single
+ * most effective way to spend a monthly budget on documents nobody has opened yet. Exam
+ * review *generation* is Wave 5; this event and its staleness handler are the whole of §9
+ * that item 5e owns.
+ *
+ * `topicIds` is carried because it is genuinely useful to a consumer and cannot be
+ * reconstructed after the fact — "which topics changed" is not derivable from the course row
+ * a moment later. It is a hint about *what* changed, never about *who* owns it: the handler
+ * still re-derives the owner from `courseId`.
+ */
+export const courseTopicsChangedData = z.object({
+  courseId: z.uuid(),
+  documentId: z.uuid().nullable(),
+  topicIds: z.array(z.uuid()),
+});
+
+export const courseTopicsChanged = eventType("course/topics.changed", {
+  schema: courseTopicsChangedData,
+});

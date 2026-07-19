@@ -1,11 +1,16 @@
 import {
+  computeDocumentOutcome,
   MAX_DOCUMENT_BYTES,
   outcomeMessage,
   validateDocument,
   validateDocumentSize,
 } from "@study/core";
 import { NonRetriableError } from "inngest";
+import { budgetCheckpoint } from "@/inngest/budget";
+import { runChunkAndEmbed } from "@/inngest/chunk-and-embed";
 import { inngest } from "@/inngest/client";
+import { runCoverage } from "@/inngest/coverage";
+import { runDeepReview } from "@/inngest/deep-review";
 import {
   adminClient,
   DocumentCourseMismatchError,
@@ -18,6 +23,7 @@ import { documentUploaded, documentUploadedData } from "@/inngest/events";
 import { runExtract } from "@/inngest/extract";
 import { deriveOwner } from "@/inngest/owner";
 import { runRouteAndMerge } from "@/inngest/route-and-merge";
+import { createStudyAIRuntime } from "@/lib/ai/runtime";
 
 /**
  * The document pipeline (PLAN "Document & Notes Pipeline" §3).
@@ -91,6 +97,15 @@ export const processDocument = inngest.createFunction(
       throw new NonRetriableError(`Malformed document/uploaded event: ${parsed.error.message}`);
     }
     const { documentId, courseId: claimedCourseId } = parsed.data;
+
+    // ── The money guard's window (§7) ────────────────────────────────────────
+    //
+    // `ai_generations` has no `document_id`, so per-document spend is scoped by
+    // user, by the pipeline's job set, and by this timestamp. Its own step so it
+    // is **memoized**: a retried run must measure from the original start, not
+    // from the retry's, or each attempt would reset the fuse and a looping
+    // document would never trip it. See `inngest/budget.ts`.
+    const runStartedAt = await step.run("run-started-at", () => new Date().toISOString());
 
     // ── Ownership comes from the database ────────────────────────────────────
     //
@@ -272,31 +287,171 @@ export const processDocument = inngest.createFunction(
       }),
     );
 
-    // ── The seam ─────────────────────────────────────────────────────────────
+    // ── Money guard checkpoint (§7) ──────────────────────────────────────────
     //
-    // chunk-and-embed → coverage → glossary → (syllabus-components | case-brief)
-    // → (deep-review) all go HERE, between a merge that works and a finalize
-    // that works. Each is a `step.run` inserted into this list; none of them
-    // needs to change the steps around it. `merge` above carries the outcome and
-    // the failed-topic set; the topic pages themselves are on the `topics` rows,
-    // because they are far too large to thread through a step's return value.
+    // Placed here rather than at the end, because a fuse that blows after the
+    // spending is a receipt. Extraction and merge are the two expensive stages
+    // and both are now behind it; everything below is cents by comparison,
+    // except the opt-in audit, which gets its own checkpoint.
+    await step.run("budget-after-merge", () =>
+      budgetCheckpoint({
+        admin: adminClient(),
+        userId,
+        documentId,
+        courseId: document.course_id,
+        runStartedAt,
+        stage: "after merge",
+      }),
+    );
+
+    // ── Which topics this document actually contributed to ───────────────────
+    //
+    // Read from `topic_sources` rather than taken from `merge`'s return value:
+    // that table is the persisted truth about what landed, so after a *partial*
+    // run it names the topics that really were updated rather than the ones the
+    // step intended to update. Both the chunk step and `course/topics.changed`
+    // need this list, so it is derived once.
+    const touchedTopicIds = await step.run("load-touched-topics", async () => {
+      const { data, error } = await adminClient()
+        .from("topic_sources")
+        .select("topic_id")
+        .eq("user_id", userId)
+        .eq("document_id", documentId);
+
+      if (error) {
+        throw new Error(`Could not read topic sources for ${documentId}: ${error.message}`);
+      }
+      return [...new Set((data ?? []).map((row) => row.topic_id))];
+    });
+
+    // ── chunk & embed ────────────────────────────────────────────────────────
+    //
+    // §6. Structure-aware chunking in `@study/core`, Voyage embeddings through
+    // the metered client, and the topic pages themselves indexed alongside the
+    // raw document so search covers the notes.
+    //
+    // ⚠ Its own step AND its own `try`. PLAN §7 puts embedding failures on the
+    // `partial` path — "the topic pages are readable even when search indexing
+    // lags" — and a step that threw would instead retry three times and then
+    // fail a document whose pages are complete. The module never throws on an
+    // embedding failure; this catch is for everything else it touches.
+    const indexing = await step.run("chunk-and-embed", async () => {
+      try {
+        return await runChunkAndEmbed({
+          admin: adminClient(),
+          userId,
+          documentId,
+          courseId: document.course_id,
+          kind: document.kind,
+          filename: document.filename,
+          topicIds: touchedTopicIds,
+        });
+      } catch (error) {
+        console.error(`[process-document] indexing failed for ${documentId}:`, error);
+        await logProcessingEvent(adminClient(), {
+          userId,
+          documentId,
+          courseId: document.course_id,
+          step: "embed",
+          level: "warn",
+          detail:
+            "Your topic pages are complete, but this file couldn’t be indexed for search yet. Everything is readable; search will catch up on the next run.",
+        });
+        return null;
+      }
+    });
+
+    // ── coverage ─────────────────────────────────────────────────────────────
+    //
+    // The deterministic map plus, when the course has a syllabus, the §5
+    // checklist. Same isolation and the same reason: coverage is a *report* on
+    // the work, and failing a document because its report could not be written
+    // would be the tail wagging the dog.
+    const coverage = await step.run("coverage", async () => {
+      try {
+        return await runCoverage({
+          admin: adminClient(),
+          userId,
+          documentId,
+          courseId: document.course_id,
+          courseTitle: document.courses?.title ?? "this course",
+          runtime: createStudyAIRuntime({ userId }),
+        });
+      } catch (error) {
+        console.error(`[process-document] coverage failed for ${documentId}:`, error);
+        return null;
+      }
+    });
+
+    // ── Step D — the opt-in deep-review audit ────────────────────────────────
+    //
+    // Runs only when `documents.deep_review = 'requested'`; the module returns
+    // immediately otherwise, which is why this is an unconditional step rather
+    // than a branch — a conditional `step.run` changes the run's step list
+    // between attempts, and Inngest memoizes by step id.
+    //
+    // Its own budget checkpoint first: this is the one call in the pipeline that
+    // can cost more than everything above it combined (~$0.80–2.00 on Opus), so
+    // the ceiling is consulted immediately before it rather than after.
+    await step.run("budget-before-deep-review", () =>
+      budgetCheckpoint({
+        admin: adminClient(),
+        userId,
+        documentId,
+        courseId: document.course_id,
+        runStartedAt,
+        stage: "before deep review",
+      }),
+    );
+
+    const deepReview = await step.run("deep-review", async () => {
+      try {
+        return await runDeepReview({
+          admin: adminClient(),
+          userId,
+          documentId,
+          courseId: document.course_id,
+          courseTitle: document.courses?.title ?? "this course",
+          filename: document.filename,
+          sessionLabel: extraction.sessionLabel,
+          runtime: createStudyAIRuntime({ userId }),
+        });
+      } catch (error) {
+        // An optional second opinion must never be able to fail a document whose
+        // pages are already written. `runDeepReview` resets `deep_review` to
+        // `'requested'` on its own dead-letter path so a retry re-runs it.
+        console.error(`[process-document] deep review failed for ${documentId}:`, error);
+        return null;
+      }
+    });
 
     // ── finalize ─────────────────────────────────────────────────────────────
+    //
+    // The three-way outcome is recomputed here rather than reused from `merge`,
+    // because the steps above can degrade it: §7 puts embedding failures on the
+    // `partial` path, and that fact is only known now.
+    const outcome = computeDocumentOutcome({
+      topicOutcomes: merge.topicOutcomes,
+      degraded: indexing === null || indexing.degraded,
+    });
+
     await step.run("finalize", async () => {
       const admin = adminClient();
 
-      // §7's three-way computation, and the first thing in this pipeline that
-      // can produce anything other than `ready`. `partial` is a real outcome
-      // now: some topics merged, some did not, and `failed_topics` is the retry
-      // set that `document/retry-merges` will re-run.
+      // §7's three-way computation. `partial` is a real outcome: some topics
+      // merged, some did not — or everything merged but search indexing lagged.
       //
       // `failure_reason` gets a sentence from `outcomeMessage`, never an error
       // string — §8's rule, enforced by keeping the per-topic error text in
-      // `failed_topics` (for the retry job) and in the processing feed (for a
+      // `failed_topics` (for the retry path) and in the processing feed (for a
       // human) and out of the column the user reads.
       const { error } = await admin
         .from("documents")
-        .update({ failed_topics: merge.outcome.failedTopics })
+        // Spread into a mutable array: `DocumentOutcome.failedTopics` is `readonly`, and
+        // the generated `Json` type is not. This used to compile only because `outcome`
+        // arrived through a `step.run` return value, which Inngest's serialization type
+        // strips `readonly` from — recomputing it in the handler brings the modifier back.
+        .update({ failed_topics: outcome.failedTopics.map((topic) => ({ ...topic })) })
         .eq("id", documentId)
         .eq("user_id", userId);
       if (error) {
@@ -304,42 +459,89 @@ export const processDocument = inngest.createFunction(
       }
 
       await setDocumentStatus(admin, documentId, userId, {
-        status: merge.outcome.status,
-        failureReason: outcomeMessage(merge.outcome),
+        status: outcome.status,
+        failureReason: outcomeMessage(outcome),
         processedAt: new Date().toISOString(),
       });
 
       const reviewNote =
-        merge.outcome.needsReviewCount === 0
-          ? ""
-          : ` ${merge.outcome.needsReviewCount} flagged for review.`;
+        outcome.needsReviewCount === 0 ? "" : ` ${outcome.needsReviewCount} flagged for review.`;
 
       await logProcessingEvent(admin, {
         userId,
         documentId,
         courseId: document.course_id,
         step: "finalize",
-        level: merge.outcome.status === "ready" ? "info" : "warn",
+        level: outcome.status === "ready" ? "info" : "warn",
         detail:
-          merge.outcome.status === "failed"
+          outcome.status === "failed"
             ? "Finished, but none of the topic pages could be updated."
-            : `Done. ${merge.outcome.mergedCount} topic${merge.outcome.mergedCount === 1 ? "" : "s"} updated${
+            : `Done. ${outcome.mergedCount} topic${outcome.mergedCount === 1 ? "" : "s"} updated${
                 merge.topicsCreated === 0 ? "" : ` (${merge.topicsCreated} new)`
               }.${reviewNote}${
-                merge.outcome.failedTopics.length === 0
+                outcome.failedTopics.length === 0
                   ? ""
-                  : ` ${merge.outcome.failedTopics.length} could not be updated — retry to finish them.`
+                  : ` ${outcome.failedTopics.length} could not be updated — retry to finish them.`
+              }${coverage === null ? "" : ` ${coverage.summary}.`}${
+                deepReview === null || deepReview.changes === 0
+                  ? ""
+                  : ` Deep review changed ${deepReview.changes} thing${deepReview.changes === 1 ? "" : "s"}.`
               }${merge.costUsd === null ? "" : ` Cost $${merge.costUsd.toFixed(4)}.`}`,
       });
+    });
+
+    // ── The two terminal events ──────────────────────────────────────────────
+    //
+    // Agent 2 deliberately did not send these because nothing consumed them.
+    // Both have consumers now, so both are sent — and both are sent from their
+    // own `step.run`, which is what makes them **exactly-once per run** rather
+    // than once per attempt. `step.sendEvent` is not used because these are
+    // fire-and-forget notifications: a send that fails must not fail a document
+    // that has already finished successfully and written its status.
+    //
+    // Order matters slightly: `course/topics.changed` first, so that a review is
+    // already marked stale by the time anything reacting to `document/ready`
+    // goes looking at it.
+    if (touchedTopicIds.length > 0) {
+      await step.run("emit-topics-changed", async () => {
+        try {
+          await inngest.send({
+            name: "course/topics.changed",
+            data: {
+              courseId: document.course_id,
+              documentId,
+              topicIds: touchedTopicIds,
+            },
+          });
+        } catch (sendError) {
+          console.error(`[process-document] could not emit course/topics.changed:`, sendError);
+        }
+        return { sent: touchedTopicIds.length };
+      });
+    }
+
+    await step.run("emit-document-ready", async () => {
+      try {
+        await inngest.send({
+          name: "document/ready",
+          data: { documentId, courseId: document.course_id, status: outcome.status },
+        });
+      } catch (sendError) {
+        console.error(`[process-document] could not emit document/ready:`, sendError);
+      }
+      return { status: outcome.status };
     });
 
     return {
       documentId,
       courseId: document.course_id,
-      status: merge.outcome.status,
+      status: outcome.status,
       format: validation.format,
       extraction,
       merge,
+      indexing,
+      coverage: coverage === null ? null : coverage.summary,
+      deepReview,
     };
   },
 );

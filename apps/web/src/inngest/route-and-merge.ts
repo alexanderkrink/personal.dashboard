@@ -80,6 +80,15 @@ export interface RouteAndMergeInput {
 
 export interface RouteAndMergeSummary {
   readonly outcome: DocumentOutcome;
+  /**
+   * The per-topic results the outcome was computed from.
+   *
+   * Carried so `finalize` can **recompute** the outcome after the steps below this one have
+   * run: PLAN §7 puts an embedding failure on the `partial` path, and that is not known
+   * until chunk-and-embed has finished. Recomputing from the same inputs plus a `degraded`
+   * flag beats patching the status by hand, which is how `ready` and `partial` drift apart.
+   */
+  readonly topicOutcomes: readonly TopicMergeOutcome[];
   readonly segments: number;
   readonly topicsTouched: number;
   readonly topicsCreated: number;
@@ -980,6 +989,7 @@ export async function runRouteAndMerge(input: RouteAndMergeInput): Promise<Route
 
   return {
     outcome,
+    topicOutcomes: outcomes,
     segments: routing.segments.length,
     topicsTouched: targets.length,
     topicsCreated: created,

@@ -31,6 +31,7 @@
 import { serve } from "inngest/next";
 import { inngest } from "@/inngest/client";
 import { healthCheck } from "@/inngest/functions/health-check";
+import { markReviewsStale } from "@/inngest/functions/mark-reviews-stale";
 import { processDocument } from "@/inngest/functions/process-document";
 
 export const runtime = "nodejs";
@@ -40,5 +41,10 @@ export const dynamic = "force-dynamic";
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [healthCheck, processDocument],
+  // ⚠ A function not in this array is a function that does not run, however
+  // correctly it is written and however many events name it. `markReviewsStale`
+  // is the consumer of `course/topics.changed`; without it here the pipeline
+  // would emit that event into nothing, which is exactly the half-wired state
+  // the event was added to avoid.
+  functions: [healthCheck, processDocument, markReviewsStale],
 });
