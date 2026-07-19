@@ -498,6 +498,7 @@ async function markExamCandidates(
           title: assessment.title,
           kind: assessment.kind,
           sessionNumber: assessment.session_number,
+          confirmed: assessment.confirmed,
         })),
       semesters,
     });

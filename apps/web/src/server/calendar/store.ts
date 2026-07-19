@@ -82,6 +82,8 @@ export interface SyncContext {
     title: string;
     kind: string;
     session_number: number | null;
+    /** §2b: only a confirmed row may move an exam date. See `AssessmentOracleRow`. */
+    confirmed: boolean;
   }[];
   semesters: { starts_on: string; ends_on: string }[];
 }

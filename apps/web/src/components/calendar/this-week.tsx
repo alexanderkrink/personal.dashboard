@@ -94,7 +94,10 @@ export async function ThisWeek({
     // semester filtered by "overlaps this week" would drop exactly the terms
     // guard 2 needs to test a future exam against.
     showExams
-      ? supabase.from("assessments").select("id, course_id, title, kind, session_number")
+      ? supabase
+          .from("assessments")
+          // `confirmed` travels to the detector, which drops unconfirmed rows (§2b).
+          .select("id, course_id, title, kind, session_number, confirmed")
       : { data: null },
     showExams
       ? supabase.from("semesters").select("starts_on, ends_on").order("starts_on")

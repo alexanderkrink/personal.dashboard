@@ -112,6 +112,7 @@ describe("buildExamStatuses — provenance", () => {
           title: "Final Exam",
           kind: "exam",
           session_number: 29,
+          confirmed: true,
         },
       ],
       semesters: [],
@@ -121,6 +122,38 @@ describe("buildExamStatuses — provenance", () => {
       "assessment_session_number",
     );
     expect(status?.confidence).toBe("syllabus");
+  });
+
+  it("does NOT trust an unconfirmed syllabus proposal (§2b)", () => {
+    // A syllabus extraction that nobody has confirmed yet: rows born
+    // `confirmed = false`, and `courses.total_sessions` deliberately still null
+    // because the proposed count waits on the extraction row until confirmation.
+    //
+    // Without the confirmed filter this returned confidence "syllabus" and the
+    // label "A syllabus assessment names this session." — the strongest claim the
+    // UI can make, for a date no human had agreed to. Exam dates are a reserved
+    // human-confirm class, so it must fall back to the honest feed-derived answer.
+    const [status] = buildExamStatuses({
+      courses: [course({ total_sessions: null, total_sessions_source: null })],
+      items: FULL_TERM,
+      assessments: [
+        {
+          id: "a1",
+          course_id: COURSE_ID,
+          title: "Final Exam",
+          kind: "exam",
+          session_number: 29,
+          confirmed: false,
+        },
+      ],
+      semesters: [],
+    });
+
+    expect(status?.detection.outcome === "found" && status.detection.source).not.toBe(
+      "assessment_session_number",
+    );
+    expect(status?.confidence).not.toBe("syllabus");
+    expect(status?.provenanceLabel).not.toContain("A syllabus assessment");
   });
 });
 

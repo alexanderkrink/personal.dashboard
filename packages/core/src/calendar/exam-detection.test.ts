@@ -10,7 +10,9 @@
  * `courses.total_sessions` is seeded. So:
  *
  * - step 1 (`courses.total_sessions`) — **live**, the column is seeded for all 7;
- * - step 2 (`assessments.session_number`) — **currently dead**, no rows exist;
+ * - step 2 (`assessments.session_number`) — **no longer structurally dead**: M1 item 11
+ *   (syllabus extraction) writes rows here, though Alexander's account still has 0.
+ *   Only CONFIRMED rows count — see the §2b pair of tests below;
  * - step 3 (`max(sessionTo)`) — reached only where no oracle names a session.
  *
  * 🚨 But the seeded totals were derived **from the feed itself**, so on real data
@@ -117,9 +119,21 @@ describe("outcome: exam FOUND", () => {
       // ('exam','quiz','project','participation','paper','other'), so a final and
       // a midterm are both 'exam' and only `title` tells them apart.
       assessments: [
-        { id: "a-mid", title: "In class Midterm Exam", kind: "exam", sessionNumber: 19 },
-        { id: "a-final", title: "Final Exam", kind: "exam", sessionNumber: 30 },
-        { id: "a-part", title: "Participation", kind: "participation", sessionNumber: null },
+        {
+          id: "a-mid",
+          title: "In class Midterm Exam",
+          kind: "exam",
+          sessionNumber: 19,
+          confirmed: true,
+        },
+        { id: "a-final", title: "Final Exam", kind: "exam", sessionNumber: 30, confirmed: true },
+        {
+          id: "a-part",
+          title: "Participation",
+          kind: "participation",
+          sessionNumber: null,
+          confirmed: true,
+        },
       ],
       semesters: FALL_2026,
     });
@@ -132,14 +146,71 @@ describe("outcome: exam FOUND", () => {
     expect(detection.uid).toBe("SES-30");
   });
 
+  it("never lets an UNCONFIRMED assessment pick the exam date (§2b)", () => {
+    // The exact state a syllabus extraction lands in, before anyone confirms it:
+    // the proposed `courses.total_sessions` is deliberately withheld (so step 1
+    // is unavailable), and the proposed rows are born `confirmed = false`.
+    //
+    // Withholding the session count is what makes step 2 the FIRST oracle an
+    // unconfirmed extraction reaches — so the mitigation for the date class is
+    // precisely what exposes this route. An exam date is a reserved human-confirm
+    // class, so step 2 must decline and the feed fallback must answer instead.
+    const detection = detectExam({
+      events: completeCourse(),
+      totalSessions: null,
+      assessments: [
+        { id: "a-final", title: "Final Exam", kind: "exam", sessionNumber: 19, confirmed: false },
+      ],
+      semesters: FALL_2026,
+    });
+
+    expect(detection.outcome).toBe("found");
+    if (detection.outcome !== "found") return;
+    // NOT `assessment_session_number` — which `confidenceFor` would have reported
+    // as confidence "syllabus", the strongest label the UI has, for a number no
+    // human ever agreed to.
+    expect(detection.source).toBe("feed_max_session");
+    expect(detection.sessionNumber).toBe(30);
+  });
+
+  it("uses the same assessment once it IS confirmed", () => {
+    // The mirror of the test above: confirming is the only thing that changes,
+    // and it is what turns the proposal into an oracle.
+    const detection = detectExam({
+      events: completeCourse(),
+      totalSessions: null,
+      assessments: [
+        { id: "a-final", title: "Final Exam", kind: "exam", sessionNumber: 19, confirmed: true },
+      ],
+      semesters: FALL_2026,
+    });
+
+    expect(detection.outcome).toBe("found");
+    if (detection.outcome !== "found") return;
+    expect(detection.source).toBe("assessment_session_number");
+    expect(detection.sessionNumber).toBe(19);
+  });
+
   it("picks the last exam when no title names the final", () => {
     // LOES-style: several `kind='exam'` rows with session numbers, none titled
     // "Final". The final is the last exam, so the highest session wins.
     const detection = detectExam({
       events: completeCourse(),
       assessments: [
-        { id: "a-1", title: "Intermediate test 1", kind: "exam", sessionNumber: 10 },
-        { id: "a-2", title: "Intermediate test 2", kind: "exam", sessionNumber: 30 },
+        {
+          id: "a-1",
+          title: "Intermediate test 1",
+          kind: "exam",
+          sessionNumber: 10,
+          confirmed: true,
+        },
+        {
+          id: "a-2",
+          title: "Intermediate test 2",
+          kind: "exam",
+          sessionNumber: 30,
+          confirmed: true,
+        },
       ],
     });
     expect(detection.outcome).toBe("found");
@@ -152,8 +223,14 @@ describe("outcome: exam FOUND", () => {
     const detection = detectExam({
       events: completeCourse(),
       assessments: [
-        { id: "a-quiz", title: "Final MC Quiz", kind: "quiz", sessionNumber: 12 },
-        { id: "a-proj", title: "Group Research Presentation", kind: "project", sessionNumber: 28 },
+        { id: "a-quiz", title: "Final MC Quiz", kind: "quiz", sessionNumber: 12, confirmed: true },
+        {
+          id: "a-proj",
+          title: "Group Research Presentation",
+          kind: "project",
+          sessionNumber: 28,
+          confirmed: true,
+        },
       ],
     });
     // No exam-kind row → step 2 declines and the fallback takes over.
@@ -167,7 +244,9 @@ describe("outcome: exam FOUND", () => {
     const detection = detectExam({
       events: completeCourse(),
       totalSessions: 30,
-      assessments: [{ id: "a-final", title: "Final Exam", kind: "exam", sessionNumber: 19 }],
+      assessments: [
+        { id: "a-final", title: "Final Exam", kind: "exam", sessionNumber: 19, confirmed: true },
+      ],
     });
     expect(detection.outcome).toBe("found");
     if (detection.outcome !== "found") return;
@@ -219,7 +298,9 @@ describe("outcome: exam PENDING — named but not yet published", () => {
   it("step 2 can also be pending", () => {
     const detection = detectExam({
       events: incompleteCourse(),
-      assessments: [{ id: "a-final", title: "Final Exam", kind: "exam", sessionNumber: 30 }],
+      assessments: [
+        { id: "a-final", title: "Final Exam", kind: "exam", sessionNumber: 30, confirmed: true },
+      ],
     });
     expect(detection.outcome).toBe("pending");
     if (detection.outcome !== "pending") return;
@@ -488,7 +569,9 @@ describe("degenerate oracle values fall through rather than throwing", () => {
   it("ignores assessments whose session_number is null", () => {
     const detection = detectExam({
       events: completeCourse(),
-      assessments: [{ id: "a", title: "Final Exam", kind: "exam", sessionNumber: null }],
+      assessments: [
+        { id: "a", title: "Final Exam", kind: "exam", sessionNumber: null, confirmed: true },
+      ],
     });
     expect(detection.outcome).toBe("found");
     if (detection.outcome !== "found") return;

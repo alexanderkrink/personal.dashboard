@@ -87,6 +87,8 @@ export interface ExamStatusAssessment {
   title: string;
   kind: string;
   session_number: number | null;
+  /** §2b: an unconfirmed syllabus proposal must not move an exam date. */
+  confirmed: boolean;
 }
 
 /** One session of a course the user may nominate as the exam. */
@@ -333,6 +335,7 @@ export function buildExamStatuses(input: BuildExamStatusesInput): ExamStatus[] {
           title: assessment.title,
           kind: assessment.kind,
           sessionNumber: assessment.session_number,
+          confirmed: assessment.confirmed,
         })),
       semesters,
     });

@@ -98,7 +98,9 @@ export function createSupabaseCalendarStore(supabase: SupabaseAdminClient): Cale
         supabase.from("course_matchers").select("course_id, pattern").eq("user_id", userId),
         supabase
           .from("assessments")
-          .select("id, course_id, title, kind, session_number")
+          // `confirmed` is selected, not filtered on: the detector owns that rule
+          // (§2b) so every loader enforces it identically. See `AssessmentOracleRow`.
+          .select("id, course_id, title, kind, session_number, confirmed")
           .eq("user_id", userId),
         supabase.from("semesters").select("starts_on, ends_on").eq("user_id", userId),
       ]);
