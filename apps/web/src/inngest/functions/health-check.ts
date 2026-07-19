@@ -2,7 +2,7 @@ import { createAdminSupabaseClient } from "@study/db";
 import { NonRetriableError } from "inngest";
 import { env } from "@/env";
 import { inngest } from "@/inngest/client";
-import { healthCheckRequested } from "@/inngest/events";
+import { healthCheckRequested, healthCheckRequestedData } from "@/inngest/events";
 
 /**
  * The round-trip proof for the background job runner (M1 item 2).
@@ -54,7 +54,17 @@ export const healthCheck = inngest.createFunction(
     retries: 1,
   },
   async ({ event, step, runId }) => {
-    const { userId } = event.data;
+    // Parse rather than destructure. `eventType`'s schema types `event.data` but
+    // does not check it on the way in (see `inngest/events.ts`), and this value
+    // is about to be written as a row owner through a client that bypasses RLS —
+    // the last place to want an unvalidated string. NonRetriable because a
+    // malformed payload is malformed on every attempt; without this, a bad
+    // `userId` reached Postgres and came back as a generic retriable error.
+    const parsed = healthCheckRequestedData.safeParse(event.data);
+    if (!parsed.success) {
+      throw new NonRetriableError(`Malformed health-check event: ${parsed.error.message}`);
+    }
+    const { userId } = parsed.data;
 
     // Each step gets its own client rather than one hoisted out of the handler.
     // Steps are separate HTTP invocations that may land on different serverless
