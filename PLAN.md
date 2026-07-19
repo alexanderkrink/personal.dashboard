@@ -1503,6 +1503,28 @@ builds incrementally with better recall/latency. `vector(1024)` is well inside H
 before the ANN scan. v2 option: hybrid search (tsvector + RRF) — an additive generated column + GIN index, no
 re-embedding or restructuring (Course Copilot implements it).
 
+> 🔴 **DISPROVEN 2026-07-19 (Wave 4 Gate 2)** — "Queries always filter `course_id` (and RLS
+> filters `user_id`) **before** the ANN scan" is backwards, and it is the sentence that hid a
+> real bug. An HNSW index scan knows nothing about either predicate: it walks the graph,
+> emits `hnsw.ef_search` candidates (**40** on this project), and the executor filters them
+> **afterwards**. Post-filter, not pre-filter. If the 40 globally-nearest vectors belong to
+> other courses, the caller gets **zero rows** for a course that has plenty of material — no
+> error, no warning.
+>
+> Measured on the live project at gate, 3,010 chunks (3,000 in a decoy course, 10 in the
+> queried course), HNSW plan forced: `match_chunks(..., 8)` returned **0 of 10** with
+> pgvector's default `hnsw.iterative_scan = off`, and **8 of 10** with `strict_order`.
+>
+> It is latent at today's row counts — with a small table the planner picks the `course_id`
+> btree and an exact sort, which has perfect recall, so every test passes. The switch to the
+> HNSW plan happens silently on cost as the table grows, i.e. in production, weeks later.
+>
+> Fixed in `20260719182225_match_chunks_iterative_scan` by attaching
+> `set hnsw.iterative_scan = 'strict_order'` to `match_chunks` itself (pgvector 0.8.2 is
+> installed), so the guarantee travels with the one retrieval surface rather than depending
+> on every future caller remembering a GUC. `strict_order` over `relaxed_order` because the
+> function documents an ordering contract its callers cite from.
+
 **Search/RAG surface:** a `match_chunks(course_id, query_embedding, k)` SQL function
 (`security invoker`, `set search_path = ''`) powering course search, "ask your notes"
 chat with citations, and context retrieval for the exam-review generator.
