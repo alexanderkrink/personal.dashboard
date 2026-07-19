@@ -60,8 +60,15 @@ export const syllabusComponentSchema = z.object({
       "The component's name EXACTLY as the syllabus writes it — 'Final Exam', 'In class Midterm Exam', 'Class Participation', 'Group Research Presentation'. Do not normalise, translate, expand or tidy it. This string is the only thing downstream can use to tell a final from a midterm, because both are stored with kind='exam'.",
     ),
   kind: assessmentKindSchema,
+  // Range-checked client-side on purpose. `assessments.weight_percent` carries
+  // `check (weight_percent >= 0 and weight_percent <= 100)`, so an out-of-range value
+  // would otherwise sail through the schema and die at the insert — after the call was
+  // paid for, and as a 500 rather than a retry. Validating here routes it into the §2
+  // corrective retry instead, which is the machinery that exists for exactly this.
   weightPercent: z
     .number()
+    .min(0)
+    .max(100)
     .describe(
       "The percentage of the final course grade this component is worth, as a number between 0 and 100. Take the ORDINARY (first-call) evaluation scheme. If the syllabus also states a re-take, second-call or third-attempt scheme with different weights, IGNORE it entirely — those weights apply only to a student who failed, and recording them corrupts the grade projection for everyone else. If a component is stated as a total split into parts ('Intermediate tests 15% (3 x 5%)'), record the TOTAL (15), not the part.",
     ),

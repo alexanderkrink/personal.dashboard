@@ -702,6 +702,14 @@ export type Database = {
           isSetofReturn: true
         }
       }
+      confirm_syllabus_extraction: {
+        Args: { p_extraction_id: string }
+        Returns: undefined
+      }
+      reject_syllabus_extraction: {
+        Args: { p_extraction_id: string }
+        Returns: undefined
+      }
     }
     Enums: {
       [_ in never]: never

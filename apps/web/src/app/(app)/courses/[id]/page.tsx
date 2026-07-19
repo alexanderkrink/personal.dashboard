@@ -3,6 +3,7 @@ import { sumWeightPercent } from "@study/core";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { createAssessment, updateAssessment } from "@/app/(app)/courses/[id]/actions";
+import { extractSyllabus } from "@/app/(app)/courses/[id]/syllabus-actions";
 import { setCourseArchived } from "@/app/(app)/courses/actions";
 import { ButtonLink } from "@/components/button-link";
 import { AssessmentCreateForm } from "@/components/courses/assessment-create-form";
@@ -10,6 +11,11 @@ import { AssessmentRow } from "@/components/courses/assessment-row";
 import { CourseArchiveForm } from "@/components/courses/course-archive-form";
 import { CourseDot } from "@/components/courses/course-dot";
 import { formatCredits, formatTermDate } from "@/components/courses/format";
+import { SyllabusExtractForm } from "@/components/courses/syllabus-extract-form";
+import {
+  SyllabusProposal,
+  type SyllabusProposalView,
+} from "@/components/courses/syllabus-proposal";
 import { WeightTotal } from "@/components/courses/weight-total";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
@@ -46,14 +52,30 @@ export default async function CoursePage({ params }: { params: Promise<{ id: str
 
   if (!course) notFound();
 
+  // `confirmed` filters this list, and that filter is load-bearing rather than
+  // cosmetic. An unconfirmed syllabus extraction is a *proposal*; letting it into
+  // this table would put it into the weight total, and the total is what the grade
+  // cockpit does its arithmetic against — which is exactly the silent corruption
+  // the §2b confirm gate exists to prevent. Proposals render in their own panel.
   const { data: assessments } = await supabase
     .from("assessments")
     .select("id, title, kind, weight_percent, due_hint")
     .eq("course_id", course.id)
+    .eq("confirmed", true)
     .order("created_at", { ascending: true });
+
+  const { data: proposals } = await supabase
+    .from("syllabus_extractions")
+    .select(
+      "id, source_label, extracted_course_title, proposed_total_sessions, total_sessions_evidence, notes, model, components:syllabus_extraction_components (id, source_snippet, session_note, assessment:assessments (id, title, kind, weight_percent, session_number))",
+    )
+    .eq("course_id", course.id)
+    .is("confirmed_at", null)
+    .order("created_at", { ascending: false });
 
   const rows = assessments ?? [];
   const total = sumWeightPercent(rows.map((row) => row.weight_percent));
+  const pending = (proposals ?? []).map(toProposalView);
   const scale = GRADING_SCALES.find((entry) => entry.value === course.grading_scale);
 
   return (
@@ -102,6 +124,14 @@ export default async function CoursePage({ params }: { params: Promise<{ id: str
         />
         {course.archived ? <Badge variant="outline">Archived</Badge> : null}
       </section>
+
+      {pending.length > 0 ? (
+        <section className="mb-6 space-y-4">
+          {pending.map((proposal) => (
+            <SyllabusProposal key={proposal.id} proposal={proposal} courseId={course.id} />
+          ))}
+        </section>
+      ) : null}
 
       <section className="space-y-4">
         <div className="flex flex-wrap items-end justify-between gap-4">
@@ -158,9 +188,75 @@ export default async function CoursePage({ params }: { params: Promise<{ id: str
           <h4 className="mb-4 font-medium text-foreground text-ui-base">Add a component</h4>
           <AssessmentCreateForm courseId={course.id} action={createAssessment} />
         </div>
+
+        <div className="rounded-lg border border-border bg-surface p-4">
+          <h4 className="font-medium text-foreground text-ui-base">Extract from a syllabus</h4>
+          <p className="mt-1 mb-4 max-w-prose text-muted-foreground text-ui-sm">
+            Paste a syllabus and the components come back proposed, each with the line of the
+            document it came from, for you to confirm.
+          </p>
+          <SyllabusExtractForm courseId={course.id} action={extractSyllabus} />
+        </div>
       </section>
     </>
   );
+}
+
+/**
+ * One extraction row + its nested components → what the proposal panel renders.
+ *
+ * The `assessment` join can be null in the type PostgREST infers even though the FK is
+ * `not null`, so components whose assessment did not come back are dropped rather than
+ * rendered half-empty. In practice that set is always empty — `apply_syllabus_extraction`
+ * writes both rows in one transaction — but a proposal that silently showed a weight
+ * without its snippet, or a snippet without its weight, would be the one failure mode
+ * the confirm gate cannot tolerate.
+ */
+function toProposalView(row: {
+  id: string;
+  source_label: string;
+  extracted_course_title: string;
+  proposed_total_sessions: number | null;
+  total_sessions_evidence: string | null;
+  notes: string | null;
+  model: string;
+  components: {
+    id: string;
+    source_snippet: string;
+    session_note: string | null;
+    assessment: {
+      id: string;
+      title: string;
+      kind: string;
+      weight_percent: number;
+      session_number: number | null;
+    } | null;
+  }[];
+}): SyllabusProposalView {
+  return {
+    id: row.id,
+    sourceLabel: row.source_label,
+    extractedCourseTitle: row.extracted_course_title,
+    proposedTotalSessions: row.proposed_total_sessions,
+    totalSessionsEvidence: row.total_sessions_evidence,
+    notes: row.notes,
+    model: row.model,
+    components: row.components.flatMap((component) =>
+      component.assessment === null
+        ? []
+        : [
+            {
+              id: component.id,
+              title: component.assessment.title,
+              kind: component.assessment.kind,
+              weightPercent: component.assessment.weight_percent,
+              sessionNumber: component.assessment.session_number,
+              sourceSnippet: component.source_snippet,
+              sessionNote: component.session_note,
+            },
+          ],
+    ),
+  };
 }
 
 function Fact({ label, value }: { label: string; value: string }) {
