@@ -170,6 +170,62 @@ describe("tombstones — the drop-and-restore round trip (§3.3)", () => {
     expect(state.items).toHaveLength(0);
   });
 
+  /**
+   * 🔴 The one that was destroying data, end to end through the store.
+   *
+   * `planTombstones` is tested exhaustively in `diff.test.ts`; this proves the
+   * value it needs is actually THREADED — that sync loads the occurrences of items
+   * missing from the snapshot (the old query was scoped to items present in it,
+   * so every tombstone candidate's date was invisible) and hands over the LATEST
+   * one.
+   */
+  it("never deletes a vanished item whose session has already happened", async () => {
+    const { store, state } = createMemoryStore();
+
+    // A session two days BEFORE the sync clock. Same relationship the live data
+    // had: the occurrence is in the past and the feed's window has rolled past it.
+    events.current = [lecture("uid-past", at(-2).toISOString())];
+    await syncFeed(store, "feed-1", at(0));
+    const itemId = state.items[0]?.id;
+    expect(itemId).toBeDefined();
+
+    events.current = [];
+    const first = await syncFeed(store, "feed-1", at(1));
+    // Not tombstoned — the clock is never even started.
+    expect(first).toMatchObject({ status: "ok", tombstoned: 0, retained: 1 });
+    expect(state.items[0]?.missing_since).toBeNull();
+
+    // Well past the old 7-day deadline, and past a second one. Still here.
+    await syncFeed(store, "feed-1", at(8));
+    const swept = await syncFeed(store, "feed-1", at(30));
+    expect(swept).toMatchObject({ deleted: 0, retained: 1 });
+    expect(state.items).toHaveLength(1);
+    // The occurrence survives too — item 9 hangs attendance and participation
+    // records off exactly this row.
+    expect(state.occurrences).toHaveLength(1);
+  });
+
+  it("clears a tombstone that the OLD rule wrongly set on a past item", async () => {
+    // The heal path for the 5 rows already marked on the live database: they were
+    // marked before this rule existed, and the next sync must undo it rather than
+    // leave them hidden by the 24-hour visibility cut.
+    const { store, state } = createMemoryStore();
+
+    events.current = [lecture("uid-past", at(-2).toISOString())];
+    await syncFeed(store, "feed-1", at(0));
+    const item = state.items[0];
+    expect(item).toBeDefined();
+    if (!item) throw new Error("unreachable");
+
+    // Forge the state the old code produced.
+    item.missing_since = at(1).toISOString();
+
+    events.current = [];
+    const healed = await syncFeed(store, "feed-1", at(2));
+    expect(healed).toMatchObject({ retained: 1 });
+    expect(state.items[0]?.missing_since).toBeNull();
+  });
+
   it("restarts the clock when an item reappears, so a flapping feed never deletes", async () => {
     const { store, state } = createMemoryStore();
 
