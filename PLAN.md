@@ -1409,6 +1409,44 @@ follows it:
 > *update-not-duplicate* test the DoD requires, with sessions 13–14 and 18→19→20 as
 > additional consecutive runs within the same course.
 
+> ⚠ **CORRECTED 2026-07-19 (Wave 4 Agent 3) — `s01-basics.pptx` is 41.5 words/slide and
+> therefore takes the TEXT path, not the visual one.** The measured table above omits s01,
+> and the acceptance test it names ("run both, diff the extracted content, confirm the
+> visual path recovers what the text path drops") reads as though the `.pptx` would convert.
+> It does not: at 41.5 it sits 1.5 words above the threshold, the only deck in the corpus
+> anywhere near the line. The A/B is still valid and still worth running — it is
+> `pptx-xml` (text-only) versus `pdf-native` (visual) on the same lecture — but it compares
+> the two *branches*, not the two PPTX branches, and it does not exercise CloudConvert.
+> **Exercising the conversion path requires a deck that actually routes there** (s14, s18,
+> s19, s20). Agent 3 ran `s18` (22.6 w/s) for that reason.
+>
+> The parser reproduces this section's table closely enough to confirm both: slide counts
+> match **exactly** on all eight decks, and words/slide land within 0.3–1.0 of the figures
+> above (s13 51.9 vs 52.6, s14 38.8 vs 39.0, s18 22.6 vs 23.2, s19 21.9 vs 22.0, s20 30.3
+> vs 30.7, Micro 83.2/77.6/59.5 vs 84.2/78.5/60.3). Every routing verdict is identical.
+
+> 🔴 **DISPROVEN 2026-07-19 (Wave 4 Agent 3) — "speaker notes are often the richest content
+> in lecture decks" is FALSE of this corpus.** §4.2 gives that as the reason to read
+> `notesSlides`, and it is a good reason in general, but measured across all nine decks the
+> notes are nearly empty: the three Micro decks have **zero** notesSlides between them, and
+> `s01-basics.pptx` — the richest — carries 8 notes totalling **29 words**, of which the
+> substantive content is one policy line ("Attendance 80% required", repeated on 4 slides),
+> a Menti link and two YouTube links. Notes are still extracted and still folded into the
+> slide markdown, because 29 words of course policy that appear nowhere else is worth
+> having and costs nothing. But **the visual path, not the notes, is what recovers content
+> on this corpus**, and any plan that leans on notes to justify the text branch is leaning
+> on something that is not there.
+>
+> ⚠ **CORRECTED, same date — `notesSlide{N}.xml` is NOT the notes for `slide{N}.xml`.**
+> §4.2 lists the two part families side by side, which reads as a parallel walk. It is not
+> one: `s01-basics.pptx` has 28 slides and 13 notesSlides, and
+> `ppt/slides/_rels/slide3.xml.rels` points at `../notesSlides/notesSlide1.xml`. Pairing by
+> index would have attached slide 3's notes to slide 1 and then run out — well-formed,
+> plausible, and wrong on every note in the deck. Notes must be resolved through the
+> per-slide relationship part, and slide *order* through `ppt/presentation.xml`'s
+> `<p:sldId>` list rather than the file numbering. `packages/core/src/documents/pptx.ts`
+> does both; `pptx.test.ts` pins both.
+
 
 ---
 
@@ -1784,6 +1822,36 @@ chat with citations, and context retrieval for the exam-review generator.
 | PPTX (**visual path, converted** — added 2026-07-18; 4 of 5 Marketing decks take this branch) | ~$0.01 CloudConvert + $0.26–0.34 (Gemini 3.1 Pro multimodal) | $0.15–0.35 | ~$0.005–0.01 | ~$0.03–0.05 | <$0.01 | **≈ $0.46–0.76** |
 | Exam review (per regen) | — | — | — | — | — | **≈ $0.50–1.50** (Opus 4.8) |
 | Deep-review audit (opt-in, per doc) | — | — | — | — | — | **≈ $0.80–2.00** (Opus 4.8, big docs) |
+
+> ⚠ **CORRECTED 2026-07-19 (Wave 4 Agent 3) — extraction is roughly HALF the estimate, and
+> the cost is dominated by OUTPUT tokens, not input.** Four documents measured end to end
+> through the live pipeline on `gemini-3.1-pro-preview`, priced by `pricing.ts` into
+> `ai_generations`:
+>
+> | Document | Route | Units | Input tok | Output tok | Measured | §10 estimate |
+> | --- | --- | --- | --- | --- | --- | --- |
+> | `s01-basics.pdf` | `pdf-native` | 27 pp | 14,874 | 9,462 | **$0.1433** | $0.26–0.34 |
+> | `s01-basics.pptx` | `pptx-xml` | 28 sl | 3,128 | 8,897 | **$0.1130** | $0.10–0.13 |
+> | `s18-segmentation` | `pptx-converted-pdf` | 32 sl | 17,517 | 7,995 | **$0.1310** | $0.26–0.34 |
+> | `Micro Unit 4` | `pptx-xml` | 40 sl | 4,438 | 10,031 | **$0.1292** | $0.10–0.13 |
+>
+> The text-path row is accurate. **The two visual rows are ~2.2× too high**, and the reason
+> is the input-token assumption: §4.1 estimates "a 40-page deck ≈ 80–120K input tokens",
+> i.e. ~2–3K per page. Measured, a page costs **~550 tokens** (14,874 for 27 pages; 17,517
+> for a 32-slide converted deck) — four to five times less. Gemini 3.1 Pro's PDF handling is
+> far cheaper per page than the figure this table was built on, and **no call in this
+> corpus comes close to the 200K long-context surcharge**, so that bracket never engages.
+>
+> The practical consequence is that the visual path is **much** cheaper to prefer than
+> planned: the whole visual-vs-text premium on the s01 pair is **$0.03** (+27%), not the
+> ~$0.20 this table implies. Output tokens are now the dominant term on every route
+> (~8–10K × $12/MTok ≈ $0.10–0.12, versus $0.03 of input on the most expensive row), which
+> means **extraction cost scales with how much we ask the model to write, not with document
+> size** — the opposite of the assumption here, and the thing to watch if the schema grows.
+>
+> Not yet measured, and therefore not corrected: merge, critics, glossary and embeddings.
+> The `≈ $0.46–0.76` totals stand until those land, with extraction ~$0.13 rather than
+> ~$0.30 inside them.
 
 ⚠ **Corrected 2026-07-18 against the verified feed** (the old figure assumed a 12-week term
 at 3 sessions/week ≈ 36 decks): the Fall term actually runs 2026-08-31 → 2026-12-18
