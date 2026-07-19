@@ -331,6 +331,25 @@ export async function deleteDocument(input: unknown): Promise<{ ok: boolean; mes
  * Note this is NOT `document/retry-merges` (PLAN §7's partial-success retry).
  * That event re-runs only the failed topic merges and belongs with the agent
  * that builds them; this one re-runs the document.
+ *
+ * ## ⚠ This is a RETRY, not PLAN §5's "Reprocess"
+ *
+ * A retry converges: `runRouteAndMerge` now recognises the topics this document
+ * already merged into and skips them, so the re-run finishes the topics that did
+ * not persist and leaves the rest exactly as they are. Before 2026-07-20 it
+ * compounded — another `topic_revisions` row and another `revision` bump per
+ * already-merged topic, at ~$0.06 of re-billed merge + critic each.
+ *
+ * What it still does NOT do is **strip**. PLAN §5 says re-processing first
+ * replays each topic forward from the snapshot taken before this document's
+ * first merge, re-applying only other documents' revisions, then deletes this
+ * document's `topic_sources` rows and chunks and runs fresh. None of that
+ * exists (PLAN §5 carries the 🔴 DISPROVEN 2026-07-20 note). The practical
+ * consequence: a retry re-extracts the file — that step is not memoized across a
+ * fresh `document/uploaded` — but any topic already merged keeps the page it
+ * has, so a *changed* extraction cannot rebuild a page it already contributed
+ * to. That is the right trade for "finish the rest" and the wrong one for a true
+ * "Reprocess", which is why the strip is still owed.
  */
 export async function retryDocument(input: unknown): Promise<{ ok: boolean; message?: string }> {
   const parsed = DOCUMENT_REF.safeParse(input);

@@ -51,9 +51,12 @@ import {
   type ExistingTopicTitle,
   flattenTopicPage,
   type LossFinding,
+  type PriorContribution,
+  planMergeWork,
   type RoutedSegment,
   type RoutingProposal,
   type Segment,
+  type SkippedTarget,
   segmentExtraction,
   type TopicMergeOutcome,
 } from "@study/core";
@@ -154,6 +157,103 @@ async function loadCourseTopics(
       summaryEmbedding: parseStoredVector(row.summary_embedding),
     };
   });
+}
+
+/**
+ * What this document has already contributed to this course's topics.
+ *
+ * Empty on a first run — two indexed lookups that cost nothing — and the whole basis for
+ * convergence on a second one. Both witnesses are needed because Step C's three writes are
+ * not transactional; {@link planMergeWork} documents the truth table they feed.
+ *
+ * The snapshot query takes the **highest** revision per topic rather than the first. On a
+ * clean history there is exactly one row per (topic, document) — the trigger added in
+ * `20260719224933` now makes that structural — but on a document that compounded before that
+ * migration existed, the newest snapshot is the one that says where the topic actually got
+ * to, and the older ones are dead history.
+ */
+async function loadPriorContributions(
+  admin: SupabaseAdminClient,
+  userId: string,
+  documentId: string,
+): Promise<readonly PriorContribution[]> {
+  const [snapshots, provenance] = await Promise.all([
+    admin
+      .from("topic_revisions")
+      .select("topic_id, revision")
+      .eq("user_id", userId)
+      .eq("document_id", documentId)
+      .eq("source", "merge"),
+    admin
+      .from("topic_sources")
+      .select("topic_id")
+      .eq("user_id", userId)
+      .eq("document_id", documentId),
+  ]);
+
+  if (snapshots.error) {
+    throw new Error(
+      `Could not read prior merge snapshots for ${documentId}: ${snapshots.error.message}`,
+    );
+  }
+  if (provenance.error) {
+    throw new Error(
+      `Could not read prior provenance for ${documentId}: ${provenance.error.message}`,
+    );
+  }
+
+  const highestSnapshot = new Map<string, number>();
+  for (const row of snapshots.data ?? []) {
+    highestSnapshot.set(
+      row.topic_id,
+      Math.max(highestSnapshot.get(row.topic_id) ?? 0, row.revision),
+    );
+  }
+
+  const withProvenance = new Set((provenance.data ?? []).map((row) => row.topic_id));
+
+  return [...new Set([...highestSnapshot.keys(), ...withProvenance])].map((topicId) => ({
+    topicId,
+    snapshotRevision: highestSnapshot.get(topicId) ?? null,
+    hasProvenance: withProvenance.has(topicId),
+  }));
+}
+
+/**
+ * Writes the provenance row a crash between Step C's (2) and (3) never got to write.
+ *
+ * Deliberately not a merge: the page already holds this document's contribution, so the only
+ * thing missing is the record of it. `topic_sources` is what `process-document` reads to
+ * decide which topics changed and what coverage reports against, so a topic left out of it
+ * would be invisible to both despite being correctly merged.
+ */
+async function repairProvenance(input: {
+  readonly admin: SupabaseAdminClient;
+  readonly userId: string;
+  readonly documentId: string;
+  readonly skipped: SkippedTarget;
+  readonly segments: readonly Segment[];
+}): Promise<void> {
+  const locators = [...new Set(input.segments.flatMap((segment) => segment.pages))]
+    .sort((a, b) => a - b)
+    .map((page) => ({ page }));
+
+  const { error } = await input.admin.from("topic_sources").upsert(
+    {
+      user_id: input.userId,
+      topic_id: input.skipped.topicId,
+      document_id: input.documentId,
+      locators,
+      merged_at_revision: input.skipped.mergedAtRevision,
+    },
+    { onConflict: "topic_id,document_id" },
+  );
+
+  if (error) {
+    throw new Error(
+      `Could not repair provenance for topic ${input.skipped.topicId}: ${error.message}`,
+    );
+  }
 }
 
 /** `Neural Networks` → `neural-networks`, uniquified against the course's taken slugs. */
@@ -633,9 +733,36 @@ async function verifyMerge(input: {
  * 3. `topic_sources` is upserted last — it is provenance, and a missing row costs a
  *    re-processing hint rather than any content.
  *
- * A step re-run repeats all three. (1) is guarded by `unique (topic_id, revision)`, (3) by
- * `unique (topic_id, document_id)` — Gate 1 F4's idempotency key — so the only non-idempotent
- * write is (2), which is a full replace and therefore idempotent by construction.
+ * ## ⚠ CORRECTED 2026-07-20 — what actually makes a re-run safe
+ *
+ * This docstring used to claim the three writes were idempotent on their own: "(1) is
+ * guarded by `unique (topic_id, revision)`, (3) by `unique (topic_id, document_id)`, so the
+ * only non-idempotent write is (2), which is a full replace". **That was false**, and the
+ * final branch review measured why. `runRouteAndMerge` re-reads `topics.revision` fresh, so
+ * on a second pass `target.currentRevision` is already the value the first pass bumped it
+ * to. The `unique (topic_id, revision)` guard therefore could never fire — the write it
+ * protects against is the one that moved the key — and (2) being a "full replace" is
+ * irrelevant when the *content* being replaced in is a re-merge of a page that already holds
+ * this document's contribution.
+ *
+ * What makes a re-run safe now is that the second pass **never reaches this function** for a
+ * topic it already merged: {@link planMergeWork} partitions the targets first, and the
+ * database refuses the compounding write outright via
+ * `topic_revisions_one_merge_per_document` (migration `20260719224933`), which reads the
+ * `topic_sources.merged_at_revision` this function writes at (3).
+ *
+ * The unique keys still do their narrower jobs. `unique (topic_id, revision)` absorbs a
+ * re-run of the *identical* persist — a crash between (1) and (2) — and
+ * `unique (topic_id, document_id)` keeps (3) an upsert rather than a duplicate-key error.
+ * Neither of them was ever the thing standing between a retry and a doubled topic page.
+ *
+ * ## The window that remains open
+ *
+ * A crash between (2) and (3) leaves the page updated with no provenance row. The next pass
+ * sees the snapshot at revision R with the topic already at R+1, skips the merge, and
+ * repairs the missing `topic_sources` row (see `provenanceMissing`). That is why the skip
+ * decision reads two witnesses instead of just `topic_sources` — reading provenance alone
+ * would re-merge here.
  */
 async function persistTopicMerge(input: {
   readonly admin: SupabaseAdminClient;
@@ -659,6 +786,10 @@ async function persistTopicMerge(input: {
 
   let topicId = target.topicId;
   let createdSlug: string | null = null;
+  // Which `topics.revision` this merge leaves the topic at. A create starts at 1; an update
+  // lands one past what it snapshotted. Recorded on the provenance row so the next pass — and
+  // the database trigger behind it — can tell "already merged" from "not merged yet".
+  const mergedAtRevision = target.topicId === null ? 1 : target.currentRevision + 1;
 
   if (topicId === null) {
     const slug = slugFor(verified.merge.title || target.title, input.takenSlugs);
@@ -733,12 +864,16 @@ async function persistTopicMerge(input: {
     .sort((a, b) => a - b)
     .map((page_) => ({ page: page_ }));
 
-  const { error: sourceError } = await admin
-    .from("topic_sources")
-    .upsert(
-      { user_id: userId, topic_id: topicId, document_id: documentId, locators },
-      { onConflict: "topic_id,document_id" },
-    );
+  const { error: sourceError } = await admin.from("topic_sources").upsert(
+    {
+      user_id: userId,
+      topic_id: topicId,
+      document_id: documentId,
+      locators,
+      merged_at_revision: mergedAtRevision,
+    },
+    { onConflict: "topic_id,document_id" },
+  );
 
   if (sourceError) {
     throw new Error(`Could not record provenance for topic ${topicId}: ${sourceError.message}`);
@@ -962,6 +1097,63 @@ export async function runRouteAndMerge(input: RouteAndMergeInput): Promise<Route
 
   const targets = planMerges(routing.routed, routing.segments, existingTopics);
 
+  // ── Convergence gate (PLAN §5's "Idempotency & re-processing") ─────────────
+  //
+  // Everything above this line is cheap and deterministic enough to repeat. Everything below
+  // it costs a Sonnet merge plus a Gemini critic per topic (~$0.06) and moves `topics
+  // .revision`, so a second pass over a topic this document already merged into must not
+  // reach it. `planMergeWork` is pure and lives in `@study/core`; the database enforces the
+  // same rule independently via `topic_revisions_one_merge_per_document`, because the writer
+  // here holds the service key and RLS is not in its path.
+  //
+  // ⚠ This is NOT PLAN §5's strip. The strip — replay each topic forward from its pre-merge
+  // snapshot, re-applying only other documents' revisions, then delete this document's
+  // `topic_sources` rows and chunks and run fresh — remains unbuilt. A re-run converges on
+  // the page it already has rather than rebuilding it from a fresh extraction. See the
+  // 🔴 DISPROVEN 2026-07-20 note in PLAN §5.
+  const plan = planMergeWork({
+    targets,
+    priorContributions: await loadPriorContributions(admin, userId, documentId),
+  });
+
+  const skippedOutcomes: TopicMergeOutcome[] = [];
+  for (const skipped of plan.skipped) {
+    if (skipped.provenanceMissing) {
+      await repairProvenance({
+        admin,
+        userId,
+        documentId,
+        skipped,
+        segments: targets.find((t) => t.topicKey === skipped.topicKey)?.segments ?? [],
+      });
+    }
+
+    await logProcessingEvent(admin, {
+      userId,
+      documentId,
+      courseId,
+      step: `merge:topic:${skipped.topicKey}`,
+      detail: `“${skipped.title}” already includes this file — left as it is.`,
+    });
+
+    // Counted as merged, because it is: this document's material is in that page. The
+    // outcome feeds `computeDocumentOutcome`, and reporting a skip as anything else would
+    // turn a converged retry into a `failed` document. `needsReview` is false rather than
+    // carried forward from the original merge — the flag belongs to the revision that raised
+    // it and is still on it; nothing was reviewed *this* run.
+    skippedOutcomes.push({ topicKey: skipped.topicKey, status: "merged", needsReview: false });
+  }
+
+  if (plan.skipped.length > 0) {
+    await logProcessingEvent(admin, {
+      userId,
+      documentId,
+      courseId,
+      step: "merge",
+      detail: `${plan.skipped.length} topic${plan.skipped.length === 1 ? " was" : "s were"} already updated from this file on an earlier run; picking up where it stopped.`,
+    });
+  }
+
   const { data: slugRows } = await admin
     .from("topics")
     .select("slug")
@@ -977,7 +1169,7 @@ export async function runRouteAndMerge(input: RouteAndMergeInput): Promise<Route
     courseTitle: input.courseTitle,
     filename: input.filename,
     sessionLabel: input.sessionLabel,
-    targets,
+    targets: plan.toMerge,
     unaccountedPages: routing.unaccountedPages,
     coverageChecked: routing.coverageChecked,
     takenSlugs,
@@ -985,11 +1177,12 @@ export async function runRouteAndMerge(input: RouteAndMergeInput): Promise<Route
     runtime,
   });
 
-  const outcome = computeDocumentOutcome({ topicOutcomes: outcomes });
+  const topicOutcomes = [...skippedOutcomes, ...outcomes];
+  const outcome = computeDocumentOutcome({ topicOutcomes });
 
   return {
     outcome,
-    topicOutcomes: outcomes,
+    topicOutcomes,
     segments: routing.segments.length,
     topicsTouched: targets.length,
     topicsCreated: created,
