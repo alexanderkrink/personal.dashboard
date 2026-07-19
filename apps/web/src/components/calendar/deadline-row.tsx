@@ -1,7 +1,6 @@
-import { CourseDot } from "@/components/courses/course-dot";
 import { cn } from "@/lib/utils";
 import type { WeekViewRow } from "@/server/calendar/week-view";
-import { CompleteToggle, WeightOverrideField } from "./row-controls";
+import { CompleteToggle, CourseAssignField, WeightOverrideField } from "./row-controls";
 import { formatDueIn, TIER_BADGE_CLASS, TIER_LABEL, TIER_RULE_CLASS } from "./urgency";
 
 /**
@@ -20,10 +19,19 @@ import { formatDueIn, TIER_BADGE_CLASS, TIER_LABEL, TIER_RULE_CLASS } from "./ur
 export function DeadlineRow({
   row,
   timeZone,
+  courses = [],
   showWeekday = true,
 }: {
   row: WeekViewRow;
   timeZone: string;
+  /**
+   * Every course the re-filing control may offer (§5.1).
+   *
+   * Defaults to `[]` so a caller that has no course list still renders a correct
+   * row — the control degrades to the two non-course choices rather than
+   * disappearing, which keeps "unassign" reachable everywhere the row is.
+   */
+  courses?: readonly { id: string; title: string; color: string }[];
   showWeekday?: boolean;
 }) {
   const weekday = new Intl.DateTimeFormat("en-GB", {
@@ -91,12 +99,16 @@ export function DeadlineRow({
             <span className="ml-2 align-middle text-destructive text-ui-xs">Cancelled</span>
           ) : null}
         </p>
-        {row.course ? (
-          <span className="mt-0.5 flex items-center gap-1.5 text-muted-foreground text-ui-sm">
-            <CourseDot color={row.course.color} />
-            <span className="truncate">{row.course.title}</span>
-          </span>
-        ) : null}
+        {/* Rendered even when there is no course — an unassigned row is exactly
+            the one that needs filing, and hiding the control there was half of
+            why `course_id` was write-once. */}
+        <CourseAssignField
+          itemId={row.itemId}
+          course={row.course}
+          courses={courses}
+          isLocked={row.courseLocked}
+          label={row.label}
+        />
       </div>
 
       <span className="shrink-0 text-right font-mono text-muted-foreground text-ui-sm tabular-nums">

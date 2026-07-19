@@ -215,7 +215,12 @@ export async function ThisWeek({
           </h3>
           <ol className="divide-y divide-border">
             {view.overdue.map((row) => (
-              <DeadlineRow key={row.occurrenceId} row={row} timeZone={timeZone} />
+              <DeadlineRow
+                key={row.occurrenceId}
+                row={row}
+                timeZone={timeZone}
+                courses={courses ?? []}
+              />
             ))}
           </ol>
         </section>
@@ -233,7 +238,12 @@ export async function ThisWeek({
           </h3>
           <ol className="divide-y divide-border">
             {view.deadlines.map((row) => (
-              <DeadlineRow key={row.occurrenceId} row={row} timeZone={timeZone} />
+              <DeadlineRow
+                key={row.occurrenceId}
+                row={row}
+                timeZone={timeZone}
+                courses={courses ?? []}
+              />
             ))}
           </ol>
         </section>
@@ -255,7 +265,12 @@ export async function ThisWeek({
           </h3>
           <ol className="divide-y divide-border">
             {view.horizon.map((row) => (
-              <DeadlineRow key={row.occurrenceId} row={row} timeZone={timeZone} />
+              <DeadlineRow
+                key={row.occurrenceId}
+                row={row}
+                timeZone={timeZone}
+                courses={courses ?? []}
+              />
             ))}
           </ol>
         </section>

@@ -96,6 +96,16 @@ export interface WeekViewRow {
   detectionSource: string | null;
   location: string | null;
   course: { id: string; title: string; color: string } | null;
+  /**
+   * `course_id` is in `user_locked_fields` — a human filed this row, not the
+   * matcher.
+   *
+   * Surfaced so the re-filing control can say which links are decisions and which
+   * are inferences. Those look identical on screen otherwise, and they behave
+   * differently: a locked link survives every sync, an inferred one moves when the
+   * matcher changes its mind.
+   */
+  courseLocked: boolean;
   weightPercent: number;
   weightSource: "override" | "assessment" | "kind_default";
   tier: WeightTier;
@@ -268,6 +278,7 @@ function toRows(
       detectionSource: item.detection_source,
       location: item.location,
       course: item.course,
+      courseLocked: item.user_locked_fields.includes("course_id"),
       weightPercent: score?.weightPercent ?? fallbackWeight?.weightPercent ?? 0,
       weightSource: score?.weightSource ?? fallbackWeight?.source ?? "kind_default",
       tier: score?.tier ?? (kind === "class" ? "info" : "low"),
