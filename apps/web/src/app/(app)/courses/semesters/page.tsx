@@ -59,7 +59,7 @@ export default async function SemestersPage() {
       ) : (
         <section className="mb-8 overflow-hidden rounded-lg border border-border bg-surface">
           <Table>
-            <TableHeader className="sticky top-0 z-10 bg-surface">
+            <TableHeader className="bg-surface">
               <TableRow>
                 <TableHead>Semester</TableHead>
                 <TableHead>Dates</TableHead>

@@ -262,6 +262,37 @@ tint of the same hue with dark foreground text. `--destructive` maps to the `ove
 red; destructive **buttons** deepen to `oklch(0.55 0.20 25)` (dark) / `oklch(0.50 0.20 27)`
 (light) so white text clears AA.
 
+⚠ **CORRECTED 2026-07-19 (Wave 2) — the light column above is a PAINTING column; small text
+needs a darker sibling.** The values as specified clear AA *composited* and still fail *as
+rendered*. A weight badge is 11px 500-weight glyphs on a 10% wash of their own hue, and
+anti-aliasing never resolves the glyph body to the specified colour. Measured from rendered
+browser pixels at **DPR 1** (both themes, 1280px and 375px, uniform probe label, 20th
+percentile of cumulative distance mass):
+
+| tier | composite | sampled | verdict |
+| --- | --- | --- | --- |
+| `overdue` | 4.89 | 4.74 | ok |
+| `high` | 4.68 | **4.42** | **FAILS** — the loudest rung, and what §7 ranks by |
+| `medium` | 4.80 | 4.55 | thin |
+| `done` | 4.76 | **4.50** | on the floor, zero headroom |
+
+So the ramp now splits paint from ink, the same rule as `--accent` / `--accent-text`:
+`--urgency-high-text` `oklch(0.48 0.14 65)` and `--urgency-done-text` `oklch(0.45 0.13 155)`
+join the existing `--urgency-medium-text` `oklch(0.48 0.09 78)`. **Hue and chroma are
+untouched on all three — only lightness moves**, so 🎨 no urgency tier drifts toward green
+(green stays `done` ONLY) and `done` stays green without drifting toward amber. Every badge
+now measures **5.35–5.50 sampled / 5.74–5.83 composite** in light, and the dark column aliases
+each `-text` token straight back to its paint (6.23–7.31 sampled), because darkening a colour
+that must stay light on a dark surface would wreck it.
+
+The painting tokens keep the 2px row rule, the `--warning` / `--success` aliases, and the
+panel icons (a graphical object's floor is 3:1, which they clear). Pinned by
+`e2e/urgency-ramp-contrast.spec.ts`, which asserts **both** numbers for every tier across both
+themes and both widths and fails if a `-text` token is ever aliased back to its paint in light
+mode. ⚠ The failure is **DPR-dependent** — at 2x/3x the glyph core resolves to the full
+composite value and everything passes, which is exactly why token math and retina spot-checks
+missed it. Do not "fix" a future failure by raising `deviceScaleFactor`.
+
 **Course palette — curated 8-hue categorical.** L/C are tuned *per hue* (L 0.68–0.80 dark,
 0.55–0.65 light) rather than held literally constant, because equal L across hues does not
 read as equal weight — yellow-greens need lifting, blues need less. The target is equal
@@ -477,10 +508,22 @@ chip style) — Base UI primitives via shadcn (Nova), `render` prop not `asChild
     nearest scroll container, and a `sticky` `thead` inside a box that never scrolls
     vertically has nothing to stick to. Proven at implementation: header at `y=-398` after a
     600px scroll. The **only** structure where both hold is a table container carrying a
-    `max-height` so it becomes the vertical scroller too. **Open decision** — either cap
-    table height (table scrolls, page doesn't) or drop the sticky-header requirement. Until
-    it is decided, the `sticky` classes on `/courses`, `/courses/[id]` and
-    `/courses/semesters` are decorative and do nothing.
+    `max-height` so it becomes the vertical scroller too.
+  - **✅ DECIDED 2026-07-18 (Wave 2) — sticky is opt-in, and only where rows are
+    unbounded.** The requirement is no longer global. The rule:
+    - **Bounded row count** (a term's courses, one course's grade components, a week of
+      deadlines): **no sticky header.** Capping the height would add a second scrollbar and
+      hide rows that otherwise all fit. The whole table is on screen, so a sticky header buys
+      nothing. The inert `sticky` classes on `/courses`, `/courses/[id]` and
+      `/courses/semesters` were **removed**, not left decorative.
+    - **Unbounded row count** (the full calendar list — the only such table in M1): the
+      container takes `max-height` + `overflow-y-auto` and so becomes the vertical scroller,
+      which is what finally gives the `sticky` `thead` something to stick to.
+    `Table` now accepts a **`containerClassName`** prop for exactly this — previously the
+    container's classes were hardcoded, so no consumer *could* have made a sticky header
+    work even if it wanted one. The working pattern is documented on the component:
+    `<Table containerClassName="max-h-[60vh] overflow-y-auto">` +
+    `<TableHeader className="sticky top-0 z-10 bg-surface">`.
 - **Badges/chips:** full-pill; weight badges use the heat ramp (High amber / Med dim-amber /
   Low neutral, **not** green); course chips use the course palette; status chips use the dot
   motif.
@@ -1521,7 +1564,7 @@ create table public.calendar_feeds (
   config jsonb not null,               -- { url, courseId? } — validated by the provider's Zod configSchema; courseId pins a per-course feed (§5.1 step 1)
   sync_cursor jsonb,                   -- { etag, lastModified, contentHash }
   last_synced_at timestamptz,
-  last_sync_status text,               -- 'ok' | 'unchanged' | 'error'
+  last_sync_status text check (last_sync_status in ('ok','unchanged','error')),  -- ⚠ check added 2026-07-18 (Wave 2)
   last_sync_error text,
   active boolean not null default true,
   created_at timestamptz not null default now(),
@@ -1554,7 +1597,8 @@ create table public.calendar_items (
   session_to int,                      -- the M of (Ses. N-M); = session_from for a single session
   descriptor text check (descriptor in ('regular','extra','retake','final_exam')),
   is_exam_candidate boolean not null default false,  -- exam candidate per the §5.1b resolution chain
-  detection_source text check (detection_source in ('syllabus_header','syllabus_body','max_session','manual')),
+  detection_source text check (detection_source in ('syllabus_total_sessions','assessment_session_number','feed_max_session','manual')),
+                                       -- ⚠ CORRECTED 2026-07-18 (Wave 2) — see the marker below
                                        -- which step of the §5.1b chain resolved it; lets
                                        -- "exam not yet published" be distinguished from "exam found"
   hidden boolean not null default false,             -- retakes are hidden by default, never deleted (§5.1b)
@@ -1626,6 +1670,48 @@ create table public.course_matchers (
 > `user_id` too, which is `not null`. Nullable FK columns keep `match simple` semantics, so an
 > unmatched calendar item (no course assigned) correctly skips the check.
 
+> **⚠ CORRECTED 2026-07-18 (Wave 2) — `detection_source` names the ORACLE, not the place in a
+> document.** This spec originally listed
+> `('syllabus_header','syllabus_body','max_session','manual')`. Two of those four are wrong in
+> kind, not just in spelling: `syllabus_header` and `syllabus_body` describe *where inside a
+> syllabus document* a number was found. That is a document-extraction concern from before the
+> §5.1b chain was revised, and **no code anywhere produces the distinction** — nothing between
+> the parser and the database can tell a header number from a body number, so the two values
+> could never be populated differently.
+>
+> The applied schema (`20260718174222_calendar_tables`) uses `packages/core`'s
+> `ExamDetectionSource` instead:
+> `('syllabus_total_sessions','assessment_session_number','feed_max_session','manual')`. These
+> distinguish **which oracle answered** — step 1 (`courses.total_sessions`), step 2 (an
+> `assessments.session_number` match), step 3 (`max(sessionTo)` across the feed) — which is
+> both what the code actually branches on and what the UI must label, since a user needs to
+> know whether an exam date came from their syllabus or from a guess about the feed.
+> `manual` survives unchanged: it is the user setting the flag by hand, which no oracle
+> produces. `max_session` is renamed to `feed_max_session` for the same reason — the old name
+> did not say *whose* max.
+>
+> **There is deliberately no `pending` value.** `detectExam()`'s `pending` outcome produces no
+> calendar row at all — only an expected session number the feed has not published yet — so a
+> row carrying a `detection_source` is by construction a *resolved* one. Adding `pending` here
+> would create a state the writer can never write.
+
+> **⚠ Two schema additions beyond this spec — applied 2026-07-18 (Wave 2).**
+>
+> 1. **`calendar_feeds.last_sync_status` gained a check constraint.** It was specified as a
+>    bare `text` with the allowed values in a trailing comment. The data-model *Conventions*
+>    require "enums as text + check constraints", and `20260718140050` already closed exactly
+>    this omission once, for `courses.grading_scale`. A comment is not a constraint.
+>
+> 2. **`courses.total_sessions_source text check in ('syllabus','feed_derived','manual')`** —
+>    new column, nullable, backfilled to `'feed_derived'` on all 7 seeded rows.
+>    **Why it had to exist before any exam detection ships:** the seeded `total_sessions`
+>    values were computed *from the feed*, so exam-detection step 1 (the "syllabus oracle")
+>    and step 3 (`max(sessionTo)`) are currently reading the same number by two different
+>    routes. Their agreement is a tautology, not corroboration. Without provenance nothing in
+>    the system can distinguish a syllabus-declared 30 from a feed-derived 30 — which is
+>    precisely how that circularity stayed invisible. A row only becomes a genuine step-1
+>    oracle when its source reads `'syllabus'`.
+
 All four tables: RLS enabled, per-operation policies on `(select auth.uid()) = user_id` —
 the `init_profiles` pattern. `set_updated_at()` triggers on feeds, items, and occurrences;
 `course_matchers` is insert/delete-only (no `updated_at`). `semesters`, `courses` and
@@ -1651,8 +1737,54 @@ feed regenerates lazily upstream anyway — so polling every N minutes buys litt
 3. If the project moves to Vercel Pro, flip the cron to `*/30 * * * *` and drop the
    on-demand trigger — one config change, the sync route is identical.
 
+> **ℹ️ RECORDED 2026-07-18 (Wave 2, CAL-2) — Alexander upgraded to Vercel Pro, so the
+> Hobby "1 cron/day" limit no longer binds. The cadence is nonetheless kept DAILY, and
+> deliberately.** `vercel.json` ships `"30 4 * * *"`. Point 3 above is now available as a
+> genuine one-line change (`"schedule": "*/30 * * * *"`) whenever it is wanted, but it is
+> not taken today because it would mostly burn invocations: the feed regenerates lazily
+> upstream, and the on-demand 30-minute staleness check already delivers fresh data
+> whenever Alexander actually looks at the app. The cron is a safety net for the days he
+> does not.
+>
+> ⚠ Note the second half of point 3 — "and drop the on-demand trigger" — should **not** be
+> followed even if the cron goes to `*/30`. On-demand is what makes the data fresh at the
+> moment of reading; a 30-minute cron still leaves a 30-minute worst case in front of a
+> user who has the page open.
+
+> **🔴 DISPROVEN 2026-07-18 (Wave 2, CAL-2) — a sync of this feed essentially NEVER reports
+> `unchanged`, so nothing may key staleness on the provider reporting no change.**
+> Measured against the live endpoint: it sends **no `ETag` at all**, its `Last-Modified` is
+> **always the current time**, and its body is **byte-unstable** because `DTSTAMP` is
+> re-stamped on every regeneration. All three §3.2 skip layers therefore miss, and every
+> observed run — including two back-to-back runs seconds apart during verification —
+> returned `status: "ok"` with a full diff rather than `unchanged`.
+>
+> Consequence: `selectStaleFeeds` keys on **`last_synced_at` only** (§3.1 step 1's own
+> wording, and now load-bearing rather than incidental). A rule phrased as "sync again once
+> the provider says nothing changed" would re-sync on every render. The three skip layers
+> stay in the code as an optimisation that may fire for a better-behaved feed; they are not
+> a mechanism anything is allowed to depend on.
+
 Per-feed concurrency guard: the sync engine takes the feed row with
 `select ... for update skip locked`; a second overlapping run skips silently.
+
+> **⚠ CORRECTED 2026-07-18 (Wave 2) — the guard is a LEASE; `for update skip locked` alone
+> would guard nothing here.** A row lock lives and dies with its transaction. This sync runs
+> over supabase-js/PostgREST, where **every statement is its own transaction**, and it spends
+> almost all of its wall-clock time inside an HTTP fetch of the ICS feed — outside the database
+> entirely. A `for update skip locked` issued from that client releases the instant the
+> statement returns, so a second run would take it a millisecond later and both would proceed.
+> It would read exactly like this spec and deliver none of its behaviour.
+>
+> The applied design (`claim_calendar_feed()`, migration `20260718175554`) keeps
+> `for update skip locked` for the job it genuinely does — making two *simultaneous claims*
+> serialise, with the loser skipping immediately rather than blocking — and adds
+> `calendar_feeds.sync_lease_expires_at`, a timestamp that outlives the transaction so the
+> claim still holds while the run is off fetching a URL. The lease **expires**, so a run that
+> crashes without releasing does not lock its feed out forever; that expiry is the whole
+> difference between a lease and a lock.
+>
+> The observable contract is unchanged: a second overlapping run skips silently.
 
 #### 3.2 Incremental sync (as incremental as ICS allows)
 
@@ -1667,6 +1799,35 @@ skipping work, in three layers:
 3. **Row-level diff**: parse, normalize, then upsert only occurrences whose payload
    actually changed (compare a per-row hash), so `updated_at` stays meaningful and
    triggers/realtime don't fire on no-ops.
+
+> **⚠ MEASURED 2026-07-18 (Wave 2) — for the IE feed, layers 1 and 2 never fire, and layer 3
+> is doing all of the work.** Two consecutive syncs seconds apart, against the live feed:
+>
+> - **Layer 1 never engaged.** The response carries **no `ETag`** — only `Last-Modified` — and
+>   the endpoint answered the conditional `If-Modified-Since` with a full `200`, not a `304`.
+> - **Layer 2 never engaged either.** The two bodies hashed **differently** despite describing
+>   an identical calendar. The feed regenerates content per request (its `Last Update`
+>   pseudo-row is a timestamp), so the SHA-256 of the body is effectively a nonce. This is not
+>   a bug to fix by hashing the parsed events instead: that would require parsing first, which
+>   is the only cost layer 2 exists to avoid.
+>
+> So on the real feed **every sync parses, and layer 3 is the only thing standing between a
+> no-op run and a full rewrite**. Layers 1 and 2 stay in the code — they are cheap, correct,
+> and a different feed will honour them — but the fixture effort belongs on layer 3.
+>
+> **This made a latent bug load-bearing.** The first implementation fingerprinted timestamps
+> as raw strings. The parser emits `2026-06-12T08:00:00.000Z`; PostgREST returns the same
+> `timestamptz` as `2026-06-12T08:00:00+00:00`. Same instant, different spelling — so **every
+> row compared as changed, and an idempotent re-run rewrote all 374 occurrences and all 374
+> items.** Only an end-to-end run against the real database exposed it; the in-memory tests
+> passed throughout, because they never round-tripped through Postgres's formatting.
+> Fingerprints now compare epoch milliseconds. Measured effect on a no-op second sync:
+> **374 writes → 0, and 190 s → 6.5 s** (a run that would have exceeded a serverless
+> function's time limit as the calendar grew).
+>
+> Item rows get the same treatment, which the spec above does not mention — it says
+> "occurrences". Restating an unchanged item still fires the `updated_at` trigger and still
+> costs a round trip, and there are as many items as occurrences.
 
 #### 3.3 UID-based dedup and the update/delete lifecycle
 
@@ -1702,14 +1863,50 @@ Rules, in order:
    a naked TZID that is *not* IANA-resolvable must fail loudly to a processing event rather
    than silently floating. This is what makes a class at "10:00 Europe/Madrid" stay at 10:00 local
    across the March/October DST transitions while its UTC representation shifts (the feed has
-   real events on both sides of both 2026 transitions — 27 Mar and 26 Oct — so the fixtures
+   real events on both sides of both 2026 transitions — ⚠ **CORRECTED 2026-07-18 (Wave 2): the
+   2026 transitions are 29 March and 25 October, not "27 Mar and 26 Oct"** — so the fixtures
    come from real data).
+
+   > **⚠ CORRECTED 2026-07-18 (Wave 2) — the transition dates in this section were wrong.**
+   > EU DST changes on the **last Sunday** of March and October. In 2026 those are **Sunday
+   > 29 March** (CET→CEST) and **Sunday 25 October** (CEST→CET), both at 01:00 UTC — verified
+   > against the platform IANA database. The previously-named "27 Mar / 26 Oct" are a Friday
+   > and a Monday respectively, and **26 Oct is already on the winter side of the change**, so
+   > a fixture pair built on those two dates would have straddled nothing in October and
+   > proved nothing. The committed fixtures now use event-bearing weekdays that genuinely
+   > straddle the real Sundays (27 Mar / 7 Apr, and 23 Oct / 26 Oct), and the tests assert the
+   > **local** time is unchanged on both sides — not just the UTC instant, which a
+   > UTC-pinning parser would also satisfy.
+   >
+   > Direction, for the record, since it is easy to invert: a 10:00 Madrid class is **09:00Z
+   > in winter (CET, +01)** and **08:00Z in summer (CEST, +02)**.
 3. UTC times (`...Z` suffix — the usual output for due dates) pass through.
 4. **Floating times** (no TZID, no Z) are interpreted in `profiles.timezone`
    (default `Europe/Madrid` — already in the schema).
 5. All-day events (`VALUE=DATE`) set `all_day = true` and are anchored to midnight in
    the profile timezone; views render them as dates, never times, so they can't drift
    across midnight for users who travel.
+
+   > **🔴 DISPROVEN 2026-07-18 (Wave 2) — the IE feed emits ZERO `VALUE=DATE`, and its
+   > actual all-day shape crashes ical.js.** Verified against the real export: `VALUE=DATE`
+   > appears **0 times**. All **20** all-day rows are written as a *date-only* `DTSTART`
+   > carrying a `TZID` and a `DURATION:P1D`, with no `VALUE=DATE` parameter at all —
+   > `DTSTART;TZID=Europe/Madrid:20260120`.
+   >
+   > Because the parameter is absent, ical.js's design layer types the property `date-time`,
+   > decodes it to the malformed jCal value `"2026-01-20T::"`, and **throws
+   > `invalid date-time value`**. This is not a mis-parse of one row: the throw propagates and
+   > fails the *entire feed*. Detecting all-day by testing for the `VALUE=DATE` parameter —
+   > the reading this rule invites — never even gets the chance to run.
+   >
+   > `parseIcsToNormalizedEvents` therefore repairs the value from the raw jCal **before**
+   > decoding (`readTime()`), and detects all-day from `isDate` as well as the parameter.
+   > Both shapes are covered by fixtures; the real-export test asserts all 20 rows parse.
+   >
+   > One clarification the rule already implies but is worth stating: the TZID on these rows
+   > is **ignored** when anchoring. RFC 5545 forbids a TZID on a DATE value, and honouring
+   > IE's would re-anchor the day in Madrid for a travelling user — the exact midnight drift
+   > this rule exists to prevent. Anchoring is always in `profiles.timezone`.
 6. Rendering always formats in `profiles.timezone`, so the stored UTC never leaks.
 
 #### 3.5 Recurring events (RRULE) — expand at sync, store occurrences
@@ -1892,6 +2089,30 @@ by the provider abstraction. Matching pipeline at sync time, first hit wins:
    the matched text, so the same feed pattern auto-links forever after. Manual
    assignment locks `course_id` against sync.
 
+> **✅ IMPLEMENTED AND PROVEN AGAINST THE LIVE FEED 2026-07-18 (Wave 2, CAL-2).**
+> The chain lives in `server/calendar/course-match.ts` and is shared by the sync path and the
+> read path, so the bucket can never show a grouping the next sync disagrees with. Two gaps
+> in the pre-existing sync matcher were closed: **step 1 (the feed-level `config.courseId`
+> pin) was not consulted at all**, and **step 3 matched `courses.title` only, never
+> `courses.code`**. Code matching is whole-word rather than substring — a two-letter code like
+> `MM` inside `SUMMER SCHOOL` would file an entire course under the wrong heading silently.
+>
+> Verified end to end on the real 220-row bucket, filing `FINANCE LAB` (32 events):
+> 1. a `course_matchers` row was written with `pattern = 'FINANCE LAB'`;
+> 2. all 32 items took the `course_id` **and** `user_locked_fields = {course_id}`;
+> 3. a **full sync afterwards left all 32 filed and locked** — the lock holds;
+> 4. with the locks and `course_id` then stripped by hand, leaving only the matcher standing,
+>    the next sync **re-linked all 32 through `course_matchers` alone** — which is the
+>    "auto-links forever after" clause, proven independently of the lock.
+>
+> (The verification assignment was deliberately wrong — `FINANCE LAB` is a 2025/26 spring
+> course, chosen only because it is the largest group — and was reverted afterwards. The
+> database is back at 154 matched / 220 unassigned / 0 matchers.)
+>
+> ⚠ Note `courses.code` is **null on all 7 seeded fall courses**, so step 3's code branch has
+> nothing to match today and every live match resolves by title. It is built and unit-tested,
+> not exercised by real data.
+
 #### 5.1b IE feed grammar, session parsing & exam detection
 
 *Verified against the real feed on 2026-07-18: 379 events, 2026-01-19 → 2026-12-18 (two
@@ -1979,6 +2200,30 @@ below.) Two observations from the real feed drive the **fallback** path:
   courses have feed rows incomplete relative to their true session count (see the revision
   below).
 
+  ✅ **DECIDED 2026-07-19 (Wave 2) — the `2` in that list was a FALSE POSITIVE.**
+  `ATTENTION MANAGEMENT FOR LEARNING` is **not a real course**. Alexander confirmed it, so
+  its detected "exam" (2026-09-25, session 2 of 2) is not an exam. It has been **rejected
+  through the UI** — `setExamDate`, so the `is_exam_candidate` lock is written by the real
+  code path — and the **course archived** (`courses.archived = true`). The panel now reads
+  6 courses, not 7.
+
+  ⚠ **This is the false positive the pre-implementation review predicted**, and it landed
+  exactly as described: a 2-session course whose last session is *trivially* "the final".
+  The general limitation is worth stating plainly, because it is not fixed:
+
+  > 🔴 **Known limitation: step 1 has no plausibility floor.** `detectExam` accepts any
+  > `courses.total_sessions` that is a finite number `> 0`. A 2-session course resolves
+  > "session 2 is the exam" with exactly the same machinery and the same reported confidence
+  > as a 30-session course, even though "the last of two sessions" carries essentially no
+  > evidence that an exam happened there. Nothing in the chain asks whether a course is long
+  > enough for a final to be a meaningful concept. The confirm gate is the only thing
+  > standing between that and a wrong date on the dashboard — which is an argument for the
+  > gate, not a substitute for a floor.
+
+  A floor was **not** added here: with one known instance, the honest fix is the user's
+  rejection (which is now durable and reversible), not a threshold guessed from a single
+  data point. Revisit if a second false positive appears.
+
 > **⚠ REVISED 2026-07-18 (Alexander's decision) — the syllabus session count is the PRIMARY
 > oracle, and max-session becomes the fallback.** The rule is now:
 > **the syllabus declares a total session count `N` → find the calendar event carrying
@@ -2012,6 +2257,72 @@ below.) Two observations from the real feed drive the **fallback** path:
 > paragraph ~293 of 420 — and a header-only parse silently produces confident nonsense.
 > Also expect combined headings (`SESSION 28 & 29`), which is why LOES shows 28 headings
 > spanning a 1..30 range.
+
+> **🔴 DISPROVEN 2026-07-18 (Wave 2) — none of the 3 syllabi on file describe a fall-2026
+> course, so the syllabus oracle currently has ZERO coverage of the build target.**
+> The syllabi were transcribed by hand (whole body, not header). Every one is a **2025-26,
+> DEGREE COURSE: FIRST, SEMESTER: 1º** document, and none matches any of the 7 normalised
+> fall-2026 courses:
+>
+> | Fixture | Real course title | Programme | Declared sessions | Maps to a fall-2026 course? |
+> | --- | --- | --- | --- | --- |
+> | `mathematics.pdf` | **APPLIED BUSINESS MATHEMATICS** | Dual Degree BBA & DBA | 30 | **No** |
+> | `marketing-fundamentals-sem1.pdf` | **MARKETING FUNDAMENTALS** | Dual Degree BBA & DBA | 30 | **No** |
+> | `bdba-loes-fall2025.docx` | **LEARNING TO OBSERVE, EXPERIMENT AND SURVEY** | BDBA | 30 (body) | **No** |
+>
+> The `mathematics.pdf` → `MATHEMATICS FOR DATA MANAGEMENT AND ANALYSIS` guess is **wrong,
+> and the feed proves it rather than merely failing to support it**: both names appear in the
+> *same* ICS export as **distinct courses**. `MATHEMATICS FOR DATA MANAGEMENT AND ANALYSIS`
+> holds 30 real fall events (2026-09-02 → 2026-12-18); `APPLIED BUSINESS MATHEMATICS` holds
+> **4** events, all June 2026 (`Final EXAM Retake June ABM30`, `Extra`, and the two Smowl /
+> Excel-upload proctoring rows already filtered as pseudo-events). It is a *spring 2025-26*
+> course seen only through its June re-sit. Likewise `MARKETING FUNDAMENTALS` (30 sessions) is
+> not `MARKETING MANAGEMENT` (20 sessions) — different title, different session count.
+>
+> Grouping the whole feed by normalised name splits cleanly at the term boundary: everything
+> from **2026-01-19 → 2026-06-26** is 2025/26 spring plus June re-sits (`FINANCE LAB`,
+> `MICROECONOMICS`, `COST ACCOUNTING`, `APPLIED BUSINESS MATHEMATICS`, …), and everything
+> from **2026-09-01 → 2026-12-18** is exactly the 7 fall courses. The three syllabi belong to
+> **Fall 2025**, which predates the feed window entirely.
+>
+> **Consequence for CAL-2:** step 1 of the detection chain (syllabus header session-count) and
+> step 2 (in-body `SESSION n` + inline exam labels) currently resolve for **0 of 7** fall
+> courses. Every fall course must resolve through **step 3, the `max(sessionTo)` fallback**,
+> until a fall-2026 syllabus is supplied. The chain's ordering is still right and the two
+> parsers are still validated against real documents — but do not build or test on the
+> assumption that a fall course has a syllabus behind it, and do not let the fallback's three
+> guards be treated as a rare path. **They are the only path today.**
+>
+> **Because of this, `assessments` was deliberately left EMPTY.** Writing these weights
+> against a fall-2026 course would have fabricated a syllabus→course link the evidence
+> contradicts. The transcriptions are recorded below instead, ready to insert if and when the
+> matching courses exist (the 2025/26 term has no `semesters` row — see the 2025/26 gap).
+>
+> **Transcribed evaluation tables** (verbatim weights; `session_number` only where the
+> syllabus states it inline; sanitized — no instructor names or contact details):
+>
+> - **APPLIED BUSINESS MATHEMATICS** (30 sessions) — Final Exam 40% (`SESSION #30`) ·
+>   Intermediate tests / Midterm 20% (`SESSION #12`) · Individual work (home exercises) 20% ·
+>   Class Participation 20%. ⚠ The document also states a *third-attempt* scheme
+>   (Deliverables 20% / Midterm 35% / Final 45%) — that is the re-taker path, **not** the
+>   ordinary call, and must not be transcribed as the course's weights. Pass gate: ≥4.0 on the
+>   final exam regardless of weighted average.
+> - **MARKETING FUNDAMENTALS** (`NUMBER OF SESSIONS: 30`) — Final Exam 30% · Group
+>   Presentation 25% · Intermediate tests 15% (3 × 5%) · Individual presentation 10% · Class
+>   Participation 10% · Other (peer evaluation) 10%. Totals 100%. No inline session labels for
+>   the exams, so **no `session_number` is derivable** beyond the declared total of 30.
+> - **LEARNING TO OBSERVE, EXPERIMENT AND SURVEY** (30 sessions, from the body) — Midterm Exam
+>   30% (`SESSION 19`) · Final Exam 25% (`SESSION 30`) · MC Quizzes 15% (5 × 3%) ·
+>   Participation 10% · Group Research Presentation 10% (`SESSIONS 28/29` — a **range**, so it
+>   does not fit the single `session_number` column) · 5 Experiments 5% · Discussion Board
+>   Posts 5%. Totals 100%. Pass gate: ≥3.5 on the final exam.
+>
+> **✅ CONFIRMS the attendance/participation split, in the syllabus's own words.** LOES states:
+> *"your attendance in class does not form part of your grade… your grade in this course will
+> not be affected by your attendance"* — while separately grading **Participation 10%**. The
+> two are independent: attendance is a zero-point pass/fail gate (`courses.absence_fail_pct`,
+> IE's universal 80% rule), participation is a graded `assessments` row. Never fold one into
+> the other.
 >
 > **Why this ordering is strictly better than max-session-first.** `max(sessionTo)` silently
 > conflates two different states: *"session N is the last one"* and *"session N is the last
@@ -2065,9 +2376,187 @@ two oracles:
 - Syllabus and feed genuinely disagree → surface as a conflict for one-tap resolution, never
   a silent pick.
 
+> **⚠ CORRECTED 2026-07-18 (Wave 2) — step 2 cannot key on `assessments.kind`, and the
+> `detection_source` enum above does not match the implemented chain.** Two findings from
+> building the detector:
+>
+> 1. **`kind` cannot identify the final.** `assessments.kind` is constrained to
+>    `('exam','quiz','project','participation','paper','other')` (migration `20260717161053`),
+>    so a final and a midterm are **both** stored as `'exam'` — no legal value contains the
+>    word "final". A step-2 predicate matching on `kind` is not merely dormant for want of
+>    rows; it is **structurally dead** and would silently fall through to the max-session
+>    fallback even after fall-2026 syllabi are loaded. The discriminator is
+>    **`assessments.title`** ("Final Exam", "In class Midterm Exam" — exactly as the real
+>    syllabi write it), gated on an exam-like `kind`. Where several exams carry session
+>    numbers and none is titled "final", the **highest session number** wins: the final is the
+>    last exam.
+> 2. **The `calendar_items.detection_source` check constraint predates the REVISED chain.**
+>    It allows `('syllabus_header','syllabus_body','max_session','manual')`, while the
+>    implemented chain reports `syllabus_total_sessions` (← `courses.total_sessions`),
+>    `assessment_session_number` (← `assessments.session_number`) and `feed_max_session`. The
+>    mapping is 1:1 but the names differ. The calendar migration has **not been written yet**,
+>    so nothing is broken today — whoever writes it must reconcile the two, and this note is
+>    the record that the divergence is known rather than accidental.
+>
+> **RESOLVED 2026-07-18 (Gate 2) — use the core's vocabulary.** Agent 2's calendar migration
+> must write the check constraint as
+> `('syllabus_total_sessions','assessment_session_number','feed_max_session','manual')`.
+> Rationale: the PLAN's original four names describe *where in a syllabus document* a number was
+> found (`syllabus_header` vs `syllabus_body`), which is a document-extraction concern from the
+> pre-revision design. The implemented chain distinguishes *which oracle answered*, which is what
+> the UI actually needs in order to label confidence, and `syllabus_header`/`syllabus_body` have
+> no distinct producer in the code. Keep `manual` (user override; no core equivalent because
+> `detectExam` is never consulted for one). Do **not** add a `pending` value — that outcome
+> produces no row, only an expected session number. If document-level provenance is ever wanted,
+> it belongs in a separate `assessments.source`-style column, not multiplexed into this one.
+
+> **⚠ TRUTH-IN-REPORTING, recorded 2026-07-18 (Gate 2) — the M1 DoD clause "the syllabus-first
+> exam chain picks a real exam date for 7 of 7 fall courses" is met CIRCULARLY, not genuinely.**
+> `courses.total_sessions` is seeded for all 7 fall courses, so the chain does resolve 7 of 7
+> through step 1 and does pick a real date. But Agent 0 seeded that column **from feed-derived
+> session counts** — `packages/db/supabase/seed/fall-2026-courses.sql` states its source as the
+> live IE ICS export normalized by §5.1b — and all 3 syllabi on disk are 2025-26 documents
+> matching none of these 7 courses. Verified against the live database: the seeded totals are
+> **identical to `max(sessionTo)` for 7 of 7** (ADS 30, MDMA 30, PDMA 30, P&S 35, MM 20, BPR 25,
+> AML 2). Steps 1 and 3 are therefore reading the same number by two routes, and agreement
+> between them is a tautology, not evidence.
+>
+> Consequences, all deliberate:
+> - The **syllabus oracle has never been exercised against real syllabus data.** Its only honest
+>   validation is the unit tests in `exam-detection.test.ts`, which feed it totals that
+>   deliberately disagree with the feed (the `pending` cases).
+> - Provenance is **not distinguishable at runtime**: `courses` has no `source` column for
+>   `total_sessions`, unlike `assessments.source ('manual','syllabus_extract')`.
+> - The data was **left as-is on purpose** — the seeded counts are correct, and rewriting them to
+>   manufacture an independent-looking oracle would be worse. This is a reporting correction.
+> - `real-feed.test.ts` now asserts the equality outright, so the circularity is a tested fact.
+>   When a real fall-2026 syllabus disagrees with the feed, that test fails — and that failure is
+>   the signal the oracle has finally become independent.
+>
+> **Do not report this DoD clause as satisfied evidence that syllabus-first detection works.**
+> It demonstrates that the chain runs end to end on real data and picks correct dates; it does
+> not demonstrate the syllabus path is right.
+
+> **✅ ADDRESSED IN THE UI 2026-07-18 (Wave 2, CAL-2) — the circularity is now visible to the
+> user, not just recorded here.**
+> The truth-in-reporting note above was a warning to *readers of this document*. It is now
+> also a runtime behaviour: `buildExamStatuses` (`server/calendar/exam-status.ts`) computes a
+> **confidence** from `courses.total_sessions_source`, never from the detector's own
+> `source`, and the UI labels the answer from that.
+>
+> Concretely, a `syllabus_total_sessions` detection whose course records `feed_derived`
+> renders as **"From the feed"**, in amber, with the line *"Session count was read off this
+> feed, not a syllabus — the calendar is agreeing with itself."* On the live database that is
+> all 7 of 7 fall courses. The panel header additionally states *"7 of these were derived from
+> the calendar feed itself — the session count and the exam date come from the same place, so
+> them agreeing proves nothing."*
+>
+> The detector's vocabulary is deliberately left alone: `detectExam` still reports
+> `syllabus_total_sessions`, because that IS the step that answered. Provenance is a property
+> of the *data*, not of the step, and conflating the two is what made the circularity
+> invisible in the first place. When a real fall-2026 syllabus arrives and
+> `total_sessions_source` becomes `'syllabus'`, the same row starts reading "From the
+> syllabus" with no code change.
+>
+> ⚠ Also note the three outcomes are re-derived **at read time** rather than read back from
+> `calendar_items`. Only `found` leaves a row (`is_exam_candidate` + `detection_source`);
+> `pending` produces no row at all, just an expected session number. Reading the column alone
+> would make *"exam not yet published, expect session 30"* indistinguishable from *"no exam"*
+> — which is the exact distinction the REVISED chain exists to draw.
+
 Either way the result passes the
 **mandatory human confirm** gate — exam dates are both date-critical *and* grade-critical, the
 two gates deliberately reserved by the Human-reversible-AI principle.
+
+> **✅ IMPLEMENTED 2026-07-18 (Wave 2, CAL-2).** The gate is `confirmExamDate` in
+> `app/(app)/calendar/item-actions.ts`, surfaced as **Confirm / Not an exam** on every row of
+> the exam panel. Confirming writes `detection_source = 'manual'` and adds
+> `is_exam_candidate` to `user_locked_fields`; rejecting clears the flag and locks it the same
+> way, so a wrong guess stays rejected instead of being re-derived by the next sync. Nothing
+> is recorded as confirmed truth without that explicit action — a detected date renders as a
+> proposal until then. A syllabus/feed disagreement surfaces on the same row as a one-tap
+> conflict (`ExamStatus.conflict`), never a silent pick.
+
+> ✅ **DECIDED 2026-07-19 (Wave 2) — exam dates are USER-EDITABLE after detection, and no
+> state is a dead end.** Alexander's requirement: the six remaining exam dates look right,
+> but he must be able to change them later. The 2026-07-18 gate above satisfied "confirm or
+> reject" and nothing more, and two of its properties turned out to be defects:
+>
+> - **Rejection was a one-way door with no visible effect.** It wrote `is_exam_candidate =
+>   false` with no marker distinguishing it from "never touched" — and because
+>   `buildExamStatuses` **re-runs the chain at read time**, the very next render re-detected
+>   the same session and displayed it again. "Not an exam" was a button that appeared to do
+>   nothing, and there was no way back from it either.
+> - **The wrong session could not be corrected.** Only the detector's own candidate could be
+>   accepted or refused; if it picked the wrong session there was no path to the right one.
+>
+> Three intents replace the two (`setExamDate`): **set** a session as the exam, **reject** the
+> course's exam entirely, **reset** back to letting detection propose. `set`/`reject` name a
+> session; `reset` names a *course*, because after a rejection there is no session left to
+> point at — that asymmetry is precisely what made rejection terminal.
+>
+> - A rejected course **stays in the panel**, reading *"You said this course has no exam"*,
+>   with Undo beside it. A row that disappears is a decision that cannot be found again.
+> - **Exactly one `is_exam_candidate` per course** is *planned* in `planExamDecision`, a pure
+>   function unit-tested over its own output — including from a corrupted two-candidate start.
+>   The UI is not trusted to maintain the invariant and neither is the action.
+>
+>   ⚠ **CORRECTED 2026-07-19 (Wave 2) — planning it correctly never made it TRUE.** The line
+>   above said "enforced", and it was not. The action applies the plan as N separate
+>   non-transactional UPDATEs, so two concurrent `set`s each plan correctly against a
+>   one-candidate world and both apply, leaving two rows at `detection_source = 'manual'`;
+>   `items.find(isUserChosen)` then returns whichever comes back first. And no concurrency is
+>   needed for the second hole: **sync runs under `createAdminSupabaseClient`**, which reaches
+>   neither RLS nor the Server Action, so a detector answer that moves after a manual pick
+>   flags a second row on its own.
+>
+>   The guarantee now lives in the database — migration `20260718235227`, a partial unique
+>   index `calendar_items_one_exam_per_course on (course_id, user_id) where is_exam_candidate`
+>   — for the same reason as the tenant-scoped FKs (RLS strategy rule 7): the database is the
+>   only layer every writer shares. `course_id is null` rows are deliberately unconstrained
+>   (NULLs are distinct in a unique index); "one exam per course" says nothing about a row with
+>   no course, and `nulls not distinct` would collapse every unmatched item into one shared
+>   slot. Verified against live data before applying: 6 candidates, one per course, 0 unmatched.
+>
+>   Two consequences the index forced, both now covered by tests:
+>   - **Clears must be applied before sets.** A partial unique key can only be an index, and
+>     indexes cannot be `DEFERRABLE`, so a legitimate "move the exam" that flags the new
+>     session first is rejected. `orderExamPatches` sorts the plan; `planExamDecision` stays a
+>     statement about rows, not about write order.
+>   - **A unique violation is a sentence, not a 500** — *"Another change set this course's exam
+>     date first. Reload to see the current one, then try again."*
+> - Every decision locks `is_exam_candidate` via `user_locked_fields`; **`reset` removes the
+>   lock**, since leaving it would pin the row to its reset value forever.
+>
+>   ⚠ **CORRECTED 2026-07-19 (Wave 2) — the lock is written to a ROW, but the decision is about
+>   the COURSE.** `markExamCandidates` checked the lock per item, so once the user picked a
+>   different session than the detector, sync happily flagged the detector's pick as well — a
+>   second candidate for the same course. Two consequences, and the first was observed on the
+>   live feed rather than theorised: with the new unique index that write is rejected, and
+>   because `syncFeed` turns any throw into `{ status: "error" }`, **one course's disagreement
+>   took the entire feed's sync down** (`last_sync_error` read *"duplicate key value violates
+>   unique constraint calendar_items_one_exam_per_course"* while the exam panel looked fine).
+>   The second: after a rejection it would re-propose a *different* session of a course the
+>   user had just said has no exam.
+>
+>   Sync now skips `is_exam_candidate` for **every item of any course carrying the lock**,
+>   which is what the buttons already promise ("Sync won't change it" / "Sync won't flag it
+>   again") and what `reset` undoes by dropping the lock. It also orders its own writes
+>   clears-before-sets, for the same non-deferrable-index reason as the user path — that case
+>   needs no user and no concurrency at all, only a detector answer that moves. Both are
+>   regression-tested in `sync.test.ts` against a memory store that enforces the index, and
+>   both assert the sync **outcome**, not just the rows: a version that trips the index leaves
+>   the rows looking correct because the write simply never landed.
+> - Two existing columns carry the decision, so this needed **no migration and no new
+>   `detection_source` value**: `'manual'` + flag set = *the user chose this*; the lock + flag
+>   clear = *the user said no*. No oracle writes either, so both are unambiguously human.
+> - 🚨 **The confirm gate and the honesty signal are both untouched.** Nothing becomes
+>   confirmed without an explicit action, and no action on this panel can reach the
+>   confidence chip — it is computed from `courses.total_sessions_source` alone. Confirming
+>   says *which session*, never *where the session count came from*.
+>
+> The 6 remaining exams were deliberately **left unconfirmed and editable**: Alexander said
+> they look correct but hedged, and the confirm click is his to make.
 
 #### 5.2 Grade-impact weighting
 
@@ -2132,6 +2621,29 @@ Flow:
 4. Saved as `calendar_items` with `source = 'manual'`, `feed_id = null`, generated UID,
    one occurrence row. Untouchable by sync.
 
+> **⚠ PARTIALLY IMPLEMENTED 2026-07-18 (Wave 2, CAL-2) — step 4 is done; steps 1–3, the
+> natural-language parse, are NOT BUILT and are deferred to CAL-3/M2.**
+> What ships is the structured form only (`components/calendar/quick-add-form.tsx` →
+> `createQuickAddItem`). It writes `source = 'manual'`, `feed_id = null`, a generated UID and
+> one occurrence row, and `planTombstones` skips every item with a null `feed_id`, so manual
+> entries are genuinely untouchable by sync. Local date+time convert through
+> `wallClockToUtcIso` against `profiles.timezone` — verified live: 23:59 on 18 Sept saved as
+> `21:59Z`, correct for CEST.
+>
+> The parse is out of scope because it needs the `packages/ai` provider layer and a versioned
+> `definePrompt`, neither of which exists in Wave 2 — and adding an `@ai-sdk/*` import at the
+> call site would put a model call outside `packages/ai`, which CLAUDE.md forbids outright.
+> This is not a stopgap: §6 step 3 already designates the structured card as *"the fallback,
+> not a separate feature"*, so what exists is the floor the parse will land on. `quickAddSchema`
+> is deliberately field-for-field with `quickAddParseSchema` minus `confidence`, so wiring the
+> parse in later adds a caller rather than a rewrite.
+>
+> ⚠ One schema note worth keeping: blank numeric fields must parse to **null, never 0**.
+> `z.coerce.number()` turns `""` into `0` quite happily, which would make a left-blank "Worth"
+> claim the item is worth 0% of the grade — a different and wrong statement that also changes
+> its priority tier. `blankToNull` short-circuits before coercion rather than unioning with
+> `z.literal("")`.
+
 ### 7. The "This week" view
 
 Lives as the top section of the dashboard (and standalone at `/calendar`). One RSC, one
@@ -2158,6 +2670,98 @@ items → courses, plus the trailing overdue set. Composition, top to bottom:
 
 Empty state ("no deadlines this week") explicitly shows the horizon section — the
 correct feeling is "clear this week, exam in 9 days," never false calm.
+
+> **🔴 CORRECTED 2026-07-18 (Wave 2, CAL-2) — part 3 would have been PERMANENTLY EMPTY as
+> written, because every event this feed publishes is a `class`.**
+> All 374 synced rows classify as `kind = 'class'`: the IE feed is a timetable, and a final
+> exam is simply the last *session* of a course, carrying `(Ses. 30)` like any other. Read
+> literally, §7 put all seven finals into **part 4, the week grid** — the section this spec
+> itself calls "deliberately visually secondary" — and left **part 3, the ranked deadline
+> list, empty forever**. "On the horizon" was empty too, since it filters classes out, so
+> the one promise it exists to keep ("a big exam never ambushes from just outside the
+> window") could never fire. Verified in a browser at a pinned 2026-12-07: three finals
+> that week rendered as small grey chips in the class strip and nothing at all in the
+> ranked list. **The full verify chain was green the whole time.**
+>
+> Resolution: `calendar_items.is_exam_candidate` promotes a row to `deadline` for ranking,
+> weighting and placement (`rankedKind` in `week-view.ts`). An exam is not context. It also
+> lifts the row's default weight from a class's 0% to a deadline's 5%, since a 0%-weight
+> final sorts below a 5% homework task under the §5.2 score.
+>
+> This is a **restatement of §7's own principle**, not a departure from it: *classes are
+> context, deadlines are the payload*. The feed's `kind` column describes what the
+> university scheduled; it does not describe what the student has to survive.
+
+> **⚠ CLARIFIED 2026-07-18 (Wave 2, CAL-2) — part 6 is NOT scoped to the week query.**
+> The Unassigned bucket is queried separately and unbounded. Its 220 live rows are 2025/26
+> spring events running 19 Jan → 26 Jun 2026, so scoping it to the week view's −30d/+180d
+> range showed an *empty* bucket while 220 rows sat unmatched. Filing a pattern is also
+> inherently about every event of that course, past ones included.
+>
+> It is additionally **grouped by course-name pattern and collapsed by default** (15 rows,
+> one line, one click to expand). §5.1's "surface it at the top of the calendar page" is
+> unworkable at 220 individual rows — it is a wall that pushes the actual deadlines below
+> the fold at every viewport. Grouping also makes one click worth making: assigning a
+> pattern files that course's entire history *and* writes the `course_matchers` row that
+> files all its future events automatically.
+
+> ✅ **DECIDED 2026-07-19 (Wave 2) — the bucket surfaces ACTIONABLE items; a finished term is
+> demoted, not deleted.** Grouping and collapsing were not enough. Once the 2025/26 Spring
+> term was decided against ever being seeded (see the M1 note), **all 217 visible unmatched
+> items are permanently in the past** — verified: 217 past occurrences, **0 current or
+> future**. So the collapsed line read *"217 across 15 courses"* forever, above the
+> deadlines, about work that finished in June.
+>
+> That is worse than clutter. The bucket's entire justification is that it is *actionable*;
+> a count that never falls and never matters teaches the reader to skip it, and then it gets
+> skipped on the day it finally carries something from this term.
+>
+> `partitionUnassigned(groups, now)` splits on **"is anything in this group still to come"**,
+> keyed on the group's LAST event (a course running Jan→Dec is live in July; keying on the
+> first would bury it):
+>
+> - **Anything still to come** → the section renders as before, counting only the actionable
+>   groups, with a *"N more from earlier terms"* sub-disclosure underneath.
+> - **A finished term only** → one muted line, no border, no background, below everything:
+>   *"217 unmatched entries from earlier terms"*, expanding on click.
+>
+> **No rows are hidden from the user and none are deleted — this is a display decision.** The
+> history stays reachable for two reasons: filing a finished course still writes the
+> `course_matchers` rule that auto-links it if it ever returns, and 217 rows that no surface
+> renders are 217 rows nobody can ever find, which is the failure the bucket exists to
+> prevent. Verified against real data at both ends: pinned to today the bucket is one quiet
+> line; pinned to 2026-03-01 it renders 209 actionable items across 13 courses with 8
+> historical behind the sub-disclosure.
+
+> ✅ **DECIDED 2026-07-19 (Wave 2) — archiving a course excludes it from NEW matching, and
+> existing item links SURVIVE.** Found while archiving `ATTENTION MANAGEMENT FOR LEARNING`.
+> Archiving must stop a course claiming newly synced events, or a course archived in June
+> keeps absorbing them forever — so archived courses are dropped from the sync's match
+> context. ⚠ **That alone was destructive**: `matchCourse` returns `null` for "no answer",
+> `toSyncedItemPayload` copies it into `course_id`, and the diff then wrote `course_id →
+> null` on every already-linked row, tipping a whole archived course into the Unassigned
+> bucket. `preserveCourseLink` closes it with the rule **matching is additive** — it may give
+> an unassigned item a course, it may move an item when it positively identifies a different
+> one, it may never take a course away on the strength of having no opinion. The same hole
+> fired on a course rename and on a deleted `course_matchers` row. Verified end-to-end: after
+> archiving and **two real syncs against the live IE feed**, both items stayed linked and the
+> unassigned count stayed at 217.
+
+> **🎨 MEASURED 2026-07-18 (Wave 2, CAL-2) — the heat-ramp badge failed WCAG AA in light
+> mode and `--urgency-medium` was retuned.**
+> The badge renders 11px text in an urgency colour on a low-alpha tint of that *same*
+> colour, which is by construction the closest possible surface to the text on it. Measured
+> through the browser's own OKLCH→sRGB gamut mapping (nine of these tokens are outside
+> sRGB, so computed OKLCH reports optimistically): at the original 12% tint,
+> `--urgency-medium` came out at **4.19:1 — an AA failure** — while overdue/high/done
+> cleared 4.5 only narrowly at 4.57–4.75.
+>
+> Fix, in two halves: `--urgency-medium` darkened `oklch(0.55 0.1 78)` → `oklch(0.52 0.09
+> 78)`, and the light-mode tint eased 12% → 10%. Every tier now measures ≥ 4.70:1 (light)
+> and ≥ 4.86:1 (dark). Chroma dropped alongside lightness because medium must still *read*
+> as dimmer than high, and after the change it is no longer meaningfully lighter than it —
+> saturation now carries that distinction. `e2e/weight-badge-contrast.spec.ts` pins both
+> halves so neither can be reverted alone.
 
 ### 8. Milestones & dependencies
 
@@ -4529,13 +5133,36 @@ uploads every lecture's materials (topic pages appear minutes later).
   outside** — so guard 2 of the exam-detection rule (candidate must sit inside term bounds)
   now has real data to test against and passes on the whole term.
 
-  ⚠ **Gap: the 2025/26 Spring term has no `semesters` row.** The feed's other 225 events run
-  2026-01-19 → 2026-07-18 and belong to the academic year that just ended, not to
-  `2026/27 Spring`. That matters because the historical decks and syllabi in
-  `.local-fixtures/` are from that term, so any exam-detection test run against the *sample*
-  data has no term bounds to check. Seeding it needs the **2025-2026** academic calendar,
-  which is not on file — and its end date cannot be inferred from the feed, since the
-  Jun–Jul events are the retake period rather than classes.
+  ✅ **DECIDED 2026-07-19 (Wave 2) — the 2025/26 Spring term will NOT be seeded. It is over.**
+  Resolves the gap below rather than leaving it open: Alexander confirmed the term has ended,
+  so it needs no `semesters` row and the missing 2025-2026 academic calendar stops being an
+  input anyone is waiting for.
+
+  Two consequences, both accepted and both now handled as **display**, not data:
+
+  1. **217 visible items stay permanently unmatched** (220 rows, 3 hidden). No rows are
+     deleted — they are real history, and filing one still writes the `course_matchers` rule
+     that would auto-link the course if it ever returns.
+  2. ⚠ The Unassigned bucket had been shouting *"217 across 15 courses"* at the top of the
+     calendar page **forever**, about work that finished in June and can never become urgent.
+     A count that never falls and never matters trains the reader to skip the bucket — and
+     the bucket only earns its position by being actionable. It is therefore **partitioned by
+     "is anything in this group still to come"** (`partitionUnassigned`): actionable groups
+     render as a normal section, a finished term renders as one muted line with no panel
+     chrome. Today that means the bucket is visually quiet, because zero unmatched items are
+     current or future. See §7 part 6.
+
+  > ⚠ ~~**Gap: the 2025/26 Spring term has no `semesters` row.**~~ The feed's other 225 events run
+  > 2026-01-19 → 2026-07-18 and belong to the academic year that just ended, not to
+  > `2026/27 Spring`. That matters because the historical decks and syllabi in
+  > `.local-fixtures/` are from that term, so any exam-detection test run against the *sample*
+  > data has no term bounds to check. Seeding it needs the **2025-2026** academic calendar,
+  > which is not on file — and its end date cannot be inferred from the feed, since the
+  > Jun–Jul events are the retake period rather than classes.
+  >
+  > (Superseded by the decision above. The `unbounded` flag in `boundsFlags` is what makes
+  > this harmless: a candidate with no covering semester row is flagged and KEPT, never
+  > discarded — so the absent row costs a confidence signal, not a date.)
 
   **Still outstanding, in priority order:**
   1. ✅ ~~**Lecture decks**~~ — **supplied 2026-07-18.** `.local-fixtures/decks/` holds 10
@@ -4548,11 +5175,35 @@ uploads every lecture's materials (topic pages appear minutes later).
      (Kotler 156 MB — over the 50 MB cap, so it is also the `validate`-rejection test case;
      Corporate Finance 42 MB; Business in Action 12 MB). The Deep-review DoD clause has real
      material to run against.
-  3. 🟡 **Fall-2026 syllabi** — 3 syllabi are now on file (`marketing-fundamentals-sem1.pdf`,
-     `bdba-loes-fall2025.docx`, `mathematics.pdf`) and the revised §5.1b exam chain resolved
-     **2 of 2** of them, but they are past-term documents; a syllabus for a *fall-2026*
-     calendar course is still wanted to exercise syllabus→calendar matching on a real pair.
-     **Not blocking.**
+  3. ✅ **DECIDED 2026-07-19 (Wave 2) — no fall-2026 syllabus exists yet, so the exam chain
+     stays circular BY ACCEPTANCE and stops being a blocker.** Downgraded from 🔴 BLOCKING.
+     Alexander confirmed there is no accurate fall-2026 syllabus to supply, so there is
+     nothing to wait for and no workaround is to be attempted. The consequences are recorded
+     rather than engineered around:
+     - `courses.total_sessions_source` stays `'feed_derived'` on **all 7** courses. That is
+       the honest label: the counts were read off the same feed the exam date comes from.
+     - Steps 1 and 3 of the §5.1b chain therefore remain one oracle read twice, and a
+       "7 of 7 resolved" result remains a tautology. **The UI must keep disclosing this** —
+       see the exam panel's `feed_derived` chip and its "the calendar is agreeing with
+       itself" line, which are computed from `total_sessions_source` and from nothing else.
+     - ⚠ **Confirming an exam date must never upgrade that label.** A user agreeing with the
+       calendar is not independent corroboration. Guarded by
+       `exam-status.test.ts` → *"confirming never upgrades provenance"*.
+
+     The original text is kept below, because it still describes what a syllabus WOULD buy
+     if one ever arrives:
+
+     > 🔴 ~~**Fall-2026 syllabi — now BLOCKING for the syllabus oracle, upgraded from 🟡 on
+     > 2026-07-18 (Wave 2).**~~ 3 syllabi are on file (`marketing-fundamentals-sem1.pdf`,
+     > `bdba-loes-fall2025.docx`, `mathematics.pdf`) and the revised §5.1b chain resolves
+     > **3 of 3** as documents — but **0 of 3 describe a fall-2026 course**, so the oracle
+     > covers **0 of the 7** courses CAL-2 actually builds against. All three are 2025-26
+     > first-year semester-1 documents; `mathematics.pdf` is *Applied Business Mathematics*,
+     > which the feed carries as a **separate course** from `MATHEMATICS FOR DATA MANAGEMENT
+     > AND ANALYSIS` (see §5.1b). Every fall course therefore resolves through the
+     > `max(sessionTo)` fallback today. **A fall-2026 syllabus is the single highest-value
+     > input Alexander can supply**; one file would move a course from the guarded fallback to
+     > the primary oracle.
   4. ✅ ~~IE's pass mark~~ — **resolved 2026-07-18: 5/10.**
   5. 🟡 **Inngest app sync** — only possible once `/api/inngest` is deployed; needs the
      production hostname, which appears nowhere in the repo.
@@ -4569,9 +5220,24 @@ uploads every lecture's materials (topic pages appear minutes later).
   Navigate + Appearance only (Actions and Search need the deadline model and the pipeline);
   the two signature motions (hero-number roll, sync-pulse) are specified but unimplemented;
   `/calendar` and `/documents` are designed teaching empty states, not features.
-  **Defects carried:** sticky table headers are inert (see *Component conventions*);
-  outline-variant button borders sit at ~1.33:1 against a 3:1 floor (inputs were fixed,
-  buttons missed); `notFound()` returns HTTP 200 (no data leaks — verified); and there is
+  **Defects carried:** ~~sticky table headers are inert~~ — **✅ resolved 2026-07-18 (Wave 2)**,
+  see *Component conventions*: sticky is now opt-in via `Table`'s `containerClassName`, and the
+  three inert usages were removed. ~~outline-variant button borders sit at ~1.33:1 against a
+  3:1 floor (inputs were fixed, buttons missed)~~ — **✅ resolved 2026-07-18 (Wave 2), and the
+  diagnosis was understated.** 🔴 **DISPROVEN 2026-07-18:** the figure was never 1.33:1 as
+  rendered. The cva base carried `border-transparent` and the `outline` variant tried to
+  override it with an equal-specificity utility, so the winner was whichever Tailwind emitted
+  later — and it emits `.border-transparent` (offset 27181) *after* `.border-input-border`
+  (26858). The outline border therefore resolved to `rgba(0,0,0,0)`: **invisible, a 1.00:1
+  edge**, not a low-contrast one. ~1.33:1 was a *token* comparison; no rendered pixel ever
+  measured it. Fixed structurally — the base sets border *width* only and every variant names
+  its own colour, so each button carries exactly one border-colour utility and ordering cannot
+  decide it. ⚠ **CORRECTED 2026-07-18:** dark `--input-border` was also wrong (see
+  `globals.css`) — annotated 4.12:1 but measured 2.83:1, because its own alpha was never
+  composited onto the dark backdrop; raised 35% → 40%. This means **Wave 1's input fix was
+  itself failing SC 1.4.11 in dark**, not just the buttons. Now 3.44:1 (light) / 3.27:1 (dark)
+  from rendered pixels, locked by `e2e/control-border-contrast.spec.ts`.
+  `notFound()` returns HTTP 200 (no data leaks — verified); and there is
   **no favicon, PWA manifest or app icon of any kind**, so a deployed app shows the browser's
   default globe.
 
@@ -4614,8 +5280,12 @@ uploads every lecture's materials (topic pages appear minutes later).
   superseded primary algorithm.)
   This Week shows deadlines ranked by grade impact; a lecture that **disappears** from the
   feed is tombstoned (hidden at 24 h, deleted at 7 d) and restores its `course_id` and
-  completion state if it reappears; events on both sides of the 27 Mar / 26 Oct DST
+  completion state if it reappears; events on both sides of the **29 Mar / 25 Oct** DST
   transitions land at the right local time (fixture-tested from the real export).
+  (⚠ **CORRECTED 2026-07-18 (Wave 2 review)**: this clause still named "27 Mar / 26 Oct" after
+  §3.4 was corrected — the two markers contradicted each other for the length of the branch.
+  The real 2026 EU transitions are the last Sundays, **29 March** and **25 October**; the
+  committed fixtures straddle them with real events on 27 Mar / 7 Apr and 23 Oct / 26 Oct.)
 - Every new table has RLS policies; every AI call appears in `ai_generations` with cost;
   `AI_KILL_SWITCH=true` verifiably stops all spend.
 - **🟡 MOSTLY MET (Wave 1, 2026-07-18)** Auth: a visitor to the domain root hits the
@@ -4742,7 +5412,7 @@ real course schedule, with weak spots feeding the same daily review queue.
 | **Born-active AI ships a bad artifact** — the default-active flip removes the mandatory per-item approval gate | Medium / Low | Critic holds the flagged minority; every artifact is reversible (edit / suspend / revert) so a slip costs seconds; mandatory confirm retained where a wrong item is silent + expensive (grade weights, deadlines); "hardest cards today" surfaces bad cards at review time |
 | **Access-code gate is a soft secret** — a leaked code + shared provider keys (Anthropic + Gemini) let a new signup drain the global AI budget | Medium / Medium | ⚠ Corrected 2026-07-18 to what actually shipped: a **single `ACCESS_CODE`** env value, `proxy.ts`-enforced and **rotatable** (each gate cookie is derived from the code, so changing the value revokes every issued cookie); **per-invite codes are deferred to M4** with no table planned before then. The `AI_MONTHLY_BUDGET_USD` guard + kill switch bound total spend; per-user metering added before opening the code widely (tracked in M1 auth item / M4 multi-user hardening) |
 | **Slide decks tokenize heavier than modeled** (~2K/slide assumed; image-dense decks hit 3K+, and a big deck can cross Gemini's 200K long-context surcharge, $2→$4/M in) → doc-structuring cost balloons | Medium / Medium | per-provider `ai_generations` rollup watched after first real decks; Gemini batch (−50%) on offline backfills; PPTX text path is 10× cheaper; re-point `doc-structuring` to a cheaper model in one line if needed; budget guard defers background jobs at 100% of `AI_MONTHLY_BUDGET_USD` |
-| **Vercel Hobby limits bite** (300 s function ceiling, 1 cron/day) | Medium / Low | Inngest steps are each < 300 s by design; on-demand staleness sync makes daily cron a safety net only; Pro upgrade (800 s, unlimited crons) is the escape hatch, not a re-architecture |
+| ~~**Vercel Hobby limits bite** (300 s function ceiling, 1 cron/day)~~ ✅ **RETIRED 2026-07-18 — upgraded to Pro** (open question 6). The escape hatch was taken before the risk materialised, for two reasons: item 5's visual-deck extraction is a single Inngest step against a 300 s ceiling, and CAL-2's daily sync had already consumed the whole Hobby cron allowance. | ~~Medium / Low~~ n/a | Retained for history: Inngest steps were each < 300 s by design; on-demand staleness sync made the daily cron a safety net only. Pro (800 s, frequent crons) now removes both constraints — this was always an upgrade, never a re-architecture. |
 | **ICS feed fidelity** — verified 2026-07-18 (§3.4–3.6, §5.1b): zero `VTIMEZONE` blocks behind 738 naked `TZID`s, zero `STATUS:CANCELLED` (cancellation shows only as disappearance), `DESCRIPTION` **present but blank** on all 379 events (literal `\n\n` on 378; the 379th holds a "Last Update Time" string — ⚠ corrected 2026-07-18 from "empty": a truthiness test sees a value, so blank-detection must `.trim()`), and a dirty free-text `SUMMARY` grammar carrying the course + session number | **Certain / Medium** (no longer speculative — these are measured properties) | IANA fallback is the *primary* TZID path, and a non-resolvable TZID fails loudly to a processing event; the tombstone grace period (24 h hide, 7 d delete) is the **only** cancellation detector, so it carries the CAL-1 fixture effort; weights come from `assessments` (manual/syllabus-extracted) rather than the feed; the §5.1b normalizer is spec'd against real dirty samples and keeps `raw_summary` so rules can be re-run after a fix |
 | **TS 7 / ecosystem gap** (already hit at scaffold: Next 16 needs the JS compiler API) | Certain / Low | Pinned to TS 5.9 with a documented revisit; no code depends on TS 7 features |
 | **Node-side Pyodide for the lesson validation gate proves brittle on Vercel** | Medium / Low | Explicit spike early in CT-2; documented fallback = validate in-browser on first open ("checking lesson…" state) |
@@ -4802,6 +5472,25 @@ real course schedule, with weak spots feeding the same daily review queue.
    `GOOGLE_GENERATIVE_AI_API_KEY`, `CRON_SECRET`, `AI_KILL_SWITCH`, `AI_MAX_TIER`,
    `AI_MONTHLY_BUDGET_USD`), landing with items 2 / 2b / 4 / 5 / 8 per the mapping in the M1
    progress note. `DEV_ICS_URL` is local-only and deliberately excluded.
+   ⚠ **Naming drift, resolved 2026-07-18.** The two Inngest values were stored as
+   `INGEST_SIGNING_KEY` / `INGEST_EVENT_KEY` — missing the second `n` — in **both**
+   `.env.local` and the Vercel dashboard. This plan always spelled them correctly, so the
+   drift was invisible *here* and would have surfaced only as a confusing runtime failure
+   the moment item 2 wired them. **Both sides are now renamed to `INNGEST_*` and verified.**
+   The lesson generalises to the seven values still unwired: a key's *presence* in
+   `.env.local` says nothing about its *name* matching what `env.ts` will ask for, and
+   nothing validates the pair until the item that consumes it ships.
+   ✅ **DECIDED 2026-07-18 — `CLOUDCONVERT_API_KEY` scopes: `task.read` + `task.write`,
+   nothing else.** `task.write` creates the PPTX→PDF job; `task.read` polls it and retrieves
+   the export URL. `webhook.*` is **deliberately declined**: a CloudConvert callback needs a
+   public non-GET endpoint, and the access-code gate already carries one unavoidable
+   exception (`/api/inngest`, authenticated by its signing key rather than the gate). A
+   second non-GET hole for a conversion that completes in seconds is a bad trade, so the
+   conversion is **polled inside the Inngest step**. `user.*` (account/credit info — the
+   ~$0.01/deck is noise against LLM spend) and `preset.*` (the conversion is defined inline)
+   are unused. CloudConvert's **Sandbox** offers a separate key that converts whitelisted
+   files without consuming credits — noted as an option for exercising the conversion step
+   in CI later, not adopted now.
    ✅ **DECIDED 2026-07-18 — keep the Supabase Free plan and the 50 MB cap.** The real corpus
    showed one document over it (*Kotler, Principles of Marketing*, **156 MB**; *Principles of
    Corporate Finance* 42 MB and *Business in Action* 12 MB both fit). Alexander shrinks
@@ -4891,8 +5580,19 @@ real course schedule, with weak spots feeding the same daily review queue.
    The cost model assumes ≈ $35–60/month AI spend at full usage against a $75 soft cap
    (two-provider network, AI strategy §4); if the value set differs from 75, the guard
    thresholds in §6 scale off it, and the §4 planning range is unaffected.
-6. **Vercel plan**: Hobby works for M1 by design; Pro (~$20/mo) buys 800 s functions +
-   frequent crons and removes two mitigations. Decide when M1 pipeline volume is real.
+6. **Vercel plan**: ✅ **DECIDED 2026-07-18 — upgrading to Pro.** The earlier "decide when
+   M1 pipeline volume is real" deferral is overtaken by two concrete pressures, one of which
+   was not visible when it was written:
+   - **Function duration.** Item 5's extraction step sends a CloudConvert-rendered 45-slide
+     visual deck through Gemini vision inside a *single* Inngest step. The §3 budget of
+     1–3 min sits uncomfortably close to Hobby's 300 s ceiling, and 4 of 5 Marketing decks
+     take that branch (§4.2). Pro's 800 s removes the risk instead of mitigating it.
+   - **Cron allowance — new as of Wave 2.** CAL-2's daily `/api/cron/calendar-sync`
+     consumes the *entire* Hobby daily-cron budget. Item 7's exam-review staleness check and
+     every future scheduled job would otherwise have had to share that one handler.
+   Pro additionally unblocks the `*/30 * * * *` calendar cadence §3.1 describes, demoting the
+   on-demand staleness trigger from necessity to convenience. Both Hobby mitigations recorded
+   in *Technical risks* are retired by this.
 7. **German grade conversion**: confirm the modified Bavarian formula is what IE/German
    employers expect for the dual degree, or supply the conversion table you want.
 8. **Mobile expectation check**: PWA-first (installable, offline reviews, push) — native

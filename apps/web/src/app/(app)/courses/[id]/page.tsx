@@ -123,7 +123,7 @@ export default async function CoursePage({ params }: { params: Promise<{ id: str
         ) : (
           <div className="overflow-hidden rounded-lg border border-border bg-surface">
             <Table>
-              <TableHeader className="sticky top-0 z-10 bg-surface">
+              <TableHeader className="bg-surface">
                 <TableRow>
                   <TableHead>Component</TableHead>
                   <TableHead>Kind</TableHead>

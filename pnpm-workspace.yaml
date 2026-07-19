@@ -18,6 +18,9 @@ catalog:
   typescript: ~5.9.3
   zod: ^4.4.3
   vitest: ^4.1.10
+  # ICS parsing (Deadlines & Calendar Hub §3.7). Pure JS, zero runtime deps,
+  # timezone-aware recurrence expansion — the reason `rrule` was rejected.
+  ical.js: ^2.2.1
   "@supabase/supabase-js": ^2.110.6
   "@supabase/ssr": ^0.12.3
   "@phosphor-icons/react": ^2.1.10

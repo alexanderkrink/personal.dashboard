@@ -27,8 +27,13 @@ import { GATE_COOKIE_NAME, isGateCookieValid } from "@/lib/auth/access-code";
  * the recovery token and mints a session BEFORE redirecting there, so the
  * legitimate reset flow always arrives carrying that session and is let through
  * by the `hasSession` branch below — the page then guards itself.
+ *
+ * `/api/cron` is the Vercel Cron entry point (§3.1). It satisfies the rule
+ * above: `calendar-sync/route.ts` exports GET and nothing else, and
+ * authenticates every request against `CRON_SECRET` with a constant-time
+ * comparison before it touches the database.
  */
-const UNGATED_PATHS = ["/auth/confirm", "/auth/callback", "/api/hooks"];
+const UNGATED_PATHS = ["/auth/confirm", "/auth/callback", "/api/hooks", "/api/cron"];
 
 /** Reachable with no session, but ONLY once the access-code gate is cleared. */
 const GATED_AUTH_PATHS = ["/login", "/signup", "/forgot-password"];

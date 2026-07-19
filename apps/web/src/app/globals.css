@@ -133,9 +133,12 @@
     --color-destructive-button: var(--destructive-button);
     --color-urgency-overdue: var(--urgency-overdue);
     --color-urgency-high: var(--urgency-high);
+    --color-urgency-high-text: var(--urgency-high-text);
     --color-urgency-medium: var(--urgency-medium);
+    --color-urgency-medium-text: var(--urgency-medium-text);
     --color-urgency-low: var(--urgency-low);
     --color-urgency-done: var(--urgency-done);
+    --color-urgency-done-text: var(--urgency-done-text);
     --color-danger: var(--danger);
     --color-warning: var(--warning);
     --color-success: var(--success);
@@ -311,9 +314,99 @@
 :root {
   --urgency-overdue: oklch(0.53 0.2 27);
   --urgency-high: oklch(0.53 0.14 65);
-  --urgency-medium: oklch(0.55 0.1 78);
+  /*
+   * Amber for small TEXT on an amber tint — `--urgency-high` paints,
+   * `--urgency-high-text` writes. Same split as `--accent` / `--accent-text`
+   * and `--urgency-medium` / `--urgency-medium-text`.
+   *
+   * MEASURED from rendered pixels 2026-07-19, uniform probe label "From the
+   * feed" at the p20 cumulative-distance threshold, 1x DPR, both widths:
+   *
+   *   composite 4.68:1   <- passes SC 1.4.3 on the specified colours
+   *   sampled   4.42:1   <- FAILS the 4.5 small-text floor
+   *
+   * This is the **High** weight badge — the loudest rung of the heat ramp and
+   * the signal §7 sorts the whole list by. A reader who cannot resolve it is
+   * reading an unranked list. The gap is anti-aliasing: 11px 500-weight glyphs
+   * on a 10% wash of their own hue never resolve to the specified colour.
+   *
+   * ⚠ The failure is DPR-DEPENDENT. At 2x/3x the glyph core resolves to the
+   * full composite value and the number passes, which is exactly why token-math
+   * checkers and retina spot-checks miss it. Measure at 1x.
+   *
+   * L 0.53 -> 0.48 lifts composite to 5.80 and sampled to 5.47 — real headroom
+   * rather than landing on the line. Hue 65 and chroma 0.14 are untouched, so
+   * it stays the amber "act now" colour: 🎨 green is `done` ONLY, and a green
+   * High badge would read as *finished*, inverting the entire ramp. Chroma also
+   * still separates it from `--urgency-medium-text` (0.09), which now shares
+   * its lightness — saturation, not lightness, is what ranks these two.
+   */
+  --urgency-high-text: oklch(0.48 0.14 65);
+  /*
+   * Darkened from L=0.55 to L=0.52 on 2026-07-18 (Wave 2, CAL-2).
+   *
+   * MEASURED, not theorised: as 11px badge text on its own 12% tint — the §7
+   * weight badge — the old value rendered at 4.19:1, a WCAG AA failure for small
+   * text. The other three ramp tokens cleared 4.5 only narrowly (4.57–4.75), so
+   * the badge tint also drops to 10% in light mode; together that puts every
+   * tier at 4.7:1 or better with real headroom.
+   *
+   * Chroma drops 0.10 -> 0.09 at the same time. Medium must still READ as dimmer
+   * than `--urgency-high`, and after this change it is no longer meaningfully
+   * lighter than high (0.52 vs 0.53) — so saturation, not lightness, is what
+   * separates them. That is the more legible distinction anyway.
+   *
+   * Dark mode was already comfortable (7.01:1) and is unchanged.
+   */
+  --urgency-medium: oklch(0.52 0.09 78);
+  /*
+   * Amber for small TEXT sitting on an amber tint — `--urgency-medium` paints,
+   * `--urgency-medium-text` writes. Same rule as `--accent` / `--accent-text`.
+   *
+   * MEASURED from rendered pixels 2026-07-19, not derived. `--urgency-medium`
+   * on its own 10% tint composites to **4.80:1** — a pass on the specified
+   * colours, and that is what the weight-badge spec asserts. But the exam
+   * panel's provenance chip renders that as 11px 500-weight glyphs, and on a
+   * 1x display the anti-aliased glyph body samples **4.55:1**, with the
+   * implementing agent's own sampler reporting 4.48. Under the 4.5 floor, on
+   * the one label in the system that discloses the exam-oracle circularity.
+   *
+   * L 0.52 -> 0.48 lifts the composite to 5.74:1 and the sampled glyph to
+   * 5.35:1, so the chip clears AA by both measures with real headroom instead
+   * of landing on the line. Hue and chroma are untouched: this must still read
+   * as the amber "look twice" colour, and it must never drift toward green —
+   * 🎨 green is `done` ONLY, and a green provenance chip would read as
+   * "verified", which is the exact opposite of what it says.
+   *
+   * Dark mode already measures 7.02:1 composite / 6.57:1 sampled, so `.dark`
+   * aliases this straight back to `--urgency-medium` rather than darkening a
+   * colour that has to stay light on a dark surface.
+   */
+  --urgency-medium-text: oklch(0.48 0.09 78);
   --urgency-low: var(--muted-foreground);
   --urgency-done: oklch(0.5 0.13 155);
+  /*
+   * Green for small TEXT on a green tint — `--urgency-done` paints,
+   * `--urgency-done-text` writes. Third instance of the same split.
+   *
+   * MEASURED 2026-07-19, same instrument as above:
+   *
+   *   composite 4.76:1
+   *   sampled   4.50:1   <- lands EXACTLY on the floor, with zero headroom
+   *
+   * 4.50 is not a pass worth keeping. It rounds to the floor from above by
+   * luck, and any future nudge — a tint alpha, a font-weight, a surface token
+   * moving underneath it — drops the completed-item badge below AA silently,
+   * because nothing here would fail until someone measures again at 1x.
+   *
+   * L 0.50 -> 0.45 buys composite 5.83 / sampled 5.50, matching the headroom
+   * the other two `-text` tokens now carry. Hue 155 and chroma 0.13 are
+   * untouched: this one is *supposed* to be green — it is the completion
+   * colour, the single legitimate green in the system — so the constraint here
+   * is the mirror of the urgency tiers'. It must not drift toward amber and
+   * start reading as an urgency tier.
+   */
+  --urgency-done-text: oklch(0.45 0.13 155);
 
   --danger: var(--urgency-overdue);
   --warning: var(--urgency-high);
@@ -404,10 +497,20 @@
   --border: oklch(0.94 0.01 237 / 10%); /* hairline */
   --input: oklch(0.94 0.01 237 / 14%); /* control FILL + disabled wash */
   /* See the light column for why this is not --border. On dark the control's
-   * own `bg-input/30` fill is the tightest adjacent colour, not the page:
-   * 4.12:1 against that fill and 6.77:1 against --surface (was 2.25:1 / 3.69:1).
+   * own `bg-input/30` fill is the tightest adjacent colour, not the page.
+   *
+   * ⚠ CORRECTED 2026-07-18 (Wave 2). This slot was 35%, annotated "4.12:1
+   * against that fill and 6.77:1 against --surface". Both numbers were wrong:
+   * they were computed without compositing the token's own alpha onto the dark
+   * backdrop, which is the whole point of an alpha edge. Measured from RENDERED
+   * PIXELS — screenshot a real control, sample the 1px border, compare to the
+   * sampled fill — 35% gives rgb(88,93,97) on a rgb(14,18,21) fill = 2.83:1,
+   * i.e. it never cleared SC 1.4.11 at all. 40% gives rgb(100,105,108) = 3.39:1
+   * against the fill and 3.62:1 against the page. e2e/control-border-contrast
+   * locks both themes so this cannot regress silently again.
+   *
    * Alpha rather than a solid keeps it composing over every surface tier. */
-  --input-border: oklch(0.94 0.01 237 / 35%);
+  --input-border: oklch(0.94 0.01 237 / 40%);
 
   --primary: oklch(0.54 0.15 237); /* white text ~4.8:1 (AA, tight — do not brighten) */
   --primary-foreground: oklch(0.99 0.005 237);
@@ -437,9 +540,18 @@
 .dark {
   --urgency-overdue: oklch(0.68 0.19 25);
   --urgency-high: oklch(0.78 0.15 68);
+  /* 6.62:1 composite / 6.23:1 sampled on the 20% tint. The light column's
+   * problem does not exist here, and DARKENING a colour that has to stay light
+   * on a dark surface would create one. Aliased through deliberately. */
+  --urgency-high-text: var(--urgency-high);
   --urgency-medium: oklch(0.8 0.09 82);
+  /* Already 7.02:1 composite / 6.57:1 sampled on the 20% tint — nothing to
+   * correct, and darkening it here would wreck it. See the light column. */
+  --urgency-medium-text: var(--urgency-medium);
   --urgency-low: var(--muted-foreground);
   --urgency-done: oklch(0.74 0.15 155);
+  /* 7.78:1 composite / 7.31:1 sampled. Same reasoning as the two above. */
+  --urgency-done-text: var(--urgency-done);
 
   --danger: var(--urgency-overdue);
   --warning: var(--urgency-high);

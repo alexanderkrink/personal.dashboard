@@ -7,3 +7,9 @@
 -- idempotent (`on conflict do nothing`) so repeated resets stay clean.
 --
 -- Never seed production data or anything derived from the real ICS feed.
+--
+-- Seeds keyed to a REAL account live in ./seed/ instead, and are applied by hand
+-- against the linked project. They must not be added to `sql_paths`: they
+-- hardcode a user_id from the linked project's auth.users, so `db reset` against
+-- a fresh local database would fail on the auth.users foreign key. See
+-- ./seed/README.md.
