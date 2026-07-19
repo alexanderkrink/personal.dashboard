@@ -660,6 +660,24 @@ export type Database = {
       }
     }
     Functions: {
+      apply_syllabus_extraction: {
+        Args: {
+          p_components: Json
+          p_course_id: string
+          p_extracted_course_title: string
+          p_input_hash: string
+          p_model: string
+          p_notes: string
+          p_prompt_id: string
+          p_prompt_version: number
+          p_proposed_total_sessions: number
+          p_provider: string
+          p_source_label: string
+          p_total_sessions_evidence: string
+          p_user_id: string
+        }
+        Returns: string
+      }
       claim_calendar_feed: {
         Args: { p_feed_id: string; p_lease_seconds?: number }
         Returns: {
