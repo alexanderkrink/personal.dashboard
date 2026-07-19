@@ -1070,7 +1070,49 @@ full t3-env checklist. ⚠ As of 2026-07-18 all five sit in `.env.local` only, w
 **0 of the 4** required locations (`env.ts`, `.env.example`, `turbo.json` `env`, CI
 placeholders). The Anthropic key is already fully wired from M0.
 
+> ⚠ **CORRECTED 2026-07-19 (item 2 shipped)** — 2 of those 5 are now fully wired through all
+> four locations: `INNGEST_SIGNING_KEY` (**required**, `min(32)` — `/api/inngest` is gate-exempt
+> and accepts POST, so the key is its entire authentication boundary; same reasoning as
+> `CRON_SECRET`) and `INNGEST_EVENT_KEY` (**optional** — it points outward, so it follows the
+> `ANTHROPIC_API_KEY` pattern; CI leaves it unset on purpose to prove the app builds without it).
+> Still at 0 of 4: `VOYAGE_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `CLOUDCONVERT_API_KEY`.
+>
+> ⚠ **CORRECTED 2026-07-19** — a sixth Inngest variable exists that this section does not
+> mention: **`INNGEST_DEV=1`, required in `.env.local` for local development**, and it must stay
+> unset in production. It is read by the SDK, not by `env.ts`, so it is deliberately not on the
+> four-location checklist. See the dev-mode note under the sketch below.
+>
+> ⚠ **CORRECTED 2026-07-19** — `createAdminSupabaseClient` was *not* unused before this item.
+> Wave 2 already calls it from `api/cron/calendar-sync/route.ts` and `server/calendar/refresh.ts`;
+> the health check is its third call site, not its first.
+
 #### The pipeline as an Inngest function (sketch)
+
+> 🔴 **DISPROVEN 2026-07-19 — the sketch below does not compile on the version we shipped.**
+> It uses inngest **v3**'s three-argument form, `createFunction(options, trigger, handler)`.
+> We are on **inngest 4.13.0**, where triggers moved *into* the options object:
+>
+> ```ts
+> inngest.createFunction({ id: "process-document", triggers: [documentUploaded], retries: 3 }, handler)
+> ```
+>
+> This is not a soft deprecation. v4 throws `"createFunction" expected a handler function as the
+> second argument` **at import time**, so the mistake takes down the whole `/api/inngest` route
+> rather than one function. Item 5 must use the two-argument form. Everything else in the sketch
+> — `step.run`, `concurrency`, `onFailure`, `step.sendEvent`, per-step retries — is unchanged.
+>
+> 🔴 **DISPROVEN 2026-07-19 — v4 does not infer dev mode from `NODE_ENV`.** v3 did; v4's
+> `Inngest.mode` checks the `isDev` option, then `INNGEST_DEV`, then whether `INNGEST_DEV` holds a
+> URL, and otherwise **defaults to `"cloud"`**. With nothing set, `next dev` runs the production
+> path and answers `inngest-cli dev` with **401 on every GET and 400 on every PUT** — the app never
+> syncs and no function ever runs, with no error naming the cause. `INNGEST_DEV=1` in `.env.local`
+> is what fixes it. Defaulting to cloud is the safer default and we do not override it: a
+> misconfigured deploy fails closed with a 401 instead of silently skipping signature verification.
+>
+> ✅ **VERIFIED 2026-07-19** — the round trip runs. `system/health-check.requested` →
+> `inngest-cli dev` → `POST /api/inngest?fnId=study-dashboard-health-check` → **Completed**;
+> a run with a non-existent `userId` fails as intended with `NonRetriableError: No such user`,
+> which is what proves the admin client reaches Postgres rather than a mock.
 
 ```ts
 export const processDocument = inngest.createFunction(
