@@ -323,7 +323,27 @@ export function UploadDialog({
 
         <DialogFooter>
           <DialogClose render={<Button variant="ghost">Cancel</Button>} />
-          <Button onClick={() => void submit()} disabled={file === null || busy || error !== null}>
+          {/*
+           * ⚠ NOT disabled on `error !== null`, and that is load-bearing.
+           *
+           * A `<input type="file">` fires no `change` event when the user
+           * re-picks the SAME file, so `chooseFile` — the only other place that
+           * clears `error` — never runs on a retry of the file that just
+           * failed. Disabling here therefore made every error terminal: the
+           * sole escape was closing the dialog, measured at gate 3.
+           *
+           * That mattered most for the failure this flow is *built* around. TUS
+           * was chosen for resumability on a lecture-hall connection, and a
+           * dropped transfer lands in the `catch` below with the file still
+           * selected — precisely when `upload.findPreviousUploads()` would
+           * resume from the last checkpoint. Disabling the button put that
+           * behind a dialog reopen, which discards the state and restarts at 0.
+           *
+           * Nothing is lost by allowing the click: `submit()` clears `error`
+           * and re-runs `validateDocumentSize` first, so an oversized file
+           * simply re-shows its message without transferring a byte.
+           */}
+          <Button onClick={() => void submit()} disabled={file === null || busy}>
             {busy ? "Working…" : "Upload"}
           </Button>
         </DialogFooter>

@@ -1093,6 +1093,30 @@ Supabase Free plan's upload ceiling, so the Free plan suffices. Files over the c
 > downloads it, sniffs `word/` in the ZIP central directory, and fails the document with a
 > human-readable reason.
 
+> ✅ **DECIDED 2026-07-19 (Wave 4 gate 3) — the Storage ceiling backstop is REAL, and exact.**
+> Agent 2's claim above rests on "Storage's own 50 MB ceiling would refuse the transfer",
+> which had not been verified independently — and the `documents` bucket carries
+> `file_size_limit = NULL`, so the ceiling is a *project-level* setting rather than a bucket
+> one. Measured directly, with a user JWT and no UI in the path: 52,428,800 bytes uploads
+> `200`, 52,428,801 bytes is refused `413 "The object exceeded the maximum allowed size"`.
+> The platform ceiling is byte-identical to `MAX_DOCUMENT_BYTES`, so defence in depth holds
+> and the client-side cap is genuinely backstopped.
+>
+> ⚠ **CORRECTED 2026-07-19 (Wave 4 gate 3) — but the ceiling is the ONLY server-side bound,
+> because `documents.size_bytes` is a client-supplied claim that is never reconciled.**
+> `registerUpload` takes `sizeBytes` from the browser and writes it to the column unchecked;
+> the `validate` step then runs its cheap size branch against *that column* (and re-checks
+> `> MAX_DOCUMENT_BYTES` against it a second time, so the "belt and braces" guard is
+> circular — both reads trust the same untrusted number). A crafted request understating
+> `sizeBytes` therefore *does* reach the size branch, making it reachable after all, and
+> makes `validate` download the object before `bytes.length` rejects it. Impact is bounded
+> to ≤50 MiB by the ceiling above and the authoritative `bytes.length` check is correct, so
+> this is a data-integrity nit rather than a hole — but `size_bytes` is rendered to the user
+> and will be read by Agents 3–5, and it can be a lie. The fix is nearly free and was NOT
+> applied here (out of a reviewer's scope to redesign the action): `registerUpload` already
+> calls `storage.list()` on the object's folder, whose result carries the true
+> `metadata.size` — stamp the column from that instead of from the request.
+
 ---
 
 ### 3. Background job runner: Vercel functions vs Inngest vs Trigger.dev
@@ -1698,6 +1722,23 @@ chat with citations, and context retrieval for the exam-review generator.
 >    `globals.css` as `.dot-motif-pulse`, an expanding azure ring with a *designed*
 >    reduced-motion alternative (the ring is removed outright; the blanket duration collapse
 >    in `@layer base` would otherwise freeze it mid-expansion as a permanent halo).
+
+> 🔴 **DISPROVEN 2026-07-19 (Wave 4 gate 3) — "the user can just try again" was FALSE in the
+> upload dialog; every error was terminal.** The submit button carried
+> `disabled={… || error !== null}`, which reads as ordinary defensiveness. It is not:
+> `chooseFile` is the only other code that clears `error`, and it runs off the file input's
+> `change` event — which a browser does **not** fire when the user re-picks the same file.
+> Measured in a real browser: after a duplicate rejection the button stayed disabled, and
+> re-selecting the identical file left it disabled. The only escape was closing the dialog.
+>
+> The reason this matters more than a UX wart: the failure the flow is *built* around is a
+> dropped transfer, which lands in the `catch` with the file still selected — exactly when
+> `upload.findPreviousUploads()` would resume from the last TUS checkpoint. Closing the
+> dialog discards that state and restarts the transfer at zero, giving up the single
+> property TUS was chosen for on a 47 MB deck over a lecture-hall connection. Fixed by
+> dropping `error !== null` from the disabled condition; `submit()` already clears the error
+> and re-runs `validateDocumentSize` first, so an oversized file still re-shows its message
+> without transferring a byte. Pinned by `components/documents/upload-dialog.test.tsx`.
 - **Terminal states:** `ready` → card collapses to a summary ("Contributed to 4 topics",
   linked) with a **coverage line** ("587 of 600 pages mapped · 13 unmapped" — click to see
   the gaps and any syllabus objectives still missing) and, when deep review ran, a "Deep
