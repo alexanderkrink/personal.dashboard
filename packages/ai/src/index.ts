@@ -69,12 +69,17 @@ export {
   type PromptVarValue,
   promptIdViolation,
 } from "./prompts/index";
-export {
-  type AIProviderConfig,
-  type AIProviders,
-  createAIProvider,
-  languageModelFor,
-} from "./provider";
+/**
+ * Types only. `createAIProvider` and `languageModelFor` are deliberately NOT re-exported:
+ * they hand back a raw SDK model with no stamp, no metering and no kill switch, and an
+ * importable factory is a bypass that no amount of naming discipline inside
+ * `generateStructured` can prevent. `createAIRuntime` is the only way in — and the two
+ * acknowledged escapes on it (`unmeteredLanguageModel`, `unmeteredProviders`) at least
+ * come from a runtime that has a logger and a guard attached.
+ *
+ * They stay exported from `./provider` for this package's own use and its tests.
+ */
+export type { AIProviderConfig, AIProviders } from "./provider";
 export {
   type AIGenerationLogger,
   type AIGenerationRecord,
