@@ -3,6 +3,7 @@ import { NonRetriableError } from "inngest";
 import { env } from "@/env";
 import { inngest } from "@/inngest/client";
 import { healthCheckRequested, healthCheckRequestedData } from "@/inngest/events";
+import { deriveOwner } from "@/inngest/owner";
 
 /**
  * The round-trip proof for the background job runner (M1 item 2).
@@ -33,13 +34,32 @@ import { healthCheckRequested, healthCheckRequestedData } from "@/inngest/events
  * become a thing to garbage-collect, and this one is meant to be safe to run on
  * a schedule or by hand from the dashboard as often as anyone likes.
  *
- * ## Why RLS bypass is correct here
+ * ## Why RLS bypass is correct here, and what replaces it
  *
  * There is no request user in job context to derive a session from, so the
- * admin client is the only option — per repo conventions and PLAN.md §3. The
- * discipline that replaces RLS is that the owner arrives *in the event* and is
- * stamped on the row; the function never invents one and never writes a row
- * without it.
+ * admin client is the only option — per repo conventions and PLAN.md §3.
+ *
+ * ⚠ The discipline that replaces RLS used to be stated as "the owner arrives in
+ * the event and is stamped on the row". That is not a discipline, it is a
+ * restatement of the problem: the admin client bypasses RLS, so an owner that
+ * arrives in the event is an owner chosen by whoever produced the event, and
+ * `z.uuid()` only proves it is well-formed. See the ⚠⚠ block in `events.ts`.
+ *
+ * What actually replaces RLS is that the owner is **re-derived from the
+ * database** (`deriveOwner`) and the payload's `userId` is treated as a hint to
+ * cross-check. For this function the derivation is close to tautological — the
+ * user is the whole payload, so the row consulted is their own `profiles` row —
+ * and it is done anyway, for three reasons worth more than the round trip:
+ *
+ *   1. it is the pattern Wave 4's `process-document` must follow, and the first
+ *      job in the codebase is where a pattern is either set or lost;
+ *   2. it converts "this user does not exist" from a foreign-key violation
+ *      discovered mid-insert into a clean, fast `NonRetriableError` — the
+ *      `23503` special case below now only has to cover a user deleted between
+ *      the two statements;
+ *   3. it means every handler in this directory reads the same way, so a future
+ *      one that *doesn't* call `deriveOwner` is visible as an anomaly rather
+ *      than as one more plausible style.
  */
 export const healthCheck = inngest.createFunction(
   {
@@ -64,7 +84,7 @@ export const healthCheck = inngest.createFunction(
     if (!parsed.success) {
       throw new NonRetriableError(`Malformed health-check event: ${parsed.error.message}`);
     }
-    const { userId } = parsed.data;
+    const claimedUserId = parsed.data.userId;
 
     // Each step gets its own client rather than one hoisted out of the handler.
     // Steps are separate HTTP invocations that may land on different serverless
@@ -76,6 +96,26 @@ export const healthCheck = inngest.createFunction(
         secretKey: env.SUPABASE_SECRET_KEY,
       });
 
+    // ── Ownership comes from the database, not from the event ────────────────
+    //
+    // Its own step, so the answer is checkpointed: later steps resume with the
+    // owner the database gave on the first attempt rather than re-deriving it,
+    // and the derivation shows up as a named step in the dashboard where a
+    // failure is legible instead of hiding inside the first write.
+    //
+    // `claimed` is passed even though it is the same value the row is looked up
+    // by, so the cross-check is present in the shape a real handler uses. For
+    // `process-document`, where the locator is a document id and the claim is a
+    // separate assertion about who owns it, this argument is what catches a
+    // forged pairing.
+    const { userId } = await step.run("derive-owner", () =>
+      deriveOwner(
+        admin(),
+        { table: "profiles", id: claimedUserId },
+        { claimed: claimedUserId, job: "health-check" },
+      ),
+    );
+
     const heartbeatId = await step.run("write-heartbeat", async () => {
       const { data, error } = await admin()
         .from("job_heartbeats")
@@ -84,10 +124,11 @@ export const healthCheck = inngest.createFunction(
         .single();
 
       if (error) {
-        // A bad `userId` violates the FK to auth.users, and no number of
-        // retries will make a non-existent user exist. Failing fast here keeps
-        // a malformed event from burning the retry budget and reports the real
-        // cause in the dashboard instead of a generic timeout.
+        // Now a narrow residual case: `derive-owner` already established that
+        // this user exists, so a foreign-key violation here means they were
+        // deleted between the two steps. Still non-retriable — no number of
+        // retries will bring them back — but no longer the primary defence
+        // against a `userId` the event simply made up.
         if (error.code === "23503") {
           throw new NonRetriableError(`No such user: ${userId}`);
         }

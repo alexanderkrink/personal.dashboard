@@ -87,7 +87,7 @@ export function createStudyAIRuntime({ userId, overrides }: StudyAIRuntimeOption
         overrides?.monthlyBudgetUsd ?? Number.POSITIVE_INFINITY,
         env.AI_MONTHLY_BUDGET_USD,
       ),
-      monthToDateSpendUsd: createCachedSpendReader(admin, userId),
+      monthToDateSpend: createCachedSpendReader(admin, userId),
     },
     log: createGenerationLogger(admin, userId),
   });

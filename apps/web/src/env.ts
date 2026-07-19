@@ -27,6 +27,17 @@ export const env = createEnv({
     // breaks vector comparability (§5), so this is a retrieval decision, not a generation
     // one. Wired now so the four env locations stay in step; no embedding code uses it yet.
     VOYAGE_API_KEY: z.string().min(1).optional(),
+    // CloudConvert, for the PPTX→PDF visual path (§4.2). Not an optional nicety: PLAN's
+    // 🔴 measured block shows four of five Marketing decks below the 40 words/slide
+    // threshold, so for that course this key is what stands between real topic pages and
+    // mostly-empty ones. Optional here for the same reason the provider keys are — local
+    // dev and CI must still build without it, and an unset key costs the visual branch,
+    // never safety. The step fails the document with a readable sentence rather than
+    // silently downgrading to text-only, because a silent downgrade is exactly the
+    // "mostly-empty topic pages" outcome, arrived at without anybody noticing.
+    // Token scopes are `task.read` + `task.write` only — deliberately no `webhook.write`,
+    // which is why the conversion is polled inside the Inngest step.
+    CLOUDCONVERT_API_KEY: z.string().min(1).optional(),
     // ── The §6 kill switch and budget guard ─────────────────────────────────────
     // All three are read HERE and injected into `packages/ai` (which never reads
     // process.env). That boundary is the whole point of item 2b: one place to swap
@@ -108,6 +119,7 @@ export const env = createEnv({
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
     GOOGLE_GENERATIVE_AI_API_KEY: process.env.GOOGLE_GENERATIVE_AI_API_KEY,
     VOYAGE_API_KEY: process.env.VOYAGE_API_KEY,
+    CLOUDCONVERT_API_KEY: process.env.CLOUDCONVERT_API_KEY,
     AI_KILL_SWITCH: process.env.AI_KILL_SWITCH,
     AI_MAX_TIER: process.env.AI_MAX_TIER,
     AI_MONTHLY_BUDGET_USD: process.env.AI_MONTHLY_BUDGET_USD,

@@ -12,7 +12,9 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "fast-xml-parser": "catalog:",
     "ical.js": "catalog:",
+    "jszip": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {

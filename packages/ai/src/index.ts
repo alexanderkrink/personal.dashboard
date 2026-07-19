@@ -10,6 +10,26 @@
  */
 
 export {
+  createEmbeddingClient,
+  EMBEDDING_DIMENSIONS,
+  EMBEDDING_MODEL,
+  EMBEDDING_PURPOSES,
+  EMBEDDING_RECIPE_VERSION,
+  type EmbeddingClient,
+  type EmbeddingClientConfig,
+  type EmbeddingGenerationRecord,
+  type EmbeddingInputType,
+  type EmbeddingLogger,
+  type EmbeddingPurpose,
+  EmbeddingsPausedError,
+  type EmbedOptions,
+  type EmbedResult,
+  type FetchLike,
+  type FetchRequestInit,
+  type FetchResponse,
+  VoyageEmbeddingError,
+} from "./embeddings";
+export {
   AI_PAUSED_USER_MESSAGE,
   AIPausedError,
   type AISpendGuardConfig,
@@ -19,12 +39,44 @@ export {
   type PausedReason,
   SPEND_THRESHOLDS,
   type SpendPosture,
+  type SpendReading,
   spendPosture,
+  UNPRICED_TOLERANCE,
 } from "./guard";
+export {
+  type AuditDocumentOptions,
+  auditDocument,
+  type CheckSyllabusCoverageOptions,
+  type CompletenessTopic,
+  checkSyllabusCoverage,
+  renderCompletenessIndex,
+} from "./jobs/completeness";
+export {
+  PDF_MEDIA_TYPE,
+  type StructurePdfOptions,
+  type StructureSlideTextOptions,
+  structurePdf,
+  structureSlideText,
+} from "./jobs/doc-structuring";
 export {
   type ExtractSyllabusComponentsOptions,
   extractSyllabusComponents,
 } from "./jobs/syllabus-components";
+export {
+  type CriticiseMergeOptions,
+  criticiseMerge,
+  type MergeTopicOptions,
+  mergeTopic,
+  type RemergeTopicOptions,
+  type RoutableSegment,
+  type RouteSegmentsOptions,
+  remergeTopic,
+  renderMergeSegments,
+  renderRoutableSegments,
+  renderTopicIndex,
+  routeSegments,
+  type TopicIndexEntry,
+} from "./jobs/topic-pipeline";
 export {
   type AttemptRecord,
   type AttemptRequest,
@@ -37,6 +89,9 @@ export {
   runStructuredLadder,
 } from "./ladder";
 export {
+  AI_PROVIDER_NAMES,
+  type AIProviderName,
+  type EmbeddingProviderName,
   escalationTarget,
   getModel,
   JOB_IDS,
@@ -52,6 +107,8 @@ export {
 } from "./models";
 export {
   EMBEDDING_PRICING,
+  type EmbeddingModelId,
+  embeddingPriceUsd,
   type IntroductoryPricing,
   type ModelPricing,
   PRICING,
@@ -61,6 +118,12 @@ export {
   type TokenRates,
   type TokenUsage,
 } from "./pricing";
+export {
+  COVERAGE_CHECKLIST_SYSTEM,
+  coverageChecklistPrompt,
+  DEEP_REVIEW_AUDIT_SYSTEM,
+  deepReviewAuditPrompt,
+} from "./prompts/coverage";
 export {
   type AnyPromptTemplate,
   assertPromptId,
@@ -93,7 +156,9 @@ export {
   createAIRuntime,
   type GenerateStructuredOptions,
   type GenerateStructuredResult,
+  type PromptFile,
   sha256Hex,
+  sha256HexBytes,
   UNMETERED_ACKNOWLEDGEMENT,
   type UnmeteredAcknowledgement,
 } from "./runtime";

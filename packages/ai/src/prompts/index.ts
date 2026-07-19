@@ -19,8 +19,16 @@
  * `syllabus-components` (M1 item 11) is the first real entry.
  */
 
+import { coverageChecklistPrompt, deepReviewAuditPrompt } from "./coverage";
 import type { AnyPromptTemplate } from "./define";
+import { docStructuringPrompt, docStructuringSlideTextPrompt } from "./documents";
 import { syllabusComponentsPrompt } from "./syllabus";
+import {
+  mergeCriticPrompt,
+  topicMergePrompt,
+  topicMergeRepairPrompt,
+  topicRoutingPrompt,
+} from "./topics";
 
 export {
   type AnyPromptTemplate,
@@ -40,6 +48,36 @@ export {
  * Add an entry in the same commit that adds the template — the id-convention and
  * uniqueness checks only cover what is listed here.
  */
-export const PROMPT_REGISTRY: readonly AnyPromptTemplate[] = [syllabusComponentsPrompt];
+export const PROMPT_REGISTRY: readonly AnyPromptTemplate[] = [
+  syllabusComponentsPrompt,
+  docStructuringPrompt,
+  docStructuringSlideTextPrompt,
+  topicRoutingPrompt,
+  topicMergePrompt,
+  topicMergeRepairPrompt,
+  mergeCriticPrompt,
+  coverageChecklistPrompt,
+  deepReviewAuditPrompt,
+];
 
+export {
+  COVERAGE_CHECKLIST_SYSTEM,
+  coverageChecklistPrompt,
+  DEEP_REVIEW_AUDIT_SYSTEM,
+  deepReviewAuditPrompt,
+} from "./coverage";
+export {
+  DOC_STRUCTURING_SYSTEM,
+  docStructuringPrompt,
+  docStructuringSlideTextPrompt,
+} from "./documents";
 export { SYLLABUS_COMPONENTS_SYSTEM, syllabusComponentsPrompt } from "./syllabus";
+export {
+  MERGE_CRITIC_SYSTEM,
+  mergeCriticPrompt,
+  TOPIC_MERGE_SYSTEM,
+  TOPIC_ROUTING_SYSTEM,
+  topicMergePrompt,
+  topicMergeRepairPrompt,
+  topicRoutingPrompt,
+} from "./topics";

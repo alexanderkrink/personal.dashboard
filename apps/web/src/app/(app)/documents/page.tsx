@@ -1,39 +1,77 @@
 import { FileText } from "@phosphor-icons/react/dist/ssr";
 import type { Metadata } from "next";
+import { DocumentsPanel } from "@/components/documents/documents-panel";
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/page-header";
+import { requireUserId } from "@/lib/auth/require-user";
+import type { DocumentRow } from "@/lib/documents/use-document-feed";
+import { createClient } from "@/lib/supabase/server";
 
 export const metadata: Metadata = { title: "Documents" };
 
+const DOCUMENT_COLUMNS =
+  "id, course_id, filename, kind, status, mime_type, size_bytes, failure_reason, deep_review, extraction_fidelity, coverage, created_at, processed_at";
+
 /**
- * Teaching empty state. Route only — no storage bucket, no upload surface and
- * no ingestion pipeline is wired here; that is a later wave.
+ * The documents screen (M1 item 5b).
+ *
+ * Server-renders the course list and the first course's documents so the page is
+ * correct on first paint; `DocumentsPanel` takes over from there with Realtime.
+ * Archived courses are excluded — uploading to a finished course is almost
+ * always a mis-click, and the picker is the wrong place to argue about it.
  */
-export default function DocumentsPage() {
+export default async function DocumentsPage() {
+  const supabase = await createClient();
+  const userId = await requireUserId(supabase);
+
+  const { data: courses } = await supabase
+    .from("courses")
+    .select("id, title")
+    .eq("archived", false)
+    .order("title");
+
+  const courseList = courses ?? [];
+  const firstCourse = courseList[0];
+
+  if (!firstCourse) {
+    return (
+      <>
+        <PageHeader
+          title="Documents"
+          lead="Lecture slides, readings and notes — the raw material everything else is built from."
+        />
+        <EmptyState
+          icon={FileText}
+          headline="Add a course first."
+          body="Documents are filed against a course, because everything built from them — topic pages, search, the exam review — is per-course."
+          points={[
+            { term: "Upload", detail: "PDFs and slide decks, straight to storage." },
+            { term: "Check", detail: "format, size and readability, before anything is billed." },
+            { term: "Track", detail: "live status while the pipeline works." },
+          ]}
+          cta={{ href: "/courses/new", label: "Create a course" }}
+        />
+      </>
+    );
+  }
+
+  const { data: documents } = await supabase
+    .from("documents")
+    .select(DOCUMENT_COLUMNS)
+    .eq("course_id", firstCourse.id)
+    .order("created_at", { ascending: false });
+
   return (
     <>
       <PageHeader
         title="Documents"
         lead="Lecture slides, readings and notes — the raw material everything else is built from."
       />
-      <EmptyState
-        icon={FileText}
-        headline="Nothing uploaded yet."
-        body="Drop a lecture deck or a reading here and it stops being a file you have to remember: it gets split, indexed, and cited back to you with the slide number."
-        points={[
-          { term: "Upload", detail: "PDFs, slides and notes, filed against a course." },
-          {
-            term: "Extract",
-            detail: "text and structure pulled out, then split into passages worth quoting.",
-          },
-          {
-            term: "Provenance",
-            detail: "every passage keeps its locator, so an answer can point at 'slide 12'.",
-          },
-          { term: "Search", detail: "meaning-based, across everything you have ever uploaded." },
-        ]}
-        note="The document pipeline is the back half of this milestone. This page is the route it will land on — uploading isn't live yet."
-        cta={{ href: "/courses", label: "Set up courses first" }}
+      <DocumentsPanel
+        courses={courseList}
+        userId={userId}
+        initialCourseId={firstCourse.id}
+        initialDocuments={(documents ?? []) as DocumentRow[]}
       />
     </>
   );

@@ -874,6 +874,45 @@ Pipeline model assignments (from the `JOBS` registry in `packages/ai` — call s
 All tables follow the repo RLS pattern: `user_id uuid not null references auth.users(id)
 on delete cascade`, RLS enabled, per-operation policies with `(select auth.uid())`.
 
+> ⚠ **CORRECTED 2026-07-19 (Wave 4 Agent 1) — every FK in the block below is written
+> single-column and shipped composite.** This section predates Wave 1's cross-tenant FK
+> discovery, so it still says `references courses(id)`. That form is exactly what
+> [RLS strategy](#rls-strategy) **rule 7** forbids: RLS validates the row being *written*,
+> never the row being *pointed at*, and this pipeline's writers are Inngest jobs under
+> `createAdminSupabaseClient`, where RLS is not in the path at all. As shipped in
+> `20260719175553_document_pipeline_tables`, every FK between two user-owned tables is
+> `(fk_column, user_id)` against an `(id, user_id)` unique key on the parent; `documents`
+> and `topics` each declare their own `(id, user_id)` key. **Measured, not reasoned:** an
+> insert of a hans-owned `documents` row pointing at another account's `course_id` was
+> rejected `23503 documents_course_id_fkey` — through the session client *and* through the
+> RLS-bypassing service-role client, where the FK was the only check in the path.
+>
+> Three further deviations shipped, all marked in the migration:
+> 1. **`documents` and `topics` also carry `unique (id, course_id)`**, and the children that
+>    denormalise `course_id` (`document_processing_events`, `document_chunks`) point at it.
+>    Rule 7's tenant key cannot catch a *same-tenant, wrong-course* row, which would put a
+>    chunk in the wrong course's search results or a Realtime event on the wrong
+>    subscriber's socket.
+> 2. **`documents` carries a `documents_storage_path_convention` check** tying
+>    `storage_path` to `{user_id}/{course_id}/{id}/…`. Storage RLS can only police the first
+>    path segment, because `storage.objects` knows nothing about courses or documents.
+> 3. **`document_processing_events` and `topic_revisions` get `using (false)` UPDATE and
+>    DELETE policies** rather than owner-scoped ones — four policies, two of them
+>    unsatisfiable. An append-only log the audited party can rewrite is not a log; same
+>    reasoning as `20260719120203` on `ai_generations`.
+
+> 🔴 **DISPROVEN 2026-07-19 (Wave 4 Agent 1): the `document_chunks` block below cannot be
+> applied as written — its FK and its check constraint contradict each other.** `topic_id`
+> is declared `on delete set null` while `document_chunks_owner` requires
+> `source = 'topic_page' → topic_id is not null`. Deleting a topic that has synthesized
+> chunks nulls their `topic_id` and instantly violates the check, so **the DELETE fails and
+> the topic is undeletable.** Neither constraint is wrong alone; the gap is that `topic_id`
+> means different things per `source` — a routing *label* on `source='document'` chunks
+> (which should survive the topic and be unlabelled) and the *owner* on `source='topic_page'`
+> chunks (which should die with it). Shipped fix: a `before delete` trigger on `topics`
+> (`delete_synthesized_chunks_for_topic`) removes the topic's own synthesized chunks first,
+> so `SET NULL` only ever reaches the routing-label case.
+
 ```sql
 -- Extensions (one-time migration)
 create extension if not exists vector;
@@ -1012,6 +1051,30 @@ create table exam_reviews (
 );
 ```
 
+> ⚠ **CORRECTED 2026-07-19 (Wave 4 Agent 4) — block `sources` are flat `{documentId, page}`,
+> not `{documentId, locator}`, because Anthropic REFUSED the nested shape.** Measured, not
+> reasoned: the first live `topic-merge` call against `claude-sonnet-5` returned **HTTP 400
+> `invalid_request_error`: "The compiled grammar is too large, which would cause performance
+> issues. Simplify your tool schemas"** — on every topic, before a single token was
+> generated. A TopicPage is six arrays of objects; giving each of them an array of two-level
+> nested source objects (with a nullable `page`/`slide` pair inside) multiplied the
+> constrained-decoding grammar past the provider's ceiling. **No unit test could have caught
+> this** — the schema is valid Zod, parses correctly and round-trips fixtures perfectly; the
+> constraint lives in the provider's grammar compiler and is only observable by making a real
+> call. The nesting was also never earned: `extractedPageSchema` already unifies the
+> vocabulary as "1-based page (PDF) or slide (PPTX) number", so `{page, slide}` was modelling
+> a distinction the extractor had already collapsed. The `{page: n}` shape survives in
+> `topic_sources.locators`, which is a column written by code rather than a grammar a model
+> has to satisfy. `packages/core`'s `BlockSourceLike` reads both forms, per the boundary rule.
+>
+> ⚠ Also shipped: **note blocks carry an `id`**, which PLAN does not mention. The block-diff
+> loss-detector needs a stable identity per block to tell "edited" from "deleted and
+> replaced", and a note's heading and body are both expected to change during an
+> "integrate, don't append" merge — so there is no content-derived key that survives a
+> legitimate edit. The merge prompt and the schema description are both emphatic that
+> existing ids must be carried through unchanged; a merger that re-mints them makes a
+> lossless merge look like a total rewrite.
+
 **TopicPage shape** (Zod schema in `packages/ai/src/schemas.ts`, stored as the `topics.page`
 JSONB): `summary` (3–5 sentences), `notes` (ordered markdown blocks, each block carries
 `sources: [{documentId, locator}]`), `keyTerms[{term, definition, sources}]`,
@@ -1028,6 +1091,55 @@ Supabase Free plan's upload ceiling, so the Free plan suffices. Files over the c
 **not** split or re-compressed by the pipeline (✅ DECIDED 2026-07-18, see open question 1):
 `validate` fails them with a specific, actionable message stating the actual size, the
 50 MB limit, and how to compress and re-upload.
+
+> ⚠ **CORRECTED 2026-07-19 (Wave 4 Agent 2) — "`validate` rejects the oversized file" is the
+> right message from the wrong place.** The pipeline's `validate` step *does* implement the
+> check, but **an over-cap file can never reach it**: the browser refuses the file from
+> `File.size` before hashing or transferring anything, and even if it did not, Storage's own
+> 50 MB ceiling would refuse the transfer with an opaque error long before a `documents` row
+> existed. Verified against the real 163,918,977-byte Kotler textbook — nothing was read,
+> nothing was uploaded, no row and no storage object were created.
+>
+> This is why the cap lives in `packages/core` as one pure function called from **both**
+> ends: the browser (so the rejection is instant and costs no bytes) and the `validate` step
+> (which is the authoritative one, since the client check is trivially bypassable). One
+> function means the user reads the *same sentence* either way:
+>
+> > “kotler-principles-of-marketing.pdf” is 156 MB. The limit is 50 MB. Compress it, or split
+> > it into parts under 50 MB, and upload again.
+>
+> Note the figure is **binary** (156 MiB, 50 MiB = 52,428,800 bytes) because that is what
+> Supabase's ceiling actually is, and PLAN's own "Kotler 156 MB" is measured the same way.
+>
+> **Consequence worth stating plainly: the `validate` step's size branch is unreachable
+> through the UI and is therefore covered by unit tests only.** What *is* exercised on real
+> bytes end to end is the step's other rejections — a real `.docx` uploads, the step
+> downloads it, sniffs `word/` in the ZIP central directory, and fails the document with a
+> human-readable reason.
+
+> ✅ **DECIDED 2026-07-19 (Wave 4 gate 3) — the Storage ceiling backstop is REAL, and exact.**
+> Agent 2's claim above rests on "Storage's own 50 MB ceiling would refuse the transfer",
+> which had not been verified independently — and the `documents` bucket carries
+> `file_size_limit = NULL`, so the ceiling is a *project-level* setting rather than a bucket
+> one. Measured directly, with a user JWT and no UI in the path: 52,428,800 bytes uploads
+> `200`, 52,428,801 bytes is refused `413 "The object exceeded the maximum allowed size"`.
+> The platform ceiling is byte-identical to `MAX_DOCUMENT_BYTES`, so defence in depth holds
+> and the client-side cap is genuinely backstopped.
+>
+> ⚠ **CORRECTED 2026-07-19 (Wave 4 gate 3) — but the ceiling is the ONLY server-side bound,
+> because `documents.size_bytes` is a client-supplied claim that is never reconciled.**
+> `registerUpload` takes `sizeBytes` from the browser and writes it to the column unchecked;
+> the `validate` step then runs its cheap size branch against *that column* (and re-checks
+> `> MAX_DOCUMENT_BYTES` against it a second time, so the "belt and braces" guard is
+> circular — both reads trust the same untrusted number). A crafted request understating
+> `sizeBytes` therefore *does* reach the size branch, making it reachable after all, and
+> makes `validate` download the object before `bytes.length` rejects it. Impact is bounded
+> to ≤50 MiB by the ceiling above and the authoritative `bytes.length` check is correct, so
+> this is a data-integrity nit rather than a hole — but `size_bytes` is rendered to the user
+> and will be read by Agents 3–5, and it can be a lie. The fix is nearly free and was NOT
+> applied here (out of a reviewer's scope to redesign the action): `registerUpload` already
+> calls `storage.list()` on the object's folder, whose result carries the true
+> `metadata.size` — stamp the column from that instead of from the request.
 
 ---
 
@@ -1134,6 +1246,31 @@ placeholders). The Anthropic key is already fully wired from M0.
 > `inngest-cli dev` → `POST /api/inngest?fnId=study-dashboard-health-check` → **Completed**;
 > a run with a non-existent `userId` fails as intended with `NonRetriableError: No such user`,
 > which is what proves the admin client reaches Postgres rather than a mock.
+>
+> ✅ **VERIFIED 2026-07-19 (Wave 4 Agent 2) — the sketch below now has a real, running
+> counterpart, built on the two-argument form.** `process-document` ships as
+> `validate → finalize` and processes real uploads end to end. Evidence, from
+> `inngest-cli dev` against real files in `.local-fixtures/`:
+>
+> | Run | File | Outcome |
+> | --- | --- | --- |
+> | `01KXXW139YCD87HRHRMAFT6E9Z` | `s01-basics.pdf` (992 KB) | **Completed** → `ready` in 1.53 s |
+> | `01KXXW943TXX7SSK6PDTVJNQ4Z` | `s04-micro-macro-analysis-chp3.pdf` (6.3 MB) | **Completed** → `ready` in 2.34 s |
+> | `01KXXWAYBV5T0EE9TASXXA4N2Z` | `bdba-loes-fall2025.docx` | **Failed** → `failed`, `DocumentRejectedError (unsupported-format)` |
+>
+> Four decks reached `ready`; the `.docx` failed with a user-readable reason and no stack
+> trace. The step vocabulary written to `document_processing_events` is `validate` (info,
+> ×2) then `finalize` (info) on success, and `validate` (error) then `failed` (error) on
+> rejection.
+>
+> ⚠ **Note for the agents inserting `extract` / `route` / `merge` / `embed`:** the retained
+> `failure_reason` contract is the non-obvious part. `onFailure` receives the error
+> **serialized to JSON**, so the error class is gone and only `name`/`message`/`stack`
+> survive — writing `error.message` into `failure_reason` is exactly how a stack trace
+> reaches a user. The shipped contract inverts it: **the step that knows the human reason
+> writes it to the row and then throws**, and `onFailure` only fills a generic sentence when
+> `failure_reason` is still null. Verified: the `.docx` run's `failed` event carries the
+> validate step's message verbatim, not a generic one.
 
 ```ts
 export const processDocument = inngest.createFunction(
@@ -1296,6 +1433,44 @@ follows it:
 > *update-not-duplicate* test the DoD requires, with sessions 13–14 and 18→19→20 as
 > additional consecutive runs within the same course.
 
+> ⚠ **CORRECTED 2026-07-19 (Wave 4 Agent 3) — `s01-basics.pptx` is 41.5 words/slide and
+> therefore takes the TEXT path, not the visual one.** The measured table above omits s01,
+> and the acceptance test it names ("run both, diff the extracted content, confirm the
+> visual path recovers what the text path drops") reads as though the `.pptx` would convert.
+> It does not: at 41.5 it sits 1.5 words above the threshold, the only deck in the corpus
+> anywhere near the line. The A/B is still valid and still worth running — it is
+> `pptx-xml` (text-only) versus `pdf-native` (visual) on the same lecture — but it compares
+> the two *branches*, not the two PPTX branches, and it does not exercise CloudConvert.
+> **Exercising the conversion path requires a deck that actually routes there** (s14, s18,
+> s19, s20). Agent 3 ran `s18` (22.6 w/s) for that reason.
+>
+> The parser reproduces this section's table closely enough to confirm both: slide counts
+> match **exactly** on all eight decks, and words/slide land within 0.3–1.0 of the figures
+> above (s13 51.9 vs 52.6, s14 38.8 vs 39.0, s18 22.6 vs 23.2, s19 21.9 vs 22.0, s20 30.3
+> vs 30.7, Micro 83.2/77.6/59.5 vs 84.2/78.5/60.3). Every routing verdict is identical.
+
+> 🔴 **DISPROVEN 2026-07-19 (Wave 4 Agent 3) — "speaker notes are often the richest content
+> in lecture decks" is FALSE of this corpus.** §4.2 gives that as the reason to read
+> `notesSlides`, and it is a good reason in general, but measured across all nine decks the
+> notes are nearly empty: the three Micro decks have **zero** notesSlides between them, and
+> `s01-basics.pptx` — the richest — carries 8 notes totalling **29 words**, of which the
+> substantive content is one policy line ("Attendance 80% required", repeated on 4 slides),
+> a Menti link and two YouTube links. Notes are still extracted and still folded into the
+> slide markdown, because 29 words of course policy that appear nowhere else is worth
+> having and costs nothing. But **the visual path, not the notes, is what recovers content
+> on this corpus**, and any plan that leans on notes to justify the text branch is leaning
+> on something that is not there.
+>
+> ⚠ **CORRECTED, same date — `notesSlide{N}.xml` is NOT the notes for `slide{N}.xml`.**
+> §4.2 lists the two part families side by side, which reads as a parallel walk. It is not
+> one: `s01-basics.pptx` has 28 slides and 13 notesSlides, and
+> `ppt/slides/_rels/slide3.xml.rels` points at `../notesSlides/notesSlide1.xml`. Pairing by
+> index would have attached slide 3's notes to slide 1 and then run out — well-formed,
+> plausible, and wrong on every note in the deck. Notes must be resolved through the
+> per-slide relationship part, and slide *order* through `ppt/presentation.xml`'s
+> `<p:sldId>` list rather than the file numbering. `packages/core/src/documents/pptx.ts`
+> does both; `pptx.test.ts` pins both.
+
 
 ---
 
@@ -1342,6 +1517,30 @@ the complete new `TopicPage`, a `changeSummary`, and per-block `sources`. Prompt
 - New-topic creations use the same schema with an empty current page.
 
 #### Step B2 — Verify the merge (deterministic loss-detector + cross-family Gemini critic)
+
+> ⚠ **CORRECTED 2026-07-19 (Wave 4 Agent 4) — "without the `changeSummary` explicitly
+> flagging it as superseded" is not machine-checkable, so the merge schema carries a
+> structured `removals[{blockKey, reason}]` instead.** Searching the change summary's prose
+> for a block's heading is a string match dressed up as a determinism guarantee: it fails on
+> paraphrase ("consolidated the pricing sections"), fires spuriously on any summary that
+> mentions a block it *kept*, and gives the merger an incentive to name-drop every block it
+> touched. Declaring the removal in a field makes the claim exact, makes "which block, and
+> why" legible in the revision history, and costs the model one array it was already
+> reasoning about. The rule PLAN states is unchanged — an undeclared disappearance is a red
+> flag — only the evidence it is checked against is.
+>
+> ⚠ Also: only **red** findings trigger the automatic re-merge. Amber ones (a removal
+> declared for a block that was never there; a citation that cannot be adjudicated because
+> the extraction dropped pages undeclared) are recorded and surfaced but do not spend a
+> second Sonnet call, because an amber finding is by construction something a re-merge has
+> no way to fix.
+>
+> ⚠ **`skipped[]` is unaudited, so a phantom-locator finding degrades to amber when the
+> extraction lost pages without declaring them.** A merger citing page 14 of a document whose
+> page 14 silently vanished from the extraction is not hallucinating — the evidence is
+> missing, which is a different failure and must not be reported as fabrication.
+> `segmentExtraction` computes the undeclared-loss set (source units in neither `pages` nor
+> `skipped`) and the loss-detector reads it.
 
 Every merge output passes a two-part check **before** it is persisted — this is what lets
 topic pages be trusted without a per-merge approval click:
@@ -1394,6 +1593,24 @@ Silent omission — a topic from a 600-page book that never became a page — is
   `coverage-checklist` matcher (Gemini Flash-Lite, Zod) maps each objective to a covering
   topic or flags it missing — turning "did I miss anything?" into "these 2 required topics
   have no page yet." Uncovered objectives surface as `openQuestions` of `kind: 'gap'`.
+
+> ⚠ **CORRECTED 2026-07-19 (Wave 4 Agent 5, item 5e shipped) — "uncovered objectives surface
+> as `openQuestions`" is only implementable for *partially* covered ones, and the split
+> matters.** `openQuestions` is a field on `topics.page`, so an open question needs a topic
+> page to live on — and an objective with **no** covering topic has, by definition, no page.
+> Writing it onto the nearest topic would file a warning about concept A on the page for
+> concept B, which is worse than not filing it.
+>
+> As shipped: `partial` coverage → a real `gap` open question on the covering topic, applied
+> as a tracked, revertible revision, exactly as this bullet describes. `none` → recorded on
+> `documents.coverage.missingObjectives`, which is the surface §8 already promises ("click to
+> see the gaps **and any syllabus objectives still missing**"). Same product outcome, reached
+> the only way it can be.
+>
+> Also: this bullet says the objectives come from "learning objectives / `examSignals`". As
+> built, the checklist call extracts the objectives from the **syllabus text itself** —
+> `syllabusComponentsSchema` has no learning-objectives field, it models graded components,
+> so there was no stored list to read. `examSignals` are not consulted by this call.
 - **Deep-review audit (opt-in, `claude-opus-4-8`):** the heavyweight second reader for prof-flagged
   big documents — Step D.
 
@@ -1425,6 +1642,89 @@ snapshot taken before this document's first merge, re-applying only the revision
 documents. `topic_sources` rows deleted, chunks deleted — then runs the pipeline
 fresh. This keeps merges effectively idempotent despite being LLM-driven.
 
+> 🔴 **DISPROVEN 2026-07-20 (Wave 4 Agent 6, final gate) — the strip does not exist, so
+> merges are NOT idempotent across a re-run.** Every mechanism this paragraph relies on is
+> unbuilt: there is no replay-forward from a `topic_revisions` snapshot, no `topic_sources`
+> delete (grep for one returns nothing), and no strip helper anywhere in the tree.
+> `retryDocument` (`documents/actions.ts:356-365`) does exactly two things — sets the row to
+> `queued` and re-sends `document/uploaded`.
+>
+> What actually happens on the *Retry the rest* button, or on any Inngest step retry that
+> lands after at least one topic has persisted: `runRouteAndMerge` re-reads
+> `topics.revision` fresh (`route-and-merge.ts:129-141`), so `target.currentRevision` is the
+> value the previous attempt already bumped. The `unique (topic_id, revision)` guard at
+> `route-and-merge.ts:707` — documented at :636 as what makes the persist idempotent — cannot
+> fire, because the write it is meant to protect against is the one that moved the key. Each
+> pass therefore appends a new `topic_revisions` row and bumps `topics.revision` again, and
+> the merge prompt is handed a `currentPage` that already contains this document's
+> contribution plus the same segments a second time.
+>
+> Consequences, in order of cost: the merge and critic calls are re-billed for topics that
+> already succeeded (measured ~$0.06/topic, plus a full re-extraction at $0.15–0.47);
+> revisions inflate, which is what `exam_reviews.topic_snapshot` staleness compares against;
+> and the page is re-merged from content it already holds, which is a content risk the
+> additive-edit rules mitigate but do not prevent.
+>
+> Note this does **not** contradict §7's ✅ DECIDED note declining `document/retry-merges` —
+> that note is about which *event* drives a retry, and its reasoning (replaying only the
+> failed topic replays the failure) still holds. It assumed the strip described here was in
+> place. It is not. Either the strip gets built, or the merge persist needs its own
+> idempotency key — `topic_sources` already carries `(topic_id, document_id)` and would only
+> need the revision it was written at.
+>
+> Not fixed at the gate: this is a design call between the two options above, and both touch
+> the merge write path on a branch with zero documents in the database to re-verify against.
+>
+> ---
+>
+> ⚠ **CORRECTED 2026-07-20 (Wave 4, follow-up) — the second option was taken. A re-run now
+> converges; the strip is still not built.**
+>
+> The design call above was decided in favour of the idempotency key, not the strip, and the
+> reason is that the two triggers that exist today both want *the unfinished topics
+> finished*, not the finished ones redone. Stripping and re-running is the correct response to
+> a deliberate "Reprocess"; it is the wrong response to a step timeout, because it throws away
+> work that succeeded and re-bills all of it.
+>
+> What shipped:
+>
+> - `topic_sources.merged_at_revision` (migration `20260719224933`) records which
+>   `topics.revision` a document's merge left the topic at. Together with the table's existing
+>   `unique (topic_id, document_id)` that is the key this note said was missing.
+> - `topic_revisions_one_merge_per_document`, a `before insert` trigger, **refuses** a second
+>   `source = 'merge'` snapshot for a pair `topic_sources` already records as merged. The
+>   invariant is in the database because the writer is an Inngest job holding the service key,
+>   where RLS and Server Actions are both out of the path. It raises `P0001`, deliberately not
+>   `23505` — the persist swallows `23505` as "this exact step already ran", so borrowing
+>   unique_violation would have made the guard silent.
+> - `planMergeWork` in `@study/core` (pure, 12 tests) partitions the pass's targets before any
+>   money is spent, reading two witnesses: this document's merge snapshot for the topic, and
+>   its `topic_sources` row. Two, because Step C's three writes are not transactional and the
+>   two crash windows between them pull in opposite directions — provenance alone re-merges a
+>   topic whose page update landed; the snapshot alone silently skips one whose page update
+>   did not.
+> - `route-and-merge.ts:636`'s docstring claimed a safety property the code did not have. It is
+>   now marked ⚠ CORRECTED and says what actually makes a re-run safe.
+>
+> Measured, on the real database inside a rolled-back transaction: the compounding insert is
+> rejected `P0001`; an identical re-run still hits `23505` from `unique (topic_id, revision)`;
+> a `deep_review` revision on the same topic is unaffected; and deleting the `topic_sources`
+> row re-opens the path — i.e. **the strip's own documented action is this guard's release
+> valve**, which is why it is a trigger keyed on `topic_sources` rather than a partial unique
+> index on `topic_revisions` (that would have had to be released by deleting immutable
+> history). 12 further tests run the real `runRouteAndMerge` twice over the same document
+> against an in-memory Postgres: second pass = 0 merge calls, 0 critic calls, 0 new revisions,
+> no `revision` bump; the mid-loop-retry case pays for exactly the two topics that did not
+> persist.
+>
+> **Still owed, and this note is the record of it:** the strip itself — replay-forward from
+> the pre-merge snapshot, `topic_sources` delete, chunk delete. Until it exists there is no
+> "Reprocess": a retry cannot rebuild a topic page from a *changed* extraction, because the
+> page it already contributed to is skipped rather than stripped. The bleeding is stopped;
+> the promised feature is not built. One bounded re-billing remains and is deliberate — a
+> re-run still pays for one `topic-routing` call and the segment embeddings, which is what
+> tells the pass which topics the document belongs to in the first place.
+
 ---
 
 ### 6. Chunking + embeddings + pgvector
@@ -1450,6 +1750,38 @@ and filter by topic. Topic-page sections themselves are also embedded (into
 `document_chunks` with a synthetic locator) so search covers the synthesized notes, not just
 raw sources.
 
+> ⚠ **CORRECTED 2026-07-19 (Wave 4 Agent 5) — the "target 300–500 tokens" is not reachable on
+> slide decks under these rules, and the rules are right rather than the target.** Measured
+> on a real 70-page Micro deck through the shipped chunker: **55 chunks, min 121, max 330,
+> mean 183 tokens** — the entire distribution sits below the stated band.
+>
+> This is arithmetic, not a bug. A slide is the unit, a slide holds ~150–250 tokens, and the
+> only merge rule is "absorb neighbours **below ~120**". Nothing in the spec pulls a
+> 180-token slide up toward 300, and nothing should: merging two full slides to hit a number
+> would put two concepts in one chunk and make every retrieval of it cite the wrong one of
+> the two. The min of 121 confirms the merge rule fired and nothing tiny survived.
+>
+> So 300–500 describes the **reading/heading-section** path, where a section genuinely spans
+> several pages, and is simply not a property decks can have. Treat the band as a split
+> target (it is what the splitter aims pieces at) rather than as a post-condition on every
+> chunk. Retrieval quality was checked rather than assumed — see the `match_chunks` note
+> below.
+
+> ✅ **VERIFIED 2026-07-19 (Wave 4 Agent 5) — `match_chunks` returns chunks the pipeline
+> actually wrote, and the Gate 1 `strict_order` fix holds.** 55 real chunks written by the
+> shipped chunk step, then queried through `match_chunks(course_id, embedding, 5)`: exact
+> self-match at similarity **1.0000**, followed by a semantically coherent neighbourhood
+> (supply curve 0.8862, movements along the demand curve 0.8844, a demand example 0.8729,
+> demand shifts 0.8676). Locators survived intact, including the merged ranges
+> `{page:1,toPage:3}` and `{page:18,toPage:19}`.
+>
+> Two properties confirmed on the same run: **§7 idempotency is now structural** — a second
+> identical invocation of the step made **zero** embedding requests and wrote **zero**
+> duplicate rows (55 chunks, 55 distinct `chunk_hash`), because the reuse lookup found every
+> vector and the partial unique indexes from `20260719215804` back it up. And **embeddings
+> meter with a real cost**: `embed-chunk` logged 2 calls / 9,156 tokens / **$0.000183**, 0
+> unpriced, confirming Agent 0's `voyage` provider widening and Agent 4's non-zero pricing.
+
 **pgvector index — HNSW, cosine:**
 
 ```sql
@@ -1464,9 +1796,49 @@ builds incrementally with better recall/latency. `vector(1024)` is well inside H
 before the ANN scan. v2 option: hybrid search (tsvector + RRF) — an additive generated column + GIN index, no
 re-embedding or restructuring (Course Copilot implements it).
 
+> 🔴 **DISPROVEN 2026-07-19 (Wave 4 Gate 2)** — "Queries always filter `course_id` (and RLS
+> filters `user_id`) **before** the ANN scan" is backwards, and it is the sentence that hid a
+> real bug. An HNSW index scan knows nothing about either predicate: it walks the graph,
+> emits `hnsw.ef_search` candidates (**40** on this project), and the executor filters them
+> **afterwards**. Post-filter, not pre-filter. If the 40 globally-nearest vectors belong to
+> other courses, the caller gets **zero rows** for a course that has plenty of material — no
+> error, no warning.
+>
+> Measured on the live project at gate, 3,010 chunks (3,000 in a decoy course, 10 in the
+> queried course), HNSW plan forced: `match_chunks(..., 8)` returned **0 of 10** with
+> pgvector's default `hnsw.iterative_scan = off`, and **8 of 10** with `strict_order`.
+>
+> It is latent at today's row counts — with a small table the planner picks the `course_id`
+> btree and an exact sort, which has perfect recall, so every test passes. The switch to the
+> HNSW plan happens silently on cost as the table grows, i.e. in production, weeks later.
+>
+> Fixed in `20260719182225_match_chunks_iterative_scan` by attaching
+> `set hnsw.iterative_scan = 'strict_order'` to `match_chunks` itself (pgvector 0.8.2 is
+> installed), so the guarantee travels with the one retrieval surface rather than depending
+> on every future caller remembering a GUC. `strict_order` over `relaxed_order` because the
+> function documents an ordering contract its callers cite from.
+
 **Search/RAG surface:** a `match_chunks(course_id, query_embedding, k)` SQL function
 (`security invoker`, `set search_path = ''`) powering course search, "ask your notes"
 chat with citations, and context retrieval for the exam-review generator.
+
+> ⚠ **CORRECTED 2026-07-19 (Wave 4 Agent 1)** — as shipped in `20260719175555_match_chunks`
+> the signature is `match_chunks(p_course_id, p_query_embedding, p_match_count default 8,
+> p_source default null, p_topic_id default null)`; `p_match_count` is clamped to 1..200 so
+> a caller cannot turn retrieval into a full-course dump. `security invoker` is the whole
+> tenancy model and it was **measured, not argued**: two tenants' chunks with *identical*
+> embeddings were inserted, and a real session call for the account that owns neither
+> returned **0 rows** for the other tenant's course while the service-role control call
+> returned that same row — RLS, not the query, did the filtering.
+>
+> ⚠ **Also corrected: the SQL block above spells the type `vector(1024)`, which will not
+> compile in this project.** `20260719092113` installed pgvector into the `extensions`
+> schema (not `public`, to avoid Supabase's `extension_in_public` advisory), so columns are
+> `extensions.vector(1024)`, the index opclass is `extensions.vector_cosine_ops`, and — because
+> operators cannot be dot-qualified — the distance operator inside a `search_path = ''`
+> function must be written `OPERATOR(extensions.<=>)`. Getting that last one wrong costs a
+> sequential scan rather than an error, since the ORDER BY must match the indexed expression
+> exactly.
 
 ---
 
@@ -1493,6 +1865,30 @@ chat with citations, and context retrieval for the exam-review generator.
   processing events; a document exceeding a sanity ceiling (~$5) aborts with `failed` rather
   than looping.
 
+> ✅ **DECIDED 2026-07-19 (Wave 4 Agent 5) — `document/retry-merges` is deliberately NOT
+> built, and the retry path is closed without it.** The event is named in three places above
+> and never existed. The decision was whether to build it or report it open; it is neither —
+> it is **declined**, because the capability it describes already ships.
+>
+> `retryDocument` (the *Retry the rest* button §8 specifies) sets the row back to `queued`
+> and re-sends `document/uploaded`, which re-runs the whole pipeline. That is more work than
+> re-running only the failed topics, and it is *strictly more correct*: a merge fails for
+> reasons that live upstream of the merge (a bad extraction, a routing decision that put six
+> segments on one topic), so replaying only the failed topic replays the failure. Re-running
+> is also close to free on the second pass — the chunk step reuses every embedding by
+> `chunk_hash`, so a retry costs the LLM calls and nothing else.
+>
+> Building a second event that duplicates a working path more narrowly would have added a
+> half-wired surface for a saving that is not the bottleneck. Revisit only if a real
+> `partial` document turns out to be expensive to re-run end to end; the `failed_topics`
+> column is already populated and would be the input.
+
+> ⚠ **STILL OPEN 2026-07-19 — the repeated-failure guard is not implemented.** "A
+> repeated-failure guard (same `content_hash` failed ≥ 2 times) short-circuits to `failed`
+> immediately" was not built by Agent 2 and was not built by item 5e either. The money guard
+> below bounds the cost of *one* pathological document; nothing yet bounds the cost of the
+> same document being retried by hand five times. Carried forward.
+
 ---
 
 ### 8. Status tracking & UX
@@ -1500,6 +1896,36 @@ chat with citations, and context retrieval for the exam-review generator.
 - **Source of truth:** `documents.status` + append-only `document_processing_events`,
   written at every step boundary. UI subscribes via Supabase Realtime (`postgres_changes` on
   both tables filtered by `course_id`) — no polling.
+
+> 🔴 **DISPROVEN 2026-07-19 (Wave 4 Agent 2) — "subscribe and you receive rows" is FALSE on an
+> RLS-protected table, and it fails SILENTLY.** Measured in a browser, not reasoned about:
+> three real decks uploaded, all three reached `ready` in Postgres, and **zero
+> `postgres_changes` frames arrived**. The channel reported `SUBSCRIBED`, the websocket stayed
+> open, nothing errored anywhere.
+>
+> The cause is that the Realtime socket connects with the **publishable (anon) key**, not the
+> user's session. Realtime evaluates each table's RLS policies against the *subscriber's*
+> token before forwarding a row, and every policy on `documents` and
+> `document_processing_events` is `(select auth.uid()) = user_id`. Under an anon token
+> `auth.uid()` is NULL, the comparison is NULL, and every row is correctly withheld — the
+> server is behaving properly, and the client cannot tell "you may see nothing" apart from
+> "nothing is happening".
+>
+> **The fix is one line and it is mandatory: `await supabase.realtime.setAuth(accessToken)`
+> before `.subscribe()`.** With it, frames arrive ~80 ms after the database write. Any future
+> Realtime subscriber in this app (topic pages, the Today Queue, chat) needs the same call;
+> `lib/documents/use-document-feed.ts` is the reference.
+>
+> ✅ **VERIFIED 2026-07-19 — gate 1's lazy-replication-slot warning is real.**
+> `pg_replication_slots` was empty before the first subscriber and held an *active*
+> `supabase_realtime_replication_slot_…` immediately after, confirming Supabase creates the
+> slot on demand. The mitigation shipped is the one gate 1 prescribed — subscribe, then REST
+> backfill on the `SUBSCRIBED` callback, treating frames as an accelerator — plus a bounded
+> reconciliation re-read every 4 s **while any document is non-terminal**, which stops
+> entirely at steady state (an idle documents page makes no requests). That watchdog is not
+> the "polling" this bullet rejects; it is a safety net over a transport with a measured
+> warm-up hole, and it is what kept the UI correct during the whole period the `setAuth` bug
+> above was live.
 - **Upload flow:** drag-drop → client-side TUS upload with progress bar → row appears
   instantly as `queued`. The upload dialog asks for `kind` (slides / reading / case /
   syllabus), pre-guessed from MIME type and filename, and offers a **Deep review** toggle
@@ -1517,6 +1943,45 @@ chat with citations, and context retrieval for the exam-review generator.
   a held one reads "⚠ **Jordan forms** · flagged for review")
   from the change summaries and critic verdicts — this is the moment the product's core promise is visible, so
   it gets real UI attention.
+
+> ⚠ **CORRECTED 2026-07-19 (Wave 4 Agent 2, item 5b shipped)** — three things about this
+> bullet as built.
+>
+> 1. **The checklist ships listing only the steps the pipeline can reach**, which today is
+>    *Queued → Checking the file → Done*. Rendering all nine while seven can never light up
+>    does not read as "coming soon"; it reads as a stuck job, on the one screen whose entire
+>    purpose is telling the user whether the job is stuck. The "four views of one step list"
+>    rule still holds and there is now a **fifth** view to change with the others:
+>    `CHECKLIST` in `components/documents/document-card.tsx`, where the enum-ordered slot for
+>    `extracting`/`structuring`/`merging`/`embedding` is marked.
+> 2. **`kind` pre-guessing is weaker than this bullet implies, and is a default rather than an
+>    inference.** Filename signals do not exist in the real corpus as often as assumed: the
+>    genuine syllabus `marketing-fundamentals-sem1.pdf` carries no syllabus signal at all and
+>    is guessed as a `reading`. (`bdba-loes-fall2025.docx` *is* caught, via `loes`.) Pinned as
+>    a known miss in `packages/core/src/documents/validate.test.ts` rather than patched — a
+>    pattern aggressive enough to catch it starts mislabelling ordinary readings.
+> 3. **The pulsing dot is now implemented.** `sync-pulse` — the second of the design system's
+>    two signature motions, specified 2026-07-17 and unimplemented until now — ships in
+>    `globals.css` as `.dot-motif-pulse`, an expanding azure ring with a *designed*
+>    reduced-motion alternative (the ring is removed outright; the blanket duration collapse
+>    in `@layer base` would otherwise freeze it mid-expansion as a permanent halo).
+
+> 🔴 **DISPROVEN 2026-07-19 (Wave 4 gate 3) — "the user can just try again" was FALSE in the
+> upload dialog; every error was terminal.** The submit button carried
+> `disabled={… || error !== null}`, which reads as ordinary defensiveness. It is not:
+> `chooseFile` is the only other code that clears `error`, and it runs off the file input's
+> `change` event — which a browser does **not** fire when the user re-picks the same file.
+> Measured in a real browser: after a duplicate rejection the button stayed disabled, and
+> re-selecting the identical file left it disabled. The only escape was closing the dialog.
+>
+> The reason this matters more than a UX wart: the failure the flow is *built* around is a
+> dropped transfer, which lands in the `catch` with the file still selected — exactly when
+> `upload.findPreviousUploads()` would resume from the last TUS checkpoint. Closing the
+> dialog discards that state and restarts the transfer at zero, giving up the single
+> property TUS was chosen for on a 47 MB deck over a lecture-hall connection. Fixed by
+> dropping `error !== null` from the disabled condition; `submit()` already clears the error
+> and re-runs `validateDocumentSize` first, so an oversized file still re-shows its message
+> without transferring a byte. Pinned by `components/documents/upload-dialog.test.tsx`.
 - **Terminal states:** `ready` → card collapses to a summary ("Contributed to 4 topics",
   linked) with a **coverage line** ("587 of 600 pages mapped · 13 unmapped" — click to see
   the gaps and any syllabus objectives still missing) and, when deep review ran, a "Deep
@@ -1562,6 +2027,87 @@ chat with citations, and context retrieval for the exam-review generator.
 | PPTX (**visual path, converted** — added 2026-07-18; 4 of 5 Marketing decks take this branch) | ~$0.01 CloudConvert + $0.26–0.34 (Gemini 3.1 Pro multimodal) | $0.15–0.35 | ~$0.005–0.01 | ~$0.03–0.05 | <$0.01 | **≈ $0.46–0.76** |
 | Exam review (per regen) | — | — | — | — | — | **≈ $0.50–1.50** (Opus 4.8) |
 | Deep-review audit (opt-in, per doc) | — | — | — | — | — | **≈ $0.80–2.00** (Opus 4.8, big docs) |
+
+> ⚠ **CORRECTED 2026-07-19 (Wave 4 Agent 3) — extraction is roughly HALF the estimate, and
+> the cost is dominated by OUTPUT tokens, not input.** Four documents measured end to end
+> through the live pipeline on `gemini-3.1-pro-preview`, priced by `pricing.ts` into
+> `ai_generations`:
+>
+> | Document | Route | Units | Input tok | Output tok | Measured | §10 estimate |
+> | --- | --- | --- | --- | --- | --- | --- |
+> | `s01-basics.pdf` | `pdf-native` | 27 pp | 14,874 | 9,462 | **$0.1433** | $0.26–0.34 |
+> | `s01-basics.pptx` | `pptx-xml` | 28 sl | 3,128 | 8,897 | **$0.1130** | $0.10–0.13 |
+> | `s18-segmentation` | `pptx-converted-pdf` | 32 sl | 17,517 | 7,995 | **$0.1310** | $0.26–0.34 |
+> | `Micro Unit 4` | `pptx-xml` | 40 sl | 4,438 | 10,031 | **$0.1292** | $0.10–0.13 |
+>
+> The text-path row is accurate. **The two visual rows are ~2.2× too high**, and the reason
+> is the input-token assumption: §4.1 estimates "a 40-page deck ≈ 80–120K input tokens",
+> i.e. ~2–3K per page. Measured, a page costs **~550 tokens** (14,874 for 27 pages; 17,517
+> for a 32-slide converted deck) — four to five times less. Gemini 3.1 Pro's PDF handling is
+> far cheaper per page than the figure this table was built on, and **no call in this
+> corpus comes close to the 200K long-context surcharge**, so that bracket never engages.
+>
+> The practical consequence is that the visual path is **much** cheaper to prefer than
+> planned: the whole visual-vs-text premium on the s01 pair is **$0.03** (+27%), not the
+> ~$0.20 this table implies. Output tokens are now the dominant term on every route
+> (~8–10K × $12/MTok ≈ $0.10–0.12, versus $0.03 of input on the most expensive row), which
+> means **extraction cost scales with how much we ask the model to write, not with document
+> size** — the opposite of the assumption here, and the thing to watch if the schema grows.
+>
+> ⚠ **CORRECTED 2026-07-19 (Wave 4 Agent 4) — merge, the critics and embeddings are now
+> measured, and the merge column is at or below its LOW end.** Two synthetic 5–6 page
+> sessions merged into one course through the live Steps A–C, priced by `pricing.ts` into
+> `ai_generations`:
+>
+> | Stage | Job · Model | Calls | Cost (2 docs) | Per document | §10 estimate |
+> | --- | --- | --- | --- | --- | --- |
+> | Merge | `topic-merge` · claude-sonnet-5 | 4 (2 topics × 2 docs) | **$0.2405** | **~$0.120** | $0.15–0.35 |
+> | Merge critic | `merge-critic` · gemini-3.1-flash-lite | 4 | **$0.0032** | **~$0.0016** | ~$0.005–0.01 (with checklist) |
+> | Routing | `topic-routing` · gemini-3.1-flash-lite | 2 | **$0.0010** | **~$0.0005** | not separately budgeted |
+> | Embeddings | voyage-3.5-lite | 10 | **$0.000028** | **~$0.000014** | <$0.01 |
+>
+> **Route + merge + verify ≈ $0.122 per document** on this corpus. Two consequences:
+>
+> 1. The merge column scales with **the number of affected topics**, not with document size —
+>    it is one Sonnet call per topic, and each call ships the whole current TopicPage plus
+>    the routed segments. A document touching 6 topics costs roughly 3× one touching 2. The
+>    $0.15–0.35 range is right for ~4 topics and should be read per-topic (~$0.06) rather
+>    than per-document.
+> 2. **The critics are essentially free** — $0.0016 against a $0.120 merge is 1.3%, and the
+>    critic call returned in 653 ms against the merge's 29.7 s. The cross-family verify is
+>    the cheapest part of the pipeline by two orders of magnitude, which settles any future
+>    argument about whether it earns its place.
+>
+> Latency, not cost, is the merge's real constraint: **~30 s per topic**, serial, so a
+> document touching 6 topics spends ~3 minutes in the merge step alone.
+>
+> ⚠ **Voyage rate-limits harder than "effectively free" suggests.** Three embedding requests
+> in ~14 seconds — an ordinary two-document run — returned **HTTP 429** and failed the
+> routing step outright. The 200M free allowance says nothing about requests per minute. The
+> client now retries 429/5xx with bounded exponential backoff (4 attempts, 1s/2s/4s) *inside*
+> the call, because an Inngest step retry would re-run the whole `route-and-merge` step and
+> re-bill every Sonnet merge it had already completed.
+>
+> Not yet measured, and therefore not corrected: glossary.
+> The `≈ $0.46–0.76` totals stand until those land, with extraction ~$0.13 rather than
+> ~$0.30 inside them.
+
+> ⚠ **CORRECTED 2026-07-19 (Wave 4 Agent 5) — the Embeddings column is right, and it is right
+> by three orders of magnitude.** `<$0.01` per document is technically true and wildly
+> uninformative. Measured on a real 70-page deck: **55 chunks, 9,156 tokens, 2 requests,
+> $0.000183** — about **1/50th of a cent**, or roughly 0.15% of the document's total cost.
+>
+> The practical reading: **embedding cost is not a line item and should stop being budgeted
+> as one.** What *is* a real constraint is the request rate (see the 429 note above), and the
+> defence against it is not spending less but requesting less — the shipped chunk step looks
+> every chunk up by `chunk_hash` before sending anything, so a re-processed document embeds
+> **nothing**. That was verified: a second identical run made zero requests and cost zero.
+>
+> Deep review remains the one genuinely expensive opt-in at $0.80–2.00, and is now gated
+> behind a per-document spend checkpoint (§7's money guard) evaluated immediately before it.
+> **The audit itself has not been run end to end on a real document** — it is built and
+> typechecked, not measured. Its row in this table is still an estimate, and is the main
+> thing left to verify on real data.
 
 ⚠ **Corrected 2026-07-18 against the verified feed** (the old figure assumed a 12-week term
 at 3 sessions/week ≈ 36 decks): the Fall term actually runs 2026-08-31 → 2026-12-18
@@ -4882,6 +5428,26 @@ feature's migration, never ahead of need.
    `not null`; and a nullable FK column keeps `match simple` semantics, so an unassigned
    child (a course with no semester) correctly skips the check.
    Applied to the foundation tables in `20260718140050_tenant_scoped_fks_and_grading_scale`.
+8. **Background jobs derive ownership from the database, never from the event — added 2026-07-19 (Wave 4 Agent 0).**
+   Rule 3 says service-role usage is confined to Inngest functions and webhook handlers. That
+   scopes *where* the bypass lives; it says nothing about **who the bypassing code writes rows
+   for**, and the first job in the codebase answered that with `event.data.userId`.
+   `events.ts` validates it with `z.uuid()` — which **types** the value and does not
+   **authorise** it. Under `createAdminSupabaseClient` there is no RLS in the path, so the
+   tenant was whatever the event said it was, and an event is not a trusted input: it is
+   stored and replayed by a third party, and can arrive from a replay, a leaked event key, a
+   buggy producer, or a future webhook forwarding something a user typed. Validation makes a
+   hostile payload well-formed; it does not make it true.
+   **The rule: a handler re-derives `user_id` from the database row the event points at, and
+   treats any `userId` in the payload as a hint to cross-check, never as authority.** A
+   disagreement is a *security event* — fail loudly, write nothing, never silently prefer one
+   side, because choosing between two claimed tenants is not a decision code gets to make
+   quietly. Implemented as `deriveOwner()` in `apps/web/src/inngest/owner.ts`, whose locator
+   type is computed from the generated `Database` type so a table with no ownership column is
+   unrepresentable rather than merely discouraged. Corollary for new events: **carry a row id,
+   not an owner.** `{ documentId }` cannot be lied to; `{ documentId, userId }` can. Add a
+   `userId` only when the producer knew the owner independently of the row id, so that a
+   mismatch means something.
 
 ---
 
@@ -5037,6 +5603,12 @@ AI-generated artifacts are **born active and reversible**, not parked in an appr
 
 Two models from the same family can share blind spots, so the whole verification layer is **cross-family by construction** (Gemini critics over Claude generation, Claude critics/readers over Gemini generation) and leans on deterministic checks and coverage *measurement* wherever a mechanical check exists — a verifier is used only for what code can't decide. Critic verdicts are persisted alongside the artifact (`cards.critic`, `topic_revisions.needs_review`, `documents.coverage`) and logged to `ai_generations` like any other call.
 
+🔴 **DISPROVEN 2026-07-19 (Wave 4 Agent 0) — "mandatory human confirm" was not enforced against the caller that matters.** Item 3 above calls the grade-weight gate mandatory, and `20260719121909` did enforce the *born-unconfirmed* half in the database (a trigger, so the service-role writer cannot get around it). The half that promotes a row was left to RLS. **RLS does not constrain a service-role client**, so `confirm_syllabus_extraction` — `security invoker`, with no caller assertion — could be called by any holder of `SUPABASE_SECRET_KEY` on any extraction in the project. Measured, not reasoned: a PostgREST round trip with the secret key flipped a fixture `assessments` row `confirmed: false → true` and wrote `courses.total_sessions = 99, total_sessions_source = 'syllabus'`, returning `error: null`. No human, no session, no `auth.uid()`.
+
+The generalisable lesson, because this was a *reasoning* failure and not a typo: **the migration comment "RLS applies (security invoker), so another account's extraction is simply not visible" is a true sentence about session users and a false one about the only client background jobs actually run under.** Any invariant whose enforcement is "RLS will catch it" is unenforced against the service role by construction. Closed by `assert_human_caller()` (`auth.uid() is null` → `insufficient_privilege`), applied to `confirm` **and** `reject` — erasing a proposal before the human sees it is the same §2b decision as promoting it. `apply_syllabus_extraction` is deliberately left ungated: it is the designated service-role writer and everything it inserts is unconfirmed by trigger. See `20260719154813_syllabus_gate_requires_a_human.sql`.
+
+⚠ **CORRECTED 2026-07-19 (Wave 4 Agent 6, gate review of Agent 0) — gating `reject` was right; leaving it able to discard a *confirmed* run was not.** `20260719154813`'s new comment on `reject_syllabus_extraction` claims it "never touches courses — a rejected extraction never wrote a session count". That is an assertion about a state the function never checked: `reject` looked the row up, found it, and deleted, without asking whether `confirmed_at` was already set. Measured in a rolled-back transaction against `fvqnscvqysxreetwstgr`: rejecting the fixture account's **confirmed** extraction as a signed-in user succeeded and left `extraction rows 0, assessments 0, courses.total_sessions 30 / total_sessions_source 'syllabus'` — four confirmed grade weights deleted, and the course still claiming a syllabus-sourced session count whose run no longer exists. Reachable without any API access: the panel renders only for `confirmed_at is null`, but `syllabus-actions.ts` re-checks nothing, so two tabs on one course (confirm in the first, Discard in the second) is enough. Closed by `20260719162240_reject_cannot_discard_a_confirmed_extraction.sql`, which refuses with `object_not_in_prerequisite_state`. It refuses rather than reverting because `confirm` overwrites whatever `courses.total_sessions` held — usually a `feed_derived` value — and records nothing about what it displaced, so there is no prior value to restore and a "revert" would have to invent one. **The lesson is Agent 0's own, applied one door further along:** a gate that authenticates the *caller* still has to check the *state*, and "this function never writes X" is only true if the function refuses the cases where it would.
+
 ### 3. Prompt versioning and traceability
 
 `packages/ai/src/prompts/define.ts` defines the registry primitive (⚠ moved 2026-07-19 from `src/prompts.ts`, which would otherwise be an ambiguous module specifier next to the new `src/prompts/` directory). `TVars` is constrained to JSON-shaped values — objects and arrays, not just `string | number` — because real prompts pass TopicPage JSON, segment lists and critic verdicts. It is deliberately not `Record<string, unknown>`: that would type-check every call but erase the variable names, so a misspelled var would compile and interpolate `undefined`. JSON-shaped also keeps `input_hash` stable, which is what the §5 idempotency short-circuit rests on.
@@ -5126,6 +5698,11 @@ Three distinct layers, cheapest first:
 - **Append-only is structural.** A `BEFORE UPDATE` trigger refuses `UPDATE` for `postgres` itself (`SQLSTATE 23001`), which is the only form of the invariant that binds the RLS-bypassing admin client that writes the table. `DELETE` is deliberately left open: `user_id` cascades from `auth.users`, and a trigger raising on `DELETE` would make user deletion fail.
 
 ⚠ **CORRECTED 2026-07-19 — the rollup is a plain view, not a materialized one.** §6 below says "materializes"; a matview cannot carry RLS (it is owned by the definer, so policies do not apply) and would leak spend across tenants the moment a second user exists. It would also be *stale*, and a lagging rollup is wrong exactly when spend is spiking — the only moment the guard matters. At this volume (thousands of rows/month) live aggregation is microseconds. Shipped as `create view public.ai_daily_cost with (security_invoker = true)`.
+
+⚠ **CORRECTED 2026-07-19 (Wave 4 Agent 0) — the rollup reported unpriced calls as $0, and `provider` could not name the embedding vendor.** Two defects in the shipped §6 objects, both latent only because the table had seen 8 rows, all priced, all Anthropic or Google:
+
+- **`coalesce(sum(cost_usd), 0)` turned unknown spend into zero spend.** `sum()` already skips NULLs, so the coalesce fired only when *every* row in a group was unpriced — and reported that group as costing exactly nothing. The budget guard reads this view, so a day on which metering broke and forty real calls went out was indistinguishable from an idle day. `ai_daily_cost` now also publishes `unpriced_calls`, and `cost_usd` is documented as the lower bound it always was. The guard's decision (`packages/ai/src/guard.ts`, `UNPRICED_TOLERANCE`) is deliberate and written down: **do not invent a price** — there is no honest number for an attempt that reported no usage — but past 5 unpriced calls in a month, step the posture up one level. Stepping cuts background work and never touches interactive calls; escalation is capped *below* `halt` so a metering failure can never inflict the kill switch's outage on its own.
+- **`check (provider in ('anthropic','google'))` would have rejected the first Voyage embedding row**, making the M1 DoD clause "every AI call appears in `ai_generations` with cost" false — quietly, since the insert throws inside the metering hook where an exception reads as a bug rather than a hole. Widened to include `voyage` and nothing else. `ProviderName` in `packages/ai/src/models.ts` was **not** widened: it is the `provider` field of every `MODELS` entry, so adding `"voyage"` there would let an embedding model typecheck as a language model and `getModel()` hand it to `generateObject`. Embeddings are a separate axis (`EmbeddingProviderName`), and `AIProviderName` is their union — a metering type only, never a selection one. `openai` is in neither while `@ai-sdk/openai` stays unwired.
 
 🔴 **DISPROVEN 2026-07-19 — PostgREST does not return `numeric` as a JSON string here.** The widely-cited precision-preserving string encoding was expected for `cost_usd`; measured against this project, PostgREST returns a JSON **number** (`0.00005625`), so the generated `number | null` type is honest and no concatenation bug was latent. The Supabase SQL editor / MCP path renders the same column as `"0.00005625"`, which is what made the wrong reading plausible — the difference is in those tools' result encoding, not in the column. `apps/web/src/lib/ai/spend.ts` keeps a `z.coerce.number()` at the boundary anyway, per the repo's Zod-at-every-boundary rule.
 

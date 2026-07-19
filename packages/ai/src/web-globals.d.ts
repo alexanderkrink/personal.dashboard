@@ -22,3 +22,28 @@ declare var crypto: {
     ): Promise<ArrayBuffer>;
   };
 };
+
+/**
+ * `fetch`, narrowed to what the Voyage embedding client actually uses.
+ *
+ * Declared structurally rather than pulled in from `DOM` or `@types/node` for the reason in
+ * the module note: either lib would admit the whole environment along with the one function
+ * needed.
+ *
+ * ⚠ The shape is written INLINE rather than as a named alias, and it deliberately mirrors
+ * `FetchLike` in `embeddings.ts`. An ambient `.d.ts` is only visible to a compilation that
+ * includes it, and `apps/web` typechecks this package's sources under its OWN tsconfig,
+ * where this file is not in the include set — so a named type declared here is simply not
+ * found over there. The types that cross that boundary have to be real module exports;
+ * only the ambient binding of the global itself can live here. Structural typing is what
+ * makes the two agree, and `embeddings.test.ts` exercises the exported one.
+ */
+declare var fetch: (
+  url: string,
+  init?: { method?: string; headers?: Record<string, string>; body?: string },
+) => Promise<{
+  ok: boolean;
+  status: number;
+  json(): Promise<unknown>;
+  text(): Promise<string>;
+}>;

@@ -36,6 +36,7 @@ env:
   # AI key missing entirely.
   GOOGLE_GENERATIVE_AI_API_KEY: ci_placeholder_google_generative_ai_key
   VOYAGE_API_KEY: ci_placeholder_voyage_key
+  CLOUDCONVERT_API_KEY: ci_placeholder_cloudconvert_key
   # The §6 kill switch and budget guard. All three have defaults in env.ts, so
   # they are set here to exercise the validators rather than to satisfy a
   # requirement — a typo'd name or a loosened schema fails CI instead of

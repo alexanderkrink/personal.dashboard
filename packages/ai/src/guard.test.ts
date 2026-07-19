@@ -6,6 +6,7 @@ import {
   guardDecision,
   type SpendPosture,
   spendPosture,
+  UNPRICED_TOLERANCE,
 } from "./guard";
 import type { Rank } from "./models";
 
@@ -145,5 +146,71 @@ describe("AIPausedError", () => {
   it("uses §6's friendly wording for the two hard stops a user can see", () => {
     expect(new AIPausedError("kill-switch").message).toContain(AI_PAUSED_USER_MESSAGE);
     expect(new AIPausedError("budget-halt").message).toContain(AI_PAUSED_USER_MESSAGE);
+  });
+});
+
+/**
+ * Unpriced calls: money spent that the rollup could not put a number on.
+ *
+ * `ai_generations.cost_usd` is nullable and means "the provider reported no usage", which
+ * is not $0.00 — the column's own comment says so. `ai_daily_cost` then wrote
+ * `coalesce(sum(cost_usd), 0)` and a group of entirely unpriced attempts reached the guard
+ * as costing exactly nothing. A metering outage was therefore indistinguishable, to the
+ * only circuit breaker in the system, from a quiet month.
+ *
+ * The decision (see `UNPRICED_TOLERANCE`): do not invent a price — there is no honest
+ * number — but stop treating the sum as a total. Past the tolerance the posture steps up
+ * one level, which cuts background work and never touches interactive calls.
+ */
+describe("unpriced calls are a guard signal, not a silent zero", () => {
+  const budget = { monthlyBudgetUsd: 75 };
+
+  it("ignores a handful — one unlucky call can burn three ladder rungs", () => {
+    expect(spendPosture({ ...budget, monthToDateUsd: 0, unpricedCalls: UNPRICED_TOLERANCE })).toBe(
+      "normal",
+    );
+  });
+
+  it("steps the posture up once metering is systematically broken", () => {
+    // THE HOLE (#4). $0.00 spent and 40 real calls the rollup could not price: before
+    // this, indistinguishable from an idle month, and every deep background job sailed
+    // through on the strength of a figure that was measuring nothing.
+    expect(spendPosture({ ...budget, monthToDateUsd: 0, unpricedCalls: 40 })).toBe("defer-deep");
+  });
+
+  it("steps from defer-deep to defer-balanced", () => {
+    expect(spendPosture({ ...budget, monthToDateUsd: 80, unpricedCalls: 40 })).toBe(
+      "defer-balanced",
+    );
+  });
+
+  it("NEVER escalates all the way to halt", () => {
+    // Halt is indistinguishable from the kill switch and takes interactive chat down with
+    // it. §6's ordering principle says only real observed spend crossing 150% may do that
+    // — a metering failure inflicting a worse outage than the one it is reacting to is
+    // the guard becoming the incident.
+    expect(spendPosture({ ...budget, monthToDateUsd: 100, unpricedCalls: 500 })).toBe(
+      "defer-balanced",
+    );
+  });
+
+  it("leaves an already-halted month halted", () => {
+    expect(spendPosture({ ...budget, monthToDateUsd: 200, unpricedCalls: 500 })).toBe("halt");
+  });
+
+  it("keeps interactive calls running at every escalated posture", () => {
+    // The property that matters more than any threshold: whatever the guard concludes
+    // about unknown spend, the user sitting in front of a chat window is unaffected.
+    for (const unpriced of [0, 6, 40, 500]) {
+      const posture = spendPosture({ ...budget, monthToDateUsd: 0, unpricedCalls: unpriced });
+      expect(
+        guardDecision({ killSwitch: false, posture, rank: "deep", kind: "interactive" }),
+      ).toEqual({ allowed: true });
+    }
+  });
+
+  it("treats an absent count as zero, so the pure budget ratio still stands alone", () => {
+    expect(spendPosture({ ...budget, monthToDateUsd: 0 })).toBe("normal");
+    expect(spendPosture({ ...budget, monthToDateUsd: 80 })).toBe("defer-deep");
   });
 });
