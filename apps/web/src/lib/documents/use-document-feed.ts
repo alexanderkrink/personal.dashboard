@@ -71,6 +71,39 @@ import { createClient } from "@/lib/supabase/client";
  * this schema's job is to establish shape, not to duplicate the database's
  * constraints, which are already enforced where it counts.
  */
+/**
+ * `documents.coverage`, as §8's terminal card reads it.
+ *
+ * Every field is defaulted and the whole object is nullable, because the column is null for
+ * every document processed before the coverage step existed and for every document whose
+ * coverage step failed. A card must render those as "no coverage line" rather than as zeros,
+ * which would claim a measurement that was never taken.
+ */
+const coverageSchema = z.object({
+  checked: z.boolean().default(false),
+  pagesTotal: z.number().default(0),
+  pagesMapped: z.number().default(0),
+  pagesSkipped: z.number().default(0),
+  pagesUndeclared: z.number().default(0),
+  pagesUnmapped: z.number().default(0),
+  topicCount: z.number().default(0),
+  trustworthy: z.boolean().default(false),
+  gaps: z
+    .array(
+      z.object({
+        fromPage: z.number(),
+        toPage: z.number(),
+        kind: z.string(),
+        reason: z.string(),
+      }),
+    )
+    .default([]),
+  warnings: z.array(z.string()).default([]),
+  missingObjectives: z.array(z.string()).default([]),
+});
+
+export type DocumentCoverage = z.infer<typeof coverageSchema>;
+
 const documentRowSchema = z.object({
   id: z.uuid(),
   course_id: z.uuid(),
@@ -82,6 +115,9 @@ const documentRowSchema = z.object({
   failure_reason: z.string().nullable(),
   deep_review: z.string(),
   extraction_fidelity: z.string().nullable(),
+  // Loose on the way in: a payload whose coverage does not parse becomes `null` — no
+  // coverage line — rather than taking the whole row down and blanking the card.
+  coverage: coverageSchema.nullable().catch(null).default(null),
   created_at: z.string(),
   processed_at: z.string().nullable(),
 });
@@ -99,7 +135,7 @@ export type DocumentRow = z.infer<typeof documentRowSchema>;
 export type ProcessingEventRow = z.infer<typeof processingEventRowSchema>;
 
 const DOCUMENT_COLUMNS =
-  "id, course_id, filename, kind, status, mime_type, size_bytes, failure_reason, deep_review, extraction_fidelity, created_at, processed_at";
+  "id, course_id, filename, kind, status, mime_type, size_bytes, failure_reason, deep_review, extraction_fidelity, coverage, created_at, processed_at";
 
 const TERMINAL_STATUSES = new Set(["ready", "partial", "failed"]);
 

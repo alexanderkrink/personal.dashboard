@@ -10,7 +10,7 @@ import { createClient } from "@/lib/supabase/server";
 export const metadata: Metadata = { title: "Documents" };
 
 const DOCUMENT_COLUMNS =
-  "id, course_id, filename, kind, status, mime_type, size_bytes, failure_reason, deep_review, extraction_fidelity, created_at, processed_at";
+  "id, course_id, filename, kind, status, mime_type, size_bytes, failure_reason, deep_review, extraction_fidelity, coverage, created_at, processed_at";
 
 /**
  * The documents screen (M1 item 5b).

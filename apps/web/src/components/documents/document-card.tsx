@@ -15,7 +15,11 @@ import { formatBytes } from "@study/core";
 import { useTransition } from "react";
 import { deleteDocument, retryDocument } from "@/app/(app)/documents/actions";
 import { Button } from "@/components/ui/button";
-import type { DocumentRow, ProcessingEventRow } from "@/lib/documents/use-document-feed";
+import type {
+  DocumentCoverage,
+  DocumentRow,
+  ProcessingEventRow,
+} from "@/lib/documents/use-document-feed";
 import { cn } from "@/lib/utils";
 
 /**
@@ -38,23 +42,28 @@ import { cn } from "@/lib/utils";
  * to be changed together with the §1 flow, the §3 sketch and the architecture
  * diagram.
  *
- * The pipeline currently runs `validate → finalize`. Rendering the other seven
- * steps today would draw a checklist where most rows can never light up, which
- * does not read as "coming soon" — it reads as a stuck job, on the one screen
- * whose entire purpose is telling the user whether the job is stuck. So the
- * checklist lists what the pipeline can actually reach, and grows as the steps
- * land.
+ * The rule is that the checklist lists what the pipeline can **actually reach**,
+ * and grows as the steps land. Rendering a row that can never light up does not
+ * read as "coming soon" — it reads as a stuck job, on the one screen whose
+ * entire purpose is telling the user whether the job is stuck.
+ *
+ * As of item 5e the pipeline runs the whole walk, so `merging` and `embedding`
+ * are here. Two of PLAN's labels deliberately have no row of their own:
+ * *Verifying changes* happens inside the merge step and *Checking coverage*
+ * inside the embedding-to-ready transition, so neither has a `document_status`
+ * to light up against. The feed line under the checklist narrates both. The one
+ * genuinely absent step is *Extracting terms* — the glossary, which is not built.
  *
  * ⚠ **Adding a step means adding it in all four places**, plus here. The
  * `status` values are already in the `document_status` enum, so a new entry is
- * one line: `{ status: "extracting", label: "Extracting" }` in the right slot.
+ * one line: `{ status: "structuring", label: "…" }` in the right slot.
  */
 const CHECKLIST: ReadonlyArray<{ status: string; label: string }> = [
   { status: "queued", label: "Queued" },
   { status: "validating", label: "Checking the file" },
   { status: "extracting", label: "Reading the pages" },
-  // structuring / merging / embedding attach HERE, in enum order, as their
-  // steps land.
+  { status: "merging", label: "Organizing into topics" },
+  { status: "embedding", label: "Indexing for search" },
   { status: "ready", label: "Done" },
 ];
 
@@ -218,16 +227,138 @@ export function DocumentCard({
       {document.status === "ready" ? (
         <div className="mt-2 flex flex-col gap-1">
           <p className="text-muted-foreground text-ui-xs">
-            {/* §8's summary line is "Contributed to 4 topics" plus a coverage
-                line. Both are computed by steps that do not exist yet, so this
-                says the true thing instead of a placeholder shaped like the
-                eventual one. */}
-            Read and stored. Topic extraction lands with the next pipeline steps.
+            {document.coverage === null
+              ? "Read and stored."
+              : `Contributed to ${document.coverage.topicCount} topic${
+                  document.coverage.topicCount === 1 ? "" : "s"
+                }.`}
           </p>
+          <CoverageLine coverage={document.coverage} />
           <FidelityNote fidelity={document.extraction_fidelity} />
         </div>
       ) : null}
+
+      {/* The coverage line belongs on a `partial` card too — a document that
+          only half-merged is exactly the one whose gaps a user wants to see. */}
+      {document.status === "partial" ? (
+        <div className="mt-2">
+          <CoverageLine coverage={document.coverage} />
+        </div>
+      ) : null}
     </li>
+  );
+}
+
+/** How a gap range reads in the disclosure. `1` → "p. 1", `4–9` → "pp. 4–9". */
+function gapLabel(gap: { fromPage: number; toPage: number }): string {
+  return gap.fromPage === gap.toPage ? `p. ${gap.fromPage}` : `pp. ${gap.fromPage}–${gap.toPage}`;
+}
+
+/**
+ * §8's coverage line, and the disclosure behind it.
+ *
+ * > `ready` → card collapses to a summary … with a **coverage line** ("587 of 600 pages
+ * > mapped · 13 unmapped" — click to see the gaps and any syllabus objectives still missing)
+ *
+ * "Clickable gaps" is implemented as a `<details>` disclosure rather than as deep links into
+ * a document viewer, because **there is no document viewer in M1**. §8's own words are
+ * "click to see the gaps", and a disclosure does exactly that; a link to a route that does
+ * not exist would be a worse answer than an honest one. When the viewer lands, each row here
+ * becomes an anchor and nothing else about this component changes.
+ *
+ * ## Why an untrustworthy map still shows its numbers
+ *
+ * The obvious instinct is to hide figures that cannot be verified. That is backwards: a
+ * suppressed number is indistinguishable from a good one, and the whole point of the
+ * coverage feature is to make omission *visible*. So the numbers always render, and an
+ * untrustworthy map renders them in the warning colour with the reason stated underneath.
+ * The user sees both the measurement and its reliability, which is the only combination that
+ * lets them decide anything.
+ */
+function CoverageLine({ coverage }: { coverage: DocumentCoverage | null }) {
+  // Null means no measurement was taken — an older document, or a coverage step that
+  // failed. Rendering "0 of 0 pages mapped" would be a claim, so this renders nothing.
+  if (coverage === null) return null;
+
+  const gapCount = Math.max(0, coverage.pagesTotal - coverage.pagesMapped);
+  const hasDetail =
+    coverage.gaps.length > 0 ||
+    coverage.missingObjectives.length > 0 ||
+    coverage.warnings.length > 0;
+
+  const headline = coverage.checked
+    ? `${coverage.pagesMapped} of ${coverage.pagesTotal} pages mapped${
+        gapCount === 0 ? "" : ` · ${gapCount} unmapped`
+      }`
+    : `${coverage.pagesMapped} pages mapped · length unverified`;
+
+  const line = (
+    <span className={cn(coverage.trustworthy ? "text-muted-foreground" : "text-warning")}>
+      {coverage.trustworthy ? null : (
+        <WarningCircle aria-hidden className="mr-1 inline size-3.5 align-[-2px]" weight="fill" />
+      )}
+      {headline}
+      {coverage.missingObjectives.length === 0
+        ? ""
+        : ` · ${coverage.missingObjectives.length} syllabus objective${
+            coverage.missingObjectives.length === 1 ? "" : "s"
+          } with no page`}
+    </span>
+  );
+
+  if (!hasDetail) return <p className="text-ui-xs">{line}</p>;
+
+  return (
+    <details className="text-ui-xs">
+      <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden">
+        {line}
+        <span className="ml-1 text-muted-foreground underline underline-offset-2">
+          show details
+        </span>
+      </summary>
+
+      <div className="mt-2 flex flex-col gap-2 border-border border-l pl-3">
+        {coverage.gaps.length > 0 ? (
+          <ul className="flex flex-col gap-0.5">
+            {coverage.gaps.map((gap) => (
+              <li
+                key={`${gap.kind}-${gap.fromPage}-${gap.toPage}`}
+                className="text-muted-foreground"
+              >
+                <span
+                  className={cn(
+                    "font-medium",
+                    // An undeclared gap is content that went missing with nothing saying so
+                    // — the one category that is a defect rather than a decision.
+                    gap.kind === "undeclared" ? "text-warning" : "text-foreground",
+                  )}
+                >
+                  {gapLabel(gap)}
+                </span>{" "}
+                — {gap.reason}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+
+        {coverage.missingObjectives.length > 0 ? (
+          <div>
+            <p className="font-medium text-foreground">Syllabus objectives with no page yet</p>
+            <ul className="mt-0.5 flex list-disc flex-col gap-0.5 pl-4 text-muted-foreground">
+              {coverage.missingObjectives.map((objective) => (
+                <li key={objective}>{objective}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
+        {coverage.warnings.map((warning) => (
+          <p key={warning} className="text-warning">
+            {warning}
+          </p>
+        ))}
+      </div>
+    </details>
   );
 }
 
