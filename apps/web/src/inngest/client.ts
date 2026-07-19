@@ -18,13 +18,22 @@ import { env } from "@/env";
  * direction is authenticated by `INNGEST_SIGNING_KEY`, which the serve handler
  * reads; the two are not interchangeable.
  *
- * ## Dev mode
+ * ## Dev mode — read this before debugging a local 401
  *
- * `isDev` is deliberately NOT set. Inngest infers it from `NODE_ENV`, so
- * `next dev` talks to `inngest-cli dev` and a Vercel deployment talks to
- * Inngest Cloud with signature verification on. Hardcoding `isDev: true` here
- * would disable signature verification, which is the entire authentication on
- * `/api/inngest` — see the carve-out comment in `lib/supabase/proxy-session.ts`.
+ * ⚠ v4 does NOT infer dev mode from `NODE_ENV`. `Inngest.mode` checks the
+ * `isDev` option, then `INNGEST_DEV`, then whether `INNGEST_DEV` holds a URL,
+ * and **defaults to `"cloud"`** — so `next dev` with nothing set runs the
+ * production path and answers `inngest-cli dev` with 401, because the CLI does
+ * not sign its requests. Local development needs `INNGEST_DEV=1` in
+ * `.env.local`; see `.env.example`.
+ *
+ * `isDev` is deliberately left unset here rather than computed. Hardcoding
+ * `isDev: true` would disable signature verification, which is the entire
+ * authentication on `/api/inngest` (see the carve-out comment in
+ * `lib/supabase/proxy-session.ts`), and deriving it from `NODE_ENV` ourselves
+ * would reintroduce the exact inference v4 dropped — one mis-set `NODE_ENV` in
+ * a preview deploy and the endpoint stops checking signatures. Defaulting to
+ * cloud means the failure mode of a misconfiguration is a 401, not an open door.
  */
 export const inngest = new Inngest({
   id: "study-dashboard",

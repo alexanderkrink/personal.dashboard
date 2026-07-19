@@ -19,19 +19,26 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
  */
 
 /**
- * ⚠ The trap this file exists to avoid.
+ * ⚠ Why `INNGEST_DEV=0` is stubbed below, and what it is and is not doing.
  *
- * Inngest skips signature verification entirely in dev mode, and it infers dev
- * mode from `NODE_ENV`, which Vitest sets to "test". So the naive version of
- * this test — POST to the handler, expect a refusal — passes for the wrong
- * reason under the default config: it would pass just as happily against a
- * route with no signing key configured at all, because nothing would be
- * verified either way.
+ * Inngest skips signature verification entirely in dev mode, so a test that
+ * ran in dev mode would "pass" against a route with no signing key configured
+ * at all — it would assert nothing. On inngest v4 the default happens to be
+ * cloud mode (`Inngest.mode` consults `isDev`, then `INNGEST_DEV`, then falls
+ * through to `"cloud"`; it does NOT read `NODE_ENV`, which is a v3 behaviour
+ * that no longer exists), so these tests would take the verifying path even
+ * unstubbed today.
  *
- * `INNGEST_DEV=0` forces the production code path, which is the only one that
- * ships. It has to be set before the route module is imported, since the client
- * and the serve handler both read the environment at module scope — hence the
- * dynamic import below rather than a top-level one.
+ * The stub is here to keep that true rather than to make it true: it pins the
+ * mode this route ships in, so a future default flip or a stray `INNGEST_DEV`
+ * in the environment cannot quietly turn these three assertions into no-ops.
+ * Confirmed to be load-bearing by flipping it to "1" — all three POST tests
+ * fail, which is the evidence that they are testing the signature check and not
+ * merely the absence of a route.
+ *
+ * It must be set before the route module is imported, since the client and the
+ * serve handler both read the environment at module scope — hence the dynamic
+ * import below rather than a top-level one.
  */
 let POST: (request: Request, context: unknown) => Promise<Response>;
 let PUT: (request: Request, context: unknown) => Promise<Response>;
