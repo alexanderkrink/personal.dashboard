@@ -30,6 +30,16 @@ describe("prompt id → job resolution", () => {
     expect(jobForPromptId("echo-example")).toBeUndefined();
     expect(jobForPromptId("summarize")).toBeUndefined();
   });
+
+  it("does not resolve an inherited Object property to a job", () => {
+    // `in` walks the prototype chain, so the lookup used to answer "constructor" — which is
+    // valid kebab-case and therefore passes `promptIdViolation` too — with a JobId naming no
+    // job. `getModel` would then index `MODELS` with `Object.prototype.constructor` and throw
+    // on `undefined.rank`. Pinned because this is the prompt→model resolver: it must be able
+    // to say "no such job" about every string that is not a key of `JOBS`.
+    expect(jobForPromptId("constructor")).toBeUndefined();
+    expect(jobForPromptId("constructor-repair")).toBeUndefined();
+  });
 });
 
 describe("promptIdViolation", () => {

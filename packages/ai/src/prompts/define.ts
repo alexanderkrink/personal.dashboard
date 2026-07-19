@@ -105,7 +105,13 @@ export function jobForPromptId(id: string): JobId | undefined {
   const segments = id.split("-");
   for (let end = segments.length; end > 0; end -= 1) {
     const candidate = segments.slice(0, end).join("-");
-    if (candidate in JOBS) return candidate as JobId;
+    // `Object.hasOwn`, never `in`: `in` walks the prototype chain, so `"constructor"` —
+    // which is valid kebab-case and therefore passes `promptIdViolation` — would resolve to
+    // a JobId that names no job, and `getModel` would then index `MODELS` with
+    // `Object.prototype.constructor` and throw a TypeError on `undefined.rank`. Unreachable
+    // while every id is hand-authored, but this is the prompt→model resolver and it should
+    // not have a way to invent a job.
+    if (Object.hasOwn(JOBS, candidate)) return candidate as JobId;
   }
   return undefined;
 }
