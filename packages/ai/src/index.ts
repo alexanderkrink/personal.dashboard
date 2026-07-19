@@ -19,7 +19,9 @@ export {
   type PausedReason,
   SPEND_THRESHOLDS,
   type SpendPosture,
+  type SpendReading,
   spendPosture,
+  UNPRICED_TOLERANCE,
 } from "./guard";
 export {
   type ExtractSyllabusComponentsOptions,
@@ -37,6 +39,9 @@ export {
   runStructuredLadder,
 } from "./ladder";
 export {
+  AI_PROVIDER_NAMES,
+  type AIProviderName,
+  type EmbeddingProviderName,
   escalationTarget,
   getModel,
   JOB_IDS,

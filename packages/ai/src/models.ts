@@ -26,7 +26,51 @@ export const RANK = { fast: 0, balanced: 1, deep: 2 } as const;
 
 export type Rank = keyof typeof RANK;
 
+/**
+ * The two **language-model** families, and deliberately nothing else.
+ *
+ * This type is narrow on purpose and must stay narrow. It is the `provider` field of
+ * every entry in `MODELS`, so widening it widens what `satisfies` will accept there —
+ * `"voyage-3.5-lite": { provider: "voyage", rank: "fast" }` would start type-checking as
+ * a *language* model, and `getModel()` would happily hand an embedding model to
+ * `generateObject`. The compiler is the only thing standing between a job registry and
+ * that mistake, so it does not get relaxed for the convenience of a log column.
+ */
 export type ProviderName = "anthropic" | "google";
+
+/**
+ * Embedding vendors — a **separate axis**, not a third generation family.
+ *
+ * PLAN §5 keeps embeddings single-vendor on Voyage because mixing embedding models
+ * breaks vector comparability, which is a retrieval property and has nothing to do with
+ * the two-family split that §2's ladder escalates across or that critics are chosen
+ * against. Voyage is not a fallback for Anthropic and Anthropic is not a fallback for
+ * Voyage; they are not the same kind of thing and are not interchangeable anywhere.
+ *
+ * `packages/ai/src/pricing.ts` already models it this way — `EMBEDDING_PRICING` sits
+ * outside `PRICING` rather than as another row in it — and this is the type half of the
+ * same decision.
+ */
+export type EmbeddingProviderName = "voyage";
+
+/**
+ * Every vendor that may appear in `ai_generations.provider`: who was PAID, across both
+ * axes. This is a metering/billing type, never a model-selection one — nothing resolves
+ * a call through it, so it can be the union without endangering `MODELS`.
+ *
+ * Kept in step with the `ai_generations_provider_check` constraint in
+ * `20260719155004_ai_generations_embedding_provider_and_unpriced_calls.sql`. The two
+ * drifting is how "every AI call appears in `ai_generations` with cost" (the M1 DoD)
+ * goes quietly false: the row that cannot be logged is the row nobody sees is missing.
+ */
+export type AIProviderName = ProviderName | EmbeddingProviderName;
+
+/** The runtime list, for validating a provider read back from outside the type system. */
+export const AI_PROVIDER_NAMES = [
+  "anthropic",
+  "google",
+  "voyage",
+] as const satisfies readonly AIProviderName[];
 
 export const MODELS = {
   "gemini-3.1-flash-lite": { provider: "google", rank: "fast" },

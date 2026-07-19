@@ -1,7 +1,7 @@
 import { NoObjectGeneratedError } from "ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { AIPausedError } from "./guard";
+import { AIPausedError, type SpendReading } from "./guard";
 import { definePrompt, type PromptTemplate } from "./prompts/define";
 import { type AIGenerationRecord, createAIRuntime, sha256Hex } from "./runtime";
 
@@ -49,7 +49,7 @@ const prompt = definePrompt<{ topic: string }>({
 const openGuard = {
   killSwitch: false,
   monthlyBudgetUsd: 75,
-  monthToDateSpendUsd: () => 0,
+  monthToDateSpend: () => ({ costUsd: 0, unpricedCalls: 0 }),
 };
 
 function runtimeWithLog() {
@@ -236,7 +236,7 @@ describe("the kill switch and the budget guard stop spend before it happens", ()
   function guardedRuntime(guard: {
     killSwitch: boolean;
     monthlyBudgetUsd: number;
-    monthToDateSpendUsd: () => number | Promise<number>;
+    monthToDateSpend: () => SpendReading | Promise<SpendReading>;
   }) {
     const logged: AIGenerationRecord[] = [];
     const runtime = createAIRuntime({
@@ -252,11 +252,11 @@ describe("the kill switch and the budget guard stop spend before it happens", ()
 
   it("makes no provider call and no rollup read at all when AI_KILL_SWITCH is set", async () => {
     generateObject.mockResolvedValue({ object: { title: "ok" }, usage: usage(1, 1) });
-    const spendReads = vi.fn(() => 0);
+    const spendReads = vi.fn(() => ({ costUsd: 0, unpricedCalls: 0 }));
     const { runtime, logged } = guardedRuntime({
       killSwitch: true,
       monthlyBudgetUsd: 75,
-      monthToDateSpendUsd: spendReads,
+      monthToDateSpend: spendReads,
     });
 
     await expect(
@@ -275,7 +275,7 @@ describe("the kill switch and the budget guard stop spend before it happens", ()
     const { runtime } = guardedRuntime({
       killSwitch: false,
       monthlyBudgetUsd: 75,
-      monthToDateSpendUsd: () => 80,
+      monthToDateSpend: () => ({ costUsd: 80, unpricedCalls: 0 }),
     });
     // `exam-review` is pinned to Opus (deep). The prompt id must equal the job, so the
     // job override is how a fixture borrows another job's rank.
@@ -295,7 +295,7 @@ describe("the kill switch and the budget guard stop spend before it happens", ()
     const { runtime } = guardedRuntime({
       killSwitch: false,
       monthlyBudgetUsd: 75,
-      monthToDateSpendUsd: () => 200,
+      monthToDateSpend: () => ({ costUsd: 200, unpricedCalls: 0 }),
     });
 
     await expect(
@@ -311,7 +311,11 @@ describe("the kill switch and the budget guard stop spend before it happens", ()
       googleApiKey: "g",
       log: () => {},
       maxRank: "fast",
-      guard: { killSwitch: false, monthlyBudgetUsd: 75, monthToDateSpendUsd: () => 80 },
+      guard: {
+        killSwitch: false,
+        monthlyBudgetUsd: 75,
+        monthToDateSpend: () => ({ costUsd: 80, unpricedCalls: 0 }),
+      },
     });
 
     // `exam-review` is pinned to Opus, but AI_MAX_TIER=fast already forced it down to
@@ -327,7 +331,7 @@ describe("the kill switch and the budget guard stop spend before it happens", ()
     const { runtime } = guardedRuntime({
       killSwitch: false,
       monthlyBudgetUsd: 75,
-      monthToDateSpendUsd: () => 100, // 133% — defer-balanced
+      monthToDateSpend: () => ({ costUsd: 100, unpricedCalls: 0 }), // 133% — defer-balanced
     });
 
     // `topic-merge` is Sonnet (balanced) and no `kind` was passed.
@@ -340,7 +344,7 @@ describe("the kill switch and the budget guard stop spend before it happens", ()
     const { runtime } = guardedRuntime({
       killSwitch: true,
       monthlyBudgetUsd: 75,
-      monthToDateSpendUsd: () => 0,
+      monthToDateSpend: () => ({ costUsd: 0, unpricedCalls: 0 }),
     });
 
     await expect(runtime.guardCheck("chat-rag", "interactive")).resolves.toEqual({
@@ -361,7 +365,7 @@ describe("the kill switch and the budget guard stop spend before it happens", ()
     const { runtime } = guardedRuntime({
       killSwitch: true,
       monthlyBudgetUsd: 75,
-      monthToDateSpendUsd: () => 0,
+      monthToDateSpend: () => ({ costUsd: 0, unpricedCalls: 0 }),
     });
 
     expect(() =>
@@ -376,7 +380,7 @@ describe("the kill switch and the budget guard stop spend before it happens", ()
     const { runtime } = guardedRuntime({
       killSwitch: false,
       monthlyBudgetUsd: 75,
-      monthToDateSpendUsd: () => 0,
+      monthToDateSpend: () => ({ costUsd: 0, unpricedCalls: 0 }),
     });
 
     expect(

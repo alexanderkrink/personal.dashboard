@@ -38,6 +38,75 @@ export const SPEND_THRESHOLDS = {
 } as const;
 
 /**
+ * What the rollup actually knows about this month: a figure, and how much of the bill it
+ * could not see.
+ *
+ * `ai_generations.cost_usd` is nullable and means "the provider reported no usage for
+ * this attempt", which is emphatically not $0.00. The `ai_daily_cost` view used to
+ * `coalesce(sum(cost_usd), 0)` and hand the guard a number that could not be told apart
+ * from a quiet month. That is the failure mode a budget guard exists to prevent, arriving
+ * through the guard's own input.
+ *
+ * So spend is a **lower bound plus a count of unknowns**, and both travel together. There
+ * is deliberately no way to construct this from a bare number: a caller that only has a
+ * sum has to write `unpricedCalls: 0` and thereby state that it checked.
+ */
+export interface SpendReading {
+  /** Month-to-date USD from the rollup. A LOWER BOUND when `unpricedCalls > 0`. */
+  readonly costUsd: number;
+  /** Attempts this month whose cost could not be determined. Real spend, unknown amount. */
+  readonly unpricedCalls: number;
+}
+
+/**
+ * How many unpriced attempts in a month are written off as noise before the guard stops
+ * trusting its own figure.
+ *
+ * **The decision, stated plainly:** an unpriced call is NOT charged a made-up price. There
+ * is no defensible number — the attempt reported no usage, so any figure would be
+ * invented, and `pricing.ts` already refuses to invent rates it was not given. Instead the
+ * *count* is treated as a signal about the figure's reliability, and past the tolerance the
+ * posture is stepped up one level: the guard behaves as if spend had crossed the next
+ * threshold, because for all it knows it has.
+ *
+ * **Why step the posture instead of halting.** §6's ordering principle is that interactive
+ * chat is the last thing to die and background regeneration the first. A metering outage is
+ * a reason to stop doing optional work; it is not a reason to break the thing the user is
+ * looking at. Stepping the posture cuts background jobs — deep first, then balanced —
+ * and leaves interactive calls alone at every level, exactly as a genuine overspend would.
+ * Halting on a metering blip would be the guard inflicting a worse outage than the one it
+ * is reacting to.
+ *
+ * **Why 5.** The §2 ladder burns up to three attempts on a single logical call, so one
+ * thoroughly unlucky call can produce three unpriced rows without anything being
+ * systematically wrong. Five leaves room for that plus a straggler. A sixth in the same
+ * month is not bad luck — it means metering is broken, and a month-to-date figure from
+ * broken metering should not be the thing authorising more spend.
+ */
+export const UNPRICED_TOLERANCE = 5;
+
+/**
+ * One step up the posture ladder, capped below `halt`.
+ *
+ * `defer-balanced` does NOT escalate to `halt`. Halting is indistinguishable from the kill
+ * switch and takes interactive chat down with it, and a metering failure must never be
+ * able to do that on its own — only real, *observed* spend crossing 150% may. Unknown
+ * spend can defer background work to its strictest setting and stops there. An already
+ * halted month stays halted, because the escalation never lowers a posture.
+ */
+function escalatePosture(posture: SpendPosture): SpendPosture {
+  switch (posture) {
+    case "normal":
+      return "defer-deep";
+    case "defer-deep":
+    case "defer-balanced":
+      return "defer-balanced";
+    case "halt":
+      return "halt";
+  }
+}
+
+/**
  * Whether a human is waiting on this call.
  *
  * The default at every call site is `background`, deliberately: a job that forgot to
@@ -112,6 +181,12 @@ function pausedMessage(reason: PausedReason): string {
 export function spendPosture(input: {
   readonly monthToDateUsd: number;
   readonly monthlyBudgetUsd: number;
+  /**
+   * Attempts this month the rollup could not price. Optional so the pure
+   * budget-ratio behaviour stays directly testable; every real caller passes it, and
+   * `AISpendGuardConfig.monthToDateSpend` makes it structurally impossible to omit.
+   */
+  readonly unpricedCalls?: number;
 }): SpendPosture {
   if (!Number.isFinite(input.monthlyBudgetUsd) || input.monthlyBudgetUsd <= 0) return "halt";
   // A non-finite spend figure means the rollup read failed to produce a number. Treat it
@@ -120,10 +195,22 @@ export function spendPosture(input: {
   if (!Number.isFinite(input.monthToDateUsd)) return "normal";
 
   const ratio = Math.max(input.monthToDateUsd, 0) / input.monthlyBudgetUsd;
-  if (ratio >= SPEND_THRESHOLDS.halt) return "halt";
-  if (ratio >= SPEND_THRESHOLDS.deferBalanced) return "defer-balanced";
-  if (ratio >= SPEND_THRESHOLDS.deferDeep) return "defer-deep";
-  return "normal";
+  const observed: SpendPosture =
+    ratio >= SPEND_THRESHOLDS.halt
+      ? "halt"
+      : ratio >= SPEND_THRESHOLDS.deferBalanced
+        ? "defer-balanced"
+        : ratio >= SPEND_THRESHOLDS.deferDeep
+          ? "defer-deep"
+          : "normal";
+
+  // Past the tolerance, `monthToDateUsd` is known to understate the month by an unknown
+  // amount, so the posture it implies is a floor rather than an answer. See
+  // `UNPRICED_TOLERANCE` for why this steps rather than halts, and why it invents no price.
+  const unpriced = input.unpricedCalls ?? 0;
+  return Number.isFinite(unpriced) && unpriced > UNPRICED_TOLERANCE
+    ? escalatePosture(observed)
+    : observed;
 }
 
 export type GuardDecision =
@@ -174,11 +261,17 @@ export interface AISpendGuardConfig {
   /** `AI_MONTHLY_BUDGET_USD` (default 75). */
   readonly monthlyBudgetUsd: number;
   /**
-   * Month-to-date spend in USD from the §6 rollup, for the user this runtime belongs to.
+   * Month-to-date spend from the §6 rollup, for the user this runtime belongs to.
    *
    * Injected rather than queried here: this package does no I/O. Implementations should
    * cache briefly — it is consulted once per `generateStructured` call, and a rollup read
    * per call would be a database round trip in front of every LLM request.
+   *
+   * Returns a `SpendReading`, not a number, and that is the whole point of the type: the
+   * previous `() => number` signature made it impossible for a reader to *report* that
+   * part of the bill was unknown, so `ai_daily_cost`'s `coalesce(sum(cost_usd), 0)` sailed
+   * straight through as fact. Widening the return means every reader now has to say
+   * whether it looked.
    */
-  readonly monthToDateSpendUsd: () => number | Promise<number>;
+  readonly monthToDateSpend: () => SpendReading | Promise<SpendReading>;
 }

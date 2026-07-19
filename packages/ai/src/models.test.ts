@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { escalationTarget, getModel, JOB_IDS, JOBS, MODEL_IDS, MODELS, RANK } from "./models";
+import {
+  AI_PROVIDER_NAMES,
+  type AIProviderName,
+  escalationTarget,
+  getModel,
+  JOB_IDS,
+  JOBS,
+  MODEL_IDS,
+  MODELS,
+  type ProviderName,
+  RANK,
+} from "./models";
+import { EMBEDDING_PRICING } from "./pricing";
 
 describe("job → model resolution", () => {
   it("resolves topic-merge to Sonnet and topic-routing to Gemini Flash-Lite", () => {
@@ -114,5 +126,51 @@ describe("escalation targets", () => {
       if (target === undefined) continue;
       expect(RANK[MODELS[target].rank]).toBeGreaterThan(RANK[MODELS[model].rank]);
     }
+  });
+});
+
+/**
+ * The provider AXIS, which is not the same thing as the generation-family split.
+ *
+ * `ai_generations.provider` had `check (provider in ('anthropic','google'))` — the two
+ * language-model families — so the first Voyage embedding call would have been unable to
+ * log, and the M1 DoD's "every AI call appears in ai_generations with cost" would have
+ * become false silently: the insert throws inside the metering hook, which is the one
+ * place an exception reads as a bug rather than as a hole.
+ */
+describe("provider names", () => {
+  it("keeps ProviderName to the two LANGUAGE-MODEL families", () => {
+    // Every entry in the registry resolves to one of exactly two families. If this ever
+    // has three members, check that the third is a family the §2 ladder can escalate to
+    // and a critic can be chosen against — not an embedding vendor that got in sideways.
+    const providers = new Set(MODEL_IDS.map((id) => MODELS[id].provider));
+    expect([...providers].sort()).toEqual(["anthropic", "google"]);
+  });
+
+  it("does not let an embedding vendor typecheck as a language model", () => {
+    // The reason `ProviderName` was NOT widened to include "voyage". Widening it widens
+    // what `MODELS` accepts, and `getModel()` would then be able to hand an embedding
+    // model to `generateObject` with the compiler's blessing.
+    const embedding: AIProviderName = "voyage";
+    // @ts-expect-error — "voyage" is an AIProviderName but never a ProviderName.
+    const asLanguageModel: ProviderName = embedding;
+    expect(asLanguageModel).toBe("voyage");
+  });
+
+  it("names every vendor the ai_generations check constraint accepts, and no others", () => {
+    // ⚠ VERIFIED against the live project 2026-07-19 by inserting one row per value:
+    //   anthropic ACCEPTED · google ACCEPTED · voyage ACCEPTED
+    //   Voyage REJECTED · anthropc REJECTED · openai REJECTED
+    // This list and `ai_generations_provider_check` are two halves of one decision; the
+    // migration comment points back here. `openai` is deliberately in neither while
+    // @ai-sdk/openai stays unwired.
+    expect([...AI_PROVIDER_NAMES].sort()).toEqual(["anthropic", "google", "voyage"]);
+  });
+
+  it("prices every embedding vendor it names", () => {
+    // A vendor that can be logged but not priced is a NULL cost_usd, which is now a guard
+    // signal rather than a silent zero — but it is still better not to create one.
+    const priced = new Set(Object.values(EMBEDDING_PRICING).map((p) => p.provider));
+    expect(priced).toContain("voyage");
   });
 });

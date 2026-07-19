@@ -261,11 +261,14 @@ export function createAIRuntime(config: AIRuntimeConfig): AIRuntime {
    */
   const decide = async (job: JobId, kind: CallKind): Promise<GuardDecision> => {
     if (config.guard.killSwitch) return { allowed: false, reason: "kill-switch" };
-    const monthToDateUsd = await config.guard.monthToDateSpendUsd();
+    const reading = await config.guard.monthToDateSpend();
     return guardDecision({
       killSwitch: false,
       posture: spendPosture({
-        monthToDateUsd,
+        monthToDateUsd: reading.costUsd,
+        // Forwarded, not dropped. A reading that knows part of the month is unpriced and a
+        // guard that never asks is the same bug as the view's old coalesce, one layer up.
+        unpricedCalls: reading.unpricedCalls,
         monthlyBudgetUsd: config.guard.monthlyBudgetUsd,
       }),
       // The clamped rank, not the pinned one: if AI_MAX_TIER already forced a deep job

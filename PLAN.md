@@ -4882,6 +4882,26 @@ feature's migration, never ahead of need.
    `not null`; and a nullable FK column keeps `match simple` semantics, so an unassigned
    child (a course with no semester) correctly skips the check.
    Applied to the foundation tables in `20260718140050_tenant_scoped_fks_and_grading_scale`.
+8. **Background jobs derive ownership from the database, never from the event — added 2026-07-19 (Wave 4 Agent 0).**
+   Rule 3 says service-role usage is confined to Inngest functions and webhook handlers. That
+   scopes *where* the bypass lives; it says nothing about **who the bypassing code writes rows
+   for**, and the first job in the codebase answered that with `event.data.userId`.
+   `events.ts` validates it with `z.uuid()` — which **types** the value and does not
+   **authorise** it. Under `createAdminSupabaseClient` there is no RLS in the path, so the
+   tenant was whatever the event said it was, and an event is not a trusted input: it is
+   stored and replayed by a third party, and can arrive from a replay, a leaked event key, a
+   buggy producer, or a future webhook forwarding something a user typed. Validation makes a
+   hostile payload well-formed; it does not make it true.
+   **The rule: a handler re-derives `user_id` from the database row the event points at, and
+   treats any `userId` in the payload as a hint to cross-check, never as authority.** A
+   disagreement is a *security event* — fail loudly, write nothing, never silently prefer one
+   side, because choosing between two claimed tenants is not a decision code gets to make
+   quietly. Implemented as `deriveOwner()` in `apps/web/src/inngest/owner.ts`, whose locator
+   type is computed from the generated `Database` type so a table with no ownership column is
+   unrepresentable rather than merely discouraged. Corollary for new events: **carry a row id,
+   not an owner.** `{ documentId }` cannot be lied to; `{ documentId, userId }` can. Add a
+   `userId` only when the producer knew the owner independently of the row id, so that a
+   mismatch means something.
 
 ---
 
@@ -5037,6 +5057,10 @@ AI-generated artifacts are **born active and reversible**, not parked in an appr
 
 Two models from the same family can share blind spots, so the whole verification layer is **cross-family by construction** (Gemini critics over Claude generation, Claude critics/readers over Gemini generation) and leans on deterministic checks and coverage *measurement* wherever a mechanical check exists — a verifier is used only for what code can't decide. Critic verdicts are persisted alongside the artifact (`cards.critic`, `topic_revisions.needs_review`, `documents.coverage`) and logged to `ai_generations` like any other call.
 
+🔴 **DISPROVEN 2026-07-19 (Wave 4 Agent 0) — "mandatory human confirm" was not enforced against the caller that matters.** Item 3 above calls the grade-weight gate mandatory, and `20260719121909` did enforce the *born-unconfirmed* half in the database (a trigger, so the service-role writer cannot get around it). The half that promotes a row was left to RLS. **RLS does not constrain a service-role client**, so `confirm_syllabus_extraction` — `security invoker`, with no caller assertion — could be called by any holder of `SUPABASE_SECRET_KEY` on any extraction in the project. Measured, not reasoned: a PostgREST round trip with the secret key flipped a fixture `assessments` row `confirmed: false → true` and wrote `courses.total_sessions = 99, total_sessions_source = 'syllabus'`, returning `error: null`. No human, no session, no `auth.uid()`.
+
+The generalisable lesson, because this was a *reasoning* failure and not a typo: **the migration comment "RLS applies (security invoker), so another account's extraction is simply not visible" is a true sentence about session users and a false one about the only client background jobs actually run under.** Any invariant whose enforcement is "RLS will catch it" is unenforced against the service role by construction. Closed by `assert_human_caller()` (`auth.uid() is null` → `insufficient_privilege`), applied to `confirm` **and** `reject` — erasing a proposal before the human sees it is the same §2b decision as promoting it. `apply_syllabus_extraction` is deliberately left ungated: it is the designated service-role writer and everything it inserts is unconfirmed by trigger. See `20260719154813_syllabus_gate_requires_a_human.sql`.
+
 ### 3. Prompt versioning and traceability
 
 `packages/ai/src/prompts/define.ts` defines the registry primitive (⚠ moved 2026-07-19 from `src/prompts.ts`, which would otherwise be an ambiguous module specifier next to the new `src/prompts/` directory). `TVars` is constrained to JSON-shaped values — objects and arrays, not just `string | number` — because real prompts pass TopicPage JSON, segment lists and critic verdicts. It is deliberately not `Record<string, unknown>`: that would type-check every call but erase the variable names, so a misspelled var would compile and interpolate `undefined`. JSON-shaped also keeps `input_hash` stable, which is what the §5 idempotency short-circuit rests on.
@@ -5126,6 +5150,11 @@ Three distinct layers, cheapest first:
 - **Append-only is structural.** A `BEFORE UPDATE` trigger refuses `UPDATE` for `postgres` itself (`SQLSTATE 23001`), which is the only form of the invariant that binds the RLS-bypassing admin client that writes the table. `DELETE` is deliberately left open: `user_id` cascades from `auth.users`, and a trigger raising on `DELETE` would make user deletion fail.
 
 ⚠ **CORRECTED 2026-07-19 — the rollup is a plain view, not a materialized one.** §6 below says "materializes"; a matview cannot carry RLS (it is owned by the definer, so policies do not apply) and would leak spend across tenants the moment a second user exists. It would also be *stale*, and a lagging rollup is wrong exactly when spend is spiking — the only moment the guard matters. At this volume (thousands of rows/month) live aggregation is microseconds. Shipped as `create view public.ai_daily_cost with (security_invoker = true)`.
+
+⚠ **CORRECTED 2026-07-19 (Wave 4 Agent 0) — the rollup reported unpriced calls as $0, and `provider` could not name the embedding vendor.** Two defects in the shipped §6 objects, both latent only because the table had seen 8 rows, all priced, all Anthropic or Google:
+
+- **`coalesce(sum(cost_usd), 0)` turned unknown spend into zero spend.** `sum()` already skips NULLs, so the coalesce fired only when *every* row in a group was unpriced — and reported that group as costing exactly nothing. The budget guard reads this view, so a day on which metering broke and forty real calls went out was indistinguishable from an idle day. `ai_daily_cost` now also publishes `unpriced_calls`, and `cost_usd` is documented as the lower bound it always was. The guard's decision (`packages/ai/src/guard.ts`, `UNPRICED_TOLERANCE`) is deliberate and written down: **do not invent a price** — there is no honest number for an attempt that reported no usage — but past 5 unpriced calls in a month, step the posture up one level. Stepping cuts background work and never touches interactive calls; escalation is capped *below* `halt` so a metering failure can never inflict the kill switch's outage on its own.
+- **`check (provider in ('anthropic','google'))` would have rejected the first Voyage embedding row**, making the M1 DoD clause "every AI call appears in `ai_generations` with cost" false — quietly, since the insert throws inside the metering hook where an exception reads as a bug rather than a hole. Widened to include `voyage` and nothing else. `ProviderName` in `packages/ai/src/models.ts` was **not** widened: it is the `provider` field of every `MODELS` entry, so adding `"voyage"` there would let an embedding model typecheck as a language model and `getModel()` hand it to `generateObject`. Embeddings are a separate axis (`EmbeddingProviderName`), and `AIProviderName` is their union — a metering type only, never a selection one. `openai` is in neither while `@ai-sdk/openai` stays unwired.
 
 🔴 **DISPROVEN 2026-07-19 — PostgREST does not return `numeric` as a JSON string here.** The widely-cited precision-preserving string encoding was expected for `cost_usd`; measured against this project, PostgREST returns a JSON **number** (`0.00005625`), so the generated `number | null` type is honest and no concatenation bug was latent. The Supabase SQL editor / MCP path renders the same column as `"0.00005625"`, which is what made the wrong reading plausible — the difference is in those tools' result encoding, not in the column. `apps/web/src/lib/ai/spend.ts` keeps a `z.coerce.number()` at the boundary anyway, per the repo's Zod-at-every-boundary rule.
 

@@ -6,6 +6,7 @@
  * the guard, a future dashboard and a psql session cannot disagree about what a day cost.
  */
 
+import type { SpendReading } from "@study/ai";
 import { wallClockAt } from "@study/core";
 import type { SupabaseAdminClient } from "@study/db";
 import { z } from "zod";
@@ -46,24 +47,36 @@ export function monthStartInAppTimezone(now: Date = new Date()): string {
  */
 const dailyCostRow = z.object({
   cost_usd: z.coerce.number().nullable(),
+  /**
+   * `count(*) filter (where cost_usd is null)` per group. Nullable in the generated types
+   * because PostgREST types every view column as nullable; a `count()` never actually is.
+   */
+  unpriced_calls: z.coerce.number().nullable(),
 });
 
 /**
- * Sums the rollup for this user, this month. Returns USD.
+ * Reads the rollup for this user, this month.
+ *
+ * Returns a `SpendReading` — the summed cost **and** the number of attempts that sum could
+ * not account for. Reading only the sum is what made a metering outage look like a quiet
+ * month to the budget guard: `ai_daily_cost.cost_usd` coalesces an all-unpriced group to
+ * exactly $0, and a caller that never asked how many rows were unpriced had no way to tell
+ * that apart from having spent nothing. `guard.ts` decides what to do with the count (see
+ * `UNPRICED_TOLERANCE`); this function's only job is to stop discarding it.
  *
  * Errors propagate. A caller that cannot read the rollup should not silently assume $0 —
  * `spendPosture` treats a non-finite figure as `normal` on purpose (one uncapped call
  * beats every AI feature going dark on a transient hiccup), but that decision belongs to
  * the guard, made explicitly, not to a swallowed catch here.
  */
-export async function readMonthToDateSpendUsd(
+export async function readMonthToDateSpend(
   client: SupabaseAdminClient,
   userId: string,
   now: Date = new Date(),
-): Promise<number> {
+): Promise<SpendReading> {
   const { data, error } = await client
     .from("ai_daily_cost")
-    .select("cost_usd")
+    .select("cost_usd, unpriced_calls")
     .eq("user_id", userId)
     .gte("day", monthStartInAppTimezone(now));
 
@@ -71,7 +84,16 @@ export async function readMonthToDateSpendUsd(
     throw new Error(`Failed to read ai_daily_cost for the budget guard: ${error.message}`);
   }
 
-  return (data ?? []).reduce((total, row) => total + (dailyCostRow.parse(row).cost_usd ?? 0), 0);
+  return (data ?? []).reduce<SpendReading>(
+    (total, row) => {
+      const parsed = dailyCostRow.parse(row);
+      return {
+        costUsd: total.costUsd + (parsed.cost_usd ?? 0),
+        unpricedCalls: total.unpricedCalls + (parsed.unpriced_calls ?? 0),
+      };
+    },
+    { costUsd: 0, unpricedCalls: 0 },
+  );
 }
 
 /** How long a spend reading is reused before the rollup is queried again. */
@@ -93,18 +115,18 @@ export function createCachedSpendReader(
   client: SupabaseAdminClient,
   userId: string,
   options?: { ttlMs?: number; now?: () => number },
-): () => Promise<number> {
+): () => Promise<SpendReading> {
   const ttlMs = options?.ttlMs ?? SPEND_CACHE_TTL_MS;
   const now = options?.now ?? (() => Date.now());
   let cachedAt = Number.NEGATIVE_INFINITY;
-  let inflight: Promise<number> | undefined;
-  let value = 0;
+  let inflight: Promise<SpendReading> | undefined;
+  let value: SpendReading = { costUsd: 0, unpricedCalls: 0 };
 
   return async () => {
     if (now() - cachedAt < ttlMs) return value;
     // Collapse concurrent reads: a pipeline step that fans out ten calls at once should
     // make one query, not ten identical ones.
-    inflight ??= readMonthToDateSpendUsd(client, userId, new Date(now()))
+    inflight ??= readMonthToDateSpend(client, userId, new Date(now()))
       .then((fresh) => {
         value = fresh;
         cachedAt = now();

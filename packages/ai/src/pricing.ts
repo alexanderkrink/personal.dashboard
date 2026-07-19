@@ -17,7 +17,7 @@
  *    the promotional rate. Budgeting against a rate that expires is how you get surprised.
  */
 
-import type { MODELS, ModelId } from "./models";
+import type { EmbeddingProviderName, MODELS, ModelId } from "./models";
 
 /** USD per million tokens. `cacheWrite: null` = the provider has no per-token write charge. */
 export interface TokenRates {
@@ -115,7 +115,10 @@ export const PRICING = {
  */
 export const EMBEDDING_PRICING = {
   "voyage-3.5-lite": { provider: "voyage", inputPerMTok: 0.02, freeAllowanceTokens: 200_000_000 },
-} as const;
+} as const satisfies Record<
+  string,
+  { provider: EmbeddingProviderName; inputPerMTok: number; freeAllowanceTokens: number }
+>;
 
 /** Token counts for one call, as reported by the provider. */
 export interface TokenUsage {
