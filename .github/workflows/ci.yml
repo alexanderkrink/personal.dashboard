@@ -22,6 +22,12 @@ env:
   # Calendar-sync cron secret. Placeholder only; must clear the 16-char minimum
   # in env.ts or the build fails here rather than in production.
   CRON_SECRET: ci_placeholder_cron_secret_value
+  # Inngest signing key. Placeholder only — the real key lives in Vercel's env.
+  # Must clear the 32-char minimum in env.ts or the build fails here first,
+  # which is the point: `/api/inngest` is gate-exempt and this key is its only
+  # authentication. INNGEST_EVENT_KEY is optional in env.ts and stays unset, so
+  # CI also proves the app builds without it.
+  INNGEST_SIGNING_KEY: signkey-test-ci_placeholder_inngest_signing_key_value
 
 jobs:
   verify:

@@ -13,6 +13,8 @@
         "ACCESS_CODE",
         "ANTHROPIC_API_KEY",
         "CRON_SECRET",
+        "INNGEST_SIGNING_KEY",
+        "INNGEST_EVENT_KEY",
         "RESEND_API_KEY",
         "SEND_EMAIL_HOOK_SECRET",
         "EMAIL_FROM",

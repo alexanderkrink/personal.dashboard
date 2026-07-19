@@ -22,6 +22,23 @@ export const env = createEnv({
     // Minimum 16 characters — a short shared secret on a public endpoint is a
     // guessable one, and failing the build beats discovering that in production.
     CRON_SECRET: z.string().min(16),
+    // Inngest signing key (§3). REQUIRED, and for the same reason CRON_SECRET
+    // is: `/api/inngest` sits in UNGATED_PATHS, so it is reachable with no
+    // session and no access-code cookie, and unlike every other route in the
+    // app it accepts POST and PUT. This key is the ENTIRE authentication
+    // boundary on it — Inngest signs each invocation and the serve handler
+    // verifies that signature. An unset key is not a degraded feature, it is an
+    // open endpoint, so the build must fail rather than deploy one.
+    // Minimum 32: real keys are `signkey-{prod,test}-<64 hex>` (76 chars), and
+    // anything short enough to fail this is a typo or a truncated paste.
+    INNGEST_SIGNING_KEY: z.string().min(32),
+    // Inngest event key. OPTIONAL, deliberately — this one points OUTWARD (it
+    // authenticates us to Inngest when sending events), so it follows the
+    // ANTHROPIC_API_KEY pattern rather than the CRON_SECRET one: no inbound
+    // request is trusted because of it, and leaving it unset costs availability,
+    // not safety. Optional also keeps `inngest-cli dev` and CI buildable, since
+    // the dev server issues its own local key and ignores this value entirely.
+    INNGEST_EVENT_KEY: z.string().min(1).optional(),
     // Auth emails via Resend (Supabase Send Email Hook). Optional so local dev
     // and CI build without them; the hook route 500s with a clear message if unset.
     RESEND_API_KEY: z.string().min(1).optional(),
@@ -37,6 +54,8 @@ export const env = createEnv({
     ACCESS_CODE: process.env.ACCESS_CODE,
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
     CRON_SECRET: process.env.CRON_SECRET,
+    INNGEST_SIGNING_KEY: process.env.INNGEST_SIGNING_KEY,
+    INNGEST_EVENT_KEY: process.env.INNGEST_EVENT_KEY,
     RESEND_API_KEY: process.env.RESEND_API_KEY,
     SEND_EMAIL_HOOK_SECRET: process.env.SEND_EMAIL_HOOK_SECRET,
     EMAIL_FROM: process.env.EMAIL_FROM,
