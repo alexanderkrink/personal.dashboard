@@ -377,6 +377,30 @@ export type Database = {
           },
         ]
       }
+      job_heartbeats: {
+        Row: {
+          created_at: string
+          id: string
+          job: string
+          run_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          job: string
+          run_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          job?: string
+          run_id?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           created_at: string
