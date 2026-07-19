@@ -20,6 +20,7 @@
  */
 
 import type { AnyPromptTemplate } from "./define";
+import { docStructuringPrompt, docStructuringSlideTextPrompt } from "./documents";
 import { syllabusComponentsPrompt } from "./syllabus";
 
 export {
@@ -40,6 +41,15 @@ export {
  * Add an entry in the same commit that adds the template — the id-convention and
  * uniqueness checks only cover what is listed here.
  */
-export const PROMPT_REGISTRY: readonly AnyPromptTemplate[] = [syllabusComponentsPrompt];
+export const PROMPT_REGISTRY: readonly AnyPromptTemplate[] = [
+  syllabusComponentsPrompt,
+  docStructuringPrompt,
+  docStructuringSlideTextPrompt,
+];
 
+export {
+  DOC_STRUCTURING_SYSTEM,
+  docStructuringPrompt,
+  docStructuringSlideTextPrompt,
+} from "./documents";
 export { SYLLABUS_COMPONENTS_SYSTEM, syllabusComponentsPrompt } from "./syllabus";

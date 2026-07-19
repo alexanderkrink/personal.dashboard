@@ -23,6 +23,33 @@
  */
 
 export {
+  type DocumentExtraction,
+  documentExtractionSchema,
+  EXTRACTION_FIDELITIES,
+  EXTRACTION_ROUTES,
+  type ExamSignal,
+  type ExtractedDefinition,
+  type ExtractedExample,
+  type ExtractedFormula,
+  type ExtractedHeading,
+  type ExtractedPage,
+  type ExtractionFidelity,
+  type ExtractionRoute,
+  examSignalSchema,
+  extractedDefinitionSchema,
+  extractedExampleSchema,
+  extractedFormulaSchema,
+  extractedHeadingSchema,
+  extractedPageSchema,
+  extractionFidelitySchema,
+  extractionRouteSchema,
+  fidelityForRoute,
+  type SkippedRange,
+  type StoredExtraction,
+  skippedRangeSchema,
+  storedExtractionSchema,
+} from "./documents";
+export {
   ASSESSMENT_KINDS,
   assessmentKindSchema,
   type SyllabusComponent,

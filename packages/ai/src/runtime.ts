@@ -124,11 +124,44 @@ export interface AIRuntimeConfig {
   readonly maxRank?: Rank;
 }
 
+/**
+ * A binary attachment sent alongside the rendered prompt (§4.1's `file` part).
+ *
+ * Deliberately NOT a `PromptVar`. Vars must stay JSON-serializable because §3 hashes them,
+ * and a 9 MB PDF is neither JSON nor something you want stringified into a template. Files
+ * travel on their own channel and are folded into `input_hash` by digest — see
+ * {@link GenerateStructuredOptions.files}.
+ */
+export interface PromptFile {
+  readonly data: Uint8Array;
+  /** Full IANA media type, e.g. `application/pdf`. */
+  readonly mediaType: string;
+  /** Shown to the model as the file's name. Helps it cite "page 12 of Session 1". */
+  readonly filename?: string;
+}
+
 export interface GenerateStructuredOptions<TVars extends PromptVars, TSchema extends z.ZodType> {
   readonly prompt: PromptTemplate<TVars>;
   readonly vars: TVars;
   readonly schema: TSchema;
   readonly system?: string;
+  /**
+   * Binary attachments — the multimodal path (§4.1: "signed URL → fetch bytes in the step
+   * → a `file` part → one `generateObject` call").
+   *
+   * When present the call is sent as a single user *message* whose content is the rendered
+   * prompt text followed by each file, instead of as a bare `prompt` string. Everything
+   * else is unchanged: the same ladder, the same stamp, the same metering. This exists so
+   * that reading a PDF does not require reaching for `unmeteredLanguageModel` — a
+   * multimodal escape hatch would be an unmetered escape hatch, and §4.1's extraction is
+   * the single most expensive call in the product.
+   *
+   * ⚠ **Each file's bytes are digested into `input_hash`.** Without that, two different
+   * PDFs sent through the same template would hash identically — the rendered text is the
+   * same — and §5's idempotency short-circuit would serve one document's extraction for
+   * another's. The hash covers what was actually sent, not just the words.
+   */
+  readonly files?: readonly PromptFile[];
   /** Overrides the job derived from `prompt.id`. Needed only by variant-suffixed prompts. */
   readonly job?: JobId;
   /**
@@ -203,8 +236,18 @@ export interface AIRuntime {
 
 /** SHA-256 hex via Web Crypto — available in node 18+, edge and the browser alike. */
 export async function sha256Hex(input: string): Promise<string> {
-  const bytes = new TextEncoder().encode(input);
-  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+  return digestHex(new TextEncoder().encode(input));
+}
+
+/** SHA-256 hex of raw bytes. The file half of `input_hash`. */
+export async function sha256HexBytes(input: Uint8Array): Promise<string> {
+  return digestHex(input);
+}
+
+async function digestHex(bytes: Uint8Array): Promise<string> {
+  // `.slice()` produces a plain ArrayBuffer view even when `bytes` is a view onto a
+  // SharedArrayBuffer or a pooled Node Buffer, which `digest` refuses.
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes.slice().buffer);
   return Array.from(new Uint8Array(digest))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
@@ -300,6 +343,7 @@ export function createAIRuntime(config: AIRuntimeConfig): AIRuntime {
       vars,
       schema,
       system,
+      files,
       job: jobOverride,
       kind,
     }: GenerateStructuredOptions<TVars, TSchema>): Promise<
@@ -326,7 +370,16 @@ export function createAIRuntime(config: AIRuntimeConfig): AIRuntime {
       if (!decision.allowed) throw new AIPausedError(decision.reason, { job });
 
       const rendered = prompt.render(vars);
-      const inputHash = await sha256Hex(`${prompt.id}@${prompt.version}\n${rendered}`);
+      // Files contribute their digest, in order, so `input_hash` identifies the whole
+      // request rather than just its words. See `GenerateStructuredOptions.files`.
+      const fileDigests = await Promise.all(
+        (files ?? []).map(async (file) => `${file.mediaType}:${await sha256HexBytes(file.data)}`),
+      );
+      const inputHash = await sha256Hex(
+        `${prompt.id}@${prompt.version}\n${rendered}${
+          fileDigests.length === 0 ? "" : `\n\nfiles:\n${fileDigests.join("\n")}`
+        }`,
+      );
       const start = resolve(job);
 
       const emit = async (record: AttemptRecord): Promise<void> => {
@@ -364,7 +417,29 @@ export function createAIRuntime(config: AIRuntimeConfig): AIRuntime {
             const generated = await generateObject({
               model: languageModelFor(providers, request.model),
               schema,
-              prompt: promptText,
+              // Text-only stays on the plain `prompt` string — the shape every existing
+              // call and every existing test already exercises. Attachments switch to a
+              // single user message, with the text FIRST: the instructions have to be in
+              // context before the model starts reading 40 pages, or the read is
+              // unconditioned and the schema does all the steering.
+              ...(files === undefined || files.length === 0
+                ? { prompt: promptText }
+                : {
+                    messages: [
+                      {
+                        role: "user" as const,
+                        content: [
+                          { type: "text" as const, text: promptText },
+                          ...files.map((file) => ({
+                            type: "file" as const,
+                            data: file.data,
+                            mediaType: file.mediaType,
+                            ...(file.filename === undefined ? {} : { filename: file.filename }),
+                          })),
+                        ],
+                      },
+                    ],
+                  }),
               ...(system === undefined ? {} : { system }),
             });
             return {

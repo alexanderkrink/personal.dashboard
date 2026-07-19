@@ -24,6 +24,13 @@ export {
   UNPRICED_TOLERANCE,
 } from "./guard";
 export {
+  PDF_MEDIA_TYPE,
+  type StructurePdfOptions,
+  type StructureSlideTextOptions,
+  structurePdf,
+  structureSlideText,
+} from "./jobs/doc-structuring";
+export {
   type ExtractSyllabusComponentsOptions,
   extractSyllabusComponents,
 } from "./jobs/syllabus-components";
@@ -98,7 +105,9 @@ export {
   createAIRuntime,
   type GenerateStructuredOptions,
   type GenerateStructuredResult,
+  type PromptFile,
   sha256Hex,
+  sha256HexBytes,
   UNMETERED_ACKNOWLEDGEMENT,
   type UnmeteredAcknowledgement,
 } from "./runtime";

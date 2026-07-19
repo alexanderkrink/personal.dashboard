@@ -425,3 +425,145 @@ describe("job resolution and the clamp", () => {
     });
   });
 });
+
+/**
+ * The multimodal channel (PLAN §4.1: "signed URL → bytes → a `file` part → one
+ * `generateObject` call").
+ *
+ * This exists so that reading a PDF does not require reaching for
+ * `unmeteredLanguageModel`. The property under test is therefore the same one the rest of
+ * this file tests — metering and the stamp are unaffected — plus the one thing files
+ * genuinely change: `input_hash` must identify the *bytes*, not just the words.
+ */
+describe("file attachments", () => {
+  const pdf = (byte: number) => new Uint8Array([0x25, 0x50, 0x44, 0x46, byte]);
+
+  it("sends the prompt text and the file as one user message, text first", async () => {
+    generateObject.mockResolvedValueOnce({ object: { title: "ok" }, usage: usage(10, 5) });
+    const { runtime } = runtimeWithLog();
+
+    await runtime.generateStructured({
+      prompt,
+      vars: { topic: "pricing" },
+      schema,
+      files: [{ data: pdf(1), mediaType: "application/pdf", filename: "s01.pdf" }],
+    });
+
+    const call = generateObject.mock.calls[0]?.[0];
+    // The bare `prompt` string is replaced by a message — mixing both would be ambiguous.
+    expect(call.prompt).toBeUndefined();
+    expect(call.messages).toHaveLength(1);
+    expect(call.messages[0].role).toBe("user");
+    // Text FIRST: the instructions have to be in context before the model reads 40 pages.
+    expect(call.messages[0].content[0]).toMatchObject({ type: "text", text: "Merge: pricing" });
+    expect(call.messages[0].content[1]).toMatchObject({
+      type: "file",
+      mediaType: "application/pdf",
+      filename: "s01.pdf",
+    });
+  });
+
+  it("keeps the plain prompt string when there are no files", async () => {
+    generateObject.mockResolvedValueOnce({ object: { title: "ok" }, usage: usage(10, 5) });
+    const { runtime } = runtimeWithLog();
+
+    await runtime.generateStructured({ prompt, vars: { topic: "pricing" }, schema, files: [] });
+
+    const call = generateObject.mock.calls[0]?.[0];
+    expect(call.prompt).toBe("Merge: pricing");
+    expect(call.messages).toBeUndefined();
+  });
+
+  /**
+   * The one that actually matters. Two different PDFs through the same template render
+   * identical prompt text, so without folding the bytes into the hash §5's idempotency
+   * short-circuit would serve one document's extraction for another's.
+   */
+  it("gives two different files two different input hashes", async () => {
+    generateObject.mockResolvedValue({ object: { title: "ok" }, usage: usage(10, 5) });
+    const { runtime, logged } = runtimeWithLog();
+
+    const vars = { topic: "pricing" };
+    await runtime.generateStructured({
+      prompt,
+      vars,
+      schema,
+      files: [{ data: pdf(1), mediaType: "application/pdf" }],
+    });
+    await runtime.generateStructured({
+      prompt,
+      vars,
+      schema,
+      files: [{ data: pdf(2), mediaType: "application/pdf" }],
+    });
+    // …and the same bytes twice must still collide, or the short-circuit never fires.
+    await runtime.generateStructured({
+      prompt,
+      vars,
+      schema,
+      files: [{ data: pdf(1), mediaType: "application/pdf" }],
+    });
+
+    const [first, second, third] = logged.map((record) => record.inputHash);
+    expect(first).not.toBe(second);
+    expect(first).toBe(third);
+  });
+
+  it("hashes a file-bearing call differently from the same prompt with no file", async () => {
+    generateObject.mockResolvedValue({ object: { title: "ok" }, usage: usage(10, 5) });
+    const { runtime, logged } = runtimeWithLog();
+
+    await runtime.generateStructured({ prompt, vars: { topic: "pricing" }, schema });
+    await runtime.generateStructured({
+      prompt,
+      vars: { topic: "pricing" },
+      schema,
+      files: [{ data: pdf(1), mediaType: "application/pdf" }],
+    });
+
+    expect(logged[0]?.inputHash).not.toBe(logged[1]?.inputHash);
+  });
+
+  it("meters a file-bearing call exactly like a text one", async () => {
+    generateObject.mockResolvedValueOnce({ object: { title: "ok" }, usage: usage(14874, 9462) });
+    const { runtime, logged } = runtimeWithLog();
+
+    await runtime.generateStructured({
+      prompt,
+      vars: { topic: "pricing" },
+      schema,
+      files: [{ data: pdf(1), mediaType: "application/pdf" }],
+    });
+
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toMatchObject({
+      promptId: "topic-merge",
+      promptVersion: 3,
+      job: "topic-merge",
+      provider: "anthropic",
+      model: "claude-sonnet-5",
+      outcome: "success",
+      usage: { input: 14874, output: 9462 },
+    });
+    expect(logged[0]?.inputHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("carries the files through the ladder's corrective retry", async () => {
+    generateObject
+      .mockRejectedValueOnce(schemaFailure('{"title":'))
+      .mockResolvedValueOnce({ object: { title: "ok" }, usage: usage(10, 5) });
+    const { runtime } = runtimeWithLog();
+
+    await runtime.generateStructured({
+      prompt,
+      vars: { topic: "pricing" },
+      schema,
+      files: [{ data: pdf(1), mediaType: "application/pdf" }],
+    });
+
+    // Rung 2 must still see the document, or the retry is answering a different question.
+    const retry = generateObject.mock.calls[1]?.[0];
+    expect(retry.messages[0].content[1]).toMatchObject({ type: "file" });
+    expect(retry.messages[0].content[0].text).toContain("failed validation");
+  });
+});
