@@ -67,7 +67,13 @@ export function DocumentsPanel({
             value={courseId ?? ""}
             onValueChange={(value) => setCourseId(value)}
           >
-            <SelectTrigger className="w-72 max-w-full">
+            {/*
+              Real course titles are long — "PROBABILITY & STATISTICS FOR DATA
+              MANAGEMENT & ANALYTICS" is 54 characters — and `w-72` (18rem) cut the
+              selected one off mid-word. Wide enough for the real corpus, still
+              capped so it never crowds the Upload button on a narrow viewport.
+            */}
+            <SelectTrigger className="w-full max-w-full sm:w-[30rem]">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
