@@ -29,11 +29,20 @@ describe("monthStartInAppTimezone", () => {
 });
 
 describe("readMonthToDateSpendUsd", () => {
-  it("coerces PostgREST's numeric-as-string, rather than concatenating it", async () => {
-    // ⚠ This is the shape the live project actually returns: `numeric` serializes as a
-    // JSON STRING, while the generated Database type claims `number`. Summing those
-    // naively yields "01.230.45" — a spend figure that is never over budget because it is
-    // not a number at all. Wave 2 lost a day to the identical class of bug on timestamps.
+  it("sums the numbers PostgREST actually returns", async () => {
+    // ⚠ MEASURED against the linked project on 2026-07-19: PostgREST returns this
+    // `numeric` column as a JSON number, so the generated `number` type is honest and
+    // this is the ordinary path. (The Supabase SQL editor renders the same value as
+    // "0.00005625" — a difference in that tool's encoding, not in the column.)
+    const { client } = stubClient({ data: [{ cost_usd: 1.23 }, { cost_usd: 0.45 }] });
+    await expect(readMonthToDateSpendUsd(client, "user-1")).resolves.toBeCloseTo(1.68, 10);
+  });
+
+  it("still survives a string, because numeric is one wire-format change from being one", async () => {
+    // The coercion is not decoration. Without it, `sum + row` concatenates and yields
+    // "01.230.45" — a spend figure that is never over budget because it is not a number
+    // at all, so the cap would silently stop existing. Wave 2 lost a day to the identical
+    // class of bug on timestamps.
     const { client } = stubClient({
       data: [{ cost_usd: "1.23000000" }, { cost_usd: "0.45000000" }],
     });

@@ -28,13 +28,21 @@ export function monthStartInAppTimezone(now: Date = new Date()): string {
 }
 
 /**
- * ⚠ `cost_usd` is `numeric` in Postgres, and **PostgREST serializes numeric as a JSON
- * string** to avoid the precision loss of a float. The generated `Database` type claims
- * `number | null`, which is a lie the type system will happily let through — `sum + row`
- * would concatenate strings and produce a spend figure of `"00.000123"`.
+ * `cost_usd` is `numeric` in Postgres, and numeric is the classic "the type says number,
+ * the wire says string" trap — Wave 2 lost a day to the same class of bug on timestamps
+ * (`…T08:00:00.000Z` compared against PostgREST's `…T08:00:00+00:00`).
  *
- * Verified against the linked project, not assumed. `z.coerce.number()` is the boundary
- * that makes the generated type true, per the repo's "Zod at every boundary" rule.
+ * ⚠ MEASURED 2026-07-19, not assumed: against this project PostgREST returns `numeric`
+ * as a JSON **number** (`0.00005625`), so the generated `number | null` type is honest
+ * here and no concatenation bug is latent today. Note the Supabase SQL-editor/MCP path
+ * returns the same column as the string `"0.00005625"` — the discrepancy is in how those
+ * tools encode results, not in the column, which is exactly why this needed measuring
+ * rather than reasoning about.
+ *
+ * The coercion stays regardless, for two reasons that outlive the measurement: the repo
+ * rule is Zod at every boundary and this is one, and a numeric wide enough to lose float
+ * precision is the case where PostgREST's behaviour would be most likely to change under
+ * us. Coercing a number is free; discovering a string in production is not.
  */
 const dailyCostRow = z.object({
   cost_usd: z.coerce.number().nullable(),
