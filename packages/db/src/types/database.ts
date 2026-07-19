@@ -977,6 +977,7 @@ export type Database = {
           document_id: string
           id: string
           locators: Json
+          merged_at_revision: number
           topic_id: string
           user_id: string
         }
@@ -985,6 +986,7 @@ export type Database = {
           document_id: string
           id?: string
           locators?: Json
+          merged_at_revision: number
           topic_id: string
           user_id: string
         }
@@ -993,6 +995,7 @@ export type Database = {
           document_id?: string
           id?: string
           locators?: Json
+          merged_at_revision?: number
           topic_id?: string
           user_id?: string
         }
