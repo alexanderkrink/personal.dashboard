@@ -1593,6 +1593,24 @@ Silent omission — a topic from a 600-page book that never became a page — is
   `coverage-checklist` matcher (Gemini Flash-Lite, Zod) maps each objective to a covering
   topic or flags it missing — turning "did I miss anything?" into "these 2 required topics
   have no page yet." Uncovered objectives surface as `openQuestions` of `kind: 'gap'`.
+
+> ⚠ **CORRECTED 2026-07-19 (Wave 4 Agent 5, item 5e shipped) — "uncovered objectives surface
+> as `openQuestions`" is only implementable for *partially* covered ones, and the split
+> matters.** `openQuestions` is a field on `topics.page`, so an open question needs a topic
+> page to live on — and an objective with **no** covering topic has, by definition, no page.
+> Writing it onto the nearest topic would file a warning about concept A on the page for
+> concept B, which is worse than not filing it.
+>
+> As shipped: `partial` coverage → a real `gap` open question on the covering topic, applied
+> as a tracked, revertible revision, exactly as this bullet describes. `none` → recorded on
+> `documents.coverage.missingObjectives`, which is the surface §8 already promises ("click to
+> see the gaps **and any syllabus objectives still missing**"). Same product outcome, reached
+> the only way it can be.
+>
+> Also: this bullet says the objectives come from "learning objectives / `examSignals`". As
+> built, the checklist call extracts the objectives from the **syllabus text itself** —
+> `syllabusComponentsSchema` has no learning-objectives field, it models graded components,
+> so there was no stored list to read. `examSignals` are not consulted by this call.
 - **Deep-review audit (opt-in, `claude-opus-4-8`):** the heavyweight second reader for prof-flagged
   big documents — Step D.
 
@@ -1648,6 +1666,38 @@ over-800-token units at paragraph boundaries with ~15% overlap. Every chunk keep
 and filter by topic. Topic-page sections themselves are also embedded (into
 `document_chunks` with a synthetic locator) so search covers the synthesized notes, not just
 raw sources.
+
+> ⚠ **CORRECTED 2026-07-19 (Wave 4 Agent 5) — the "target 300–500 tokens" is not reachable on
+> slide decks under these rules, and the rules are right rather than the target.** Measured
+> on a real 70-page Micro deck through the shipped chunker: **55 chunks, min 121, max 330,
+> mean 183 tokens** — the entire distribution sits below the stated band.
+>
+> This is arithmetic, not a bug. A slide is the unit, a slide holds ~150–250 tokens, and the
+> only merge rule is "absorb neighbours **below ~120**". Nothing in the spec pulls a
+> 180-token slide up toward 300, and nothing should: merging two full slides to hit a number
+> would put two concepts in one chunk and make every retrieval of it cite the wrong one of
+> the two. The min of 121 confirms the merge rule fired and nothing tiny survived.
+>
+> So 300–500 describes the **reading/heading-section** path, where a section genuinely spans
+> several pages, and is simply not a property decks can have. Treat the band as a split
+> target (it is what the splitter aims pieces at) rather than as a post-condition on every
+> chunk. Retrieval quality was checked rather than assumed — see the `match_chunks` note
+> below.
+
+> ✅ **VERIFIED 2026-07-19 (Wave 4 Agent 5) — `match_chunks` returns chunks the pipeline
+> actually wrote, and the Gate 1 `strict_order` fix holds.** 55 real chunks written by the
+> shipped chunk step, then queried through `match_chunks(course_id, embedding, 5)`: exact
+> self-match at similarity **1.0000**, followed by a semantically coherent neighbourhood
+> (supply curve 0.8862, movements along the demand curve 0.8844, a demand example 0.8729,
+> demand shifts 0.8676). Locators survived intact, including the merged ranges
+> `{page:1,toPage:3}` and `{page:18,toPage:19}`.
+>
+> Two properties confirmed on the same run: **§7 idempotency is now structural** — a second
+> identical invocation of the step made **zero** embedding requests and wrote **zero**
+> duplicate rows (55 chunks, 55 distinct `chunk_hash`), because the reuse lookup found every
+> vector and the partial unique indexes from `20260719215804` back it up. And **embeddings
+> meter with a real cost**: `embed-chunk` logged 2 calls / 9,156 tokens / **$0.000183**, 0
+> unpriced, confirming Agent 0's `voyage` provider widening and Agent 4's non-zero pricing.
 
 **pgvector index — HNSW, cosine:**
 
@@ -1731,6 +1781,30 @@ chat with citations, and context retrieval for the exam-review generator.
 - **Money guard:** per-document LLM spend estimated from token usage and logged to
   processing events; a document exceeding a sanity ceiling (~$5) aborts with `failed` rather
   than looping.
+
+> ✅ **DECIDED 2026-07-19 (Wave 4 Agent 5) — `document/retry-merges` is deliberately NOT
+> built, and the retry path is closed without it.** The event is named in three places above
+> and never existed. The decision was whether to build it or report it open; it is neither —
+> it is **declined**, because the capability it describes already ships.
+>
+> `retryDocument` (the *Retry the rest* button §8 specifies) sets the row back to `queued`
+> and re-sends `document/uploaded`, which re-runs the whole pipeline. That is more work than
+> re-running only the failed topics, and it is *strictly more correct*: a merge fails for
+> reasons that live upstream of the merge (a bad extraction, a routing decision that put six
+> segments on one topic), so replaying only the failed topic replays the failure. Re-running
+> is also close to free on the second pass — the chunk step reuses every embedding by
+> `chunk_hash`, so a retry costs the LLM calls and nothing else.
+>
+> Building a second event that duplicates a working path more narrowly would have added a
+> half-wired surface for a saving that is not the bottleneck. Revisit only if a real
+> `partial` document turns out to be expensive to re-run end to end; the `failed_topics`
+> column is already populated and would be the input.
+
+> ⚠ **STILL OPEN 2026-07-19 — the repeated-failure guard is not implemented.** "A
+> repeated-failure guard (same `content_hash` failed ≥ 2 times) short-circuits to `failed`
+> immediately" was not built by Agent 2 and was not built by item 5e either. The money guard
+> below bounds the cost of *one* pathological document; nothing yet bounds the cost of the
+> same document being retried by hand five times. Carried forward.
 
 ---
 
@@ -1934,6 +2008,23 @@ chat with citations, and context retrieval for the exam-review generator.
 > Not yet measured, and therefore not corrected: glossary.
 > The `≈ $0.46–0.76` totals stand until those land, with extraction ~$0.13 rather than
 > ~$0.30 inside them.
+
+> ⚠ **CORRECTED 2026-07-19 (Wave 4 Agent 5) — the Embeddings column is right, and it is right
+> by three orders of magnitude.** `<$0.01` per document is technically true and wildly
+> uninformative. Measured on a real 70-page deck: **55 chunks, 9,156 tokens, 2 requests,
+> $0.000183** — about **1/50th of a cent**, or roughly 0.15% of the document's total cost.
+>
+> The practical reading: **embedding cost is not a line item and should stop being budgeted
+> as one.** What *is* a real constraint is the request rate (see the 429 note above), and the
+> defence against it is not spending less but requesting less — the shipped chunk step looks
+> every chunk up by `chunk_hash` before sending anything, so a re-processed document embeds
+> **nothing**. That was verified: a second identical run made zero requests and cost zero.
+>
+> Deep review remains the one genuinely expensive opt-in at $0.80–2.00, and is now gated
+> behind a per-document spend checkpoint (§7's money guard) evaluated immediately before it.
+> **The audit itself has not been run end to end on a real document** — it is built and
+> typechecked, not measured. Its row in this table is still an estimate, and is the main
+> thing left to verify on real data.
 
 ⚠ **Corrected 2026-07-18 against the verified feed** (the old figure assumed a 12-week term
 at 3 sessions/week ≈ 36 decks): the Fall term actually runs 2026-08-31 → 2026-12-18
