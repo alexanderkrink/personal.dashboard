@@ -1068,6 +1068,31 @@ Supabase Free plan's upload ceiling, so the Free plan suffices. Files over the c
 `validate` fails them with a specific, actionable message stating the actual size, the
 50 MB limit, and how to compress and re-upload.
 
+> ⚠ **CORRECTED 2026-07-19 (Wave 4 Agent 2) — "`validate` rejects the oversized file" is the
+> right message from the wrong place.** The pipeline's `validate` step *does* implement the
+> check, but **an over-cap file can never reach it**: the browser refuses the file from
+> `File.size` before hashing or transferring anything, and even if it did not, Storage's own
+> 50 MB ceiling would refuse the transfer with an opaque error long before a `documents` row
+> existed. Verified against the real 163,918,977-byte Kotler textbook — nothing was read,
+> nothing was uploaded, no row and no storage object were created.
+>
+> This is why the cap lives in `packages/core` as one pure function called from **both**
+> ends: the browser (so the rejection is instant and costs no bytes) and the `validate` step
+> (which is the authoritative one, since the client check is trivially bypassable). One
+> function means the user reads the *same sentence* either way:
+>
+> > “kotler-principles-of-marketing.pdf” is 156 MB. The limit is 50 MB. Compress it, or split
+> > it into parts under 50 MB, and upload again.
+>
+> Note the figure is **binary** (156 MiB, 50 MiB = 52,428,800 bytes) because that is what
+> Supabase's ceiling actually is, and PLAN's own "Kotler 156 MB" is measured the same way.
+>
+> **Consequence worth stating plainly: the `validate` step's size branch is unreachable
+> through the UI and is therefore covered by unit tests only.** What *is* exercised on real
+> bytes end to end is the step's other rejections — a real `.docx` uploads, the step
+> downloads it, sniffs `word/` in the ZIP central directory, and fails the document with a
+> human-readable reason.
+
 ---
 
 ### 3. Background job runner: Vercel functions vs Inngest vs Trigger.dev
@@ -1173,6 +1198,31 @@ placeholders). The Anthropic key is already fully wired from M0.
 > `inngest-cli dev` → `POST /api/inngest?fnId=study-dashboard-health-check` → **Completed**;
 > a run with a non-existent `userId` fails as intended with `NonRetriableError: No such user`,
 > which is what proves the admin client reaches Postgres rather than a mock.
+>
+> ✅ **VERIFIED 2026-07-19 (Wave 4 Agent 2) — the sketch below now has a real, running
+> counterpart, built on the two-argument form.** `process-document` ships as
+> `validate → finalize` and processes real uploads end to end. Evidence, from
+> `inngest-cli dev` against real files in `.local-fixtures/`:
+>
+> | Run | File | Outcome |
+> | --- | --- | --- |
+> | `01KXXW139YCD87HRHRMAFT6E9Z` | `s01-basics.pdf` (992 KB) | **Completed** → `ready` in 1.53 s |
+> | `01KXXW943TXX7SSK6PDTVJNQ4Z` | `s04-micro-macro-analysis-chp3.pdf` (6.3 MB) | **Completed** → `ready` in 2.34 s |
+> | `01KXXWAYBV5T0EE9TASXXA4N2Z` | `bdba-loes-fall2025.docx` | **Failed** → `failed`, `DocumentRejectedError (unsupported-format)` |
+>
+> Four decks reached `ready`; the `.docx` failed with a user-readable reason and no stack
+> trace. The step vocabulary written to `document_processing_events` is `validate` (info,
+> ×2) then `finalize` (info) on success, and `validate` (error) then `failed` (error) on
+> rejection.
+>
+> ⚠ **Note for the agents inserting `extract` / `route` / `merge` / `embed`:** the retained
+> `failure_reason` contract is the non-obvious part. `onFailure` receives the error
+> **serialized to JSON**, so the error class is gone and only `name`/`message`/`stack`
+> survive — writing `error.message` into `failure_reason` is exactly how a stack trace
+> reaches a user. The shipped contract inverts it: **the step that knows the human reason
+> writes it to the row and then throws**, and `onFailure` only fills a generic sentence when
+> `failure_reason` is still null. Verified: the `.docx` run's `failed` event carries the
+> validate step's message verbatim, not a generic one.
 
 ```ts
 export const processDocument = inngest.createFunction(
@@ -1579,6 +1629,36 @@ chat with citations, and context retrieval for the exam-review generator.
 - **Source of truth:** `documents.status` + append-only `document_processing_events`,
   written at every step boundary. UI subscribes via Supabase Realtime (`postgres_changes` on
   both tables filtered by `course_id`) — no polling.
+
+> 🔴 **DISPROVEN 2026-07-19 (Wave 4 Agent 2) — "subscribe and you receive rows" is FALSE on an
+> RLS-protected table, and it fails SILENTLY.** Measured in a browser, not reasoned about:
+> three real decks uploaded, all three reached `ready` in Postgres, and **zero
+> `postgres_changes` frames arrived**. The channel reported `SUBSCRIBED`, the websocket stayed
+> open, nothing errored anywhere.
+>
+> The cause is that the Realtime socket connects with the **publishable (anon) key**, not the
+> user's session. Realtime evaluates each table's RLS policies against the *subscriber's*
+> token before forwarding a row, and every policy on `documents` and
+> `document_processing_events` is `(select auth.uid()) = user_id`. Under an anon token
+> `auth.uid()` is NULL, the comparison is NULL, and every row is correctly withheld — the
+> server is behaving properly, and the client cannot tell "you may see nothing" apart from
+> "nothing is happening".
+>
+> **The fix is one line and it is mandatory: `await supabase.realtime.setAuth(accessToken)`
+> before `.subscribe()`.** With it, frames arrive ~80 ms after the database write. Any future
+> Realtime subscriber in this app (topic pages, the Today Queue, chat) needs the same call;
+> `lib/documents/use-document-feed.ts` is the reference.
+>
+> ✅ **VERIFIED 2026-07-19 — gate 1's lazy-replication-slot warning is real.**
+> `pg_replication_slots` was empty before the first subscriber and held an *active*
+> `supabase_realtime_replication_slot_…` immediately after, confirming Supabase creates the
+> slot on demand. The mitigation shipped is the one gate 1 prescribed — subscribe, then REST
+> backfill on the `SUBSCRIBED` callback, treating frames as an accelerator — plus a bounded
+> reconciliation re-read every 4 s **while any document is non-terminal**, which stops
+> entirely at steady state (an idle documents page makes no requests). That watchdog is not
+> the "polling" this bullet rejects; it is a safety net over a transport with a measured
+> warm-up hole, and it is what kept the UI correct during the whole period the `setAuth` bug
+> above was live.
 - **Upload flow:** drag-drop → client-side TUS upload with progress bar → row appears
   instantly as `queued`. The upload dialog asks for `kind` (slides / reading / case /
   syllabus), pre-guessed from MIME type and filename, and offers a **Deep review** toggle
@@ -1596,6 +1676,28 @@ chat with citations, and context retrieval for the exam-review generator.
   a held one reads "⚠ **Jordan forms** · flagged for review")
   from the change summaries and critic verdicts — this is the moment the product's core promise is visible, so
   it gets real UI attention.
+
+> ⚠ **CORRECTED 2026-07-19 (Wave 4 Agent 2, item 5b shipped)** — three things about this
+> bullet as built.
+>
+> 1. **The checklist ships listing only the steps the pipeline can reach**, which today is
+>    *Queued → Checking the file → Done*. Rendering all nine while seven can never light up
+>    does not read as "coming soon"; it reads as a stuck job, on the one screen whose entire
+>    purpose is telling the user whether the job is stuck. The "four views of one step list"
+>    rule still holds and there is now a **fifth** view to change with the others:
+>    `CHECKLIST` in `components/documents/document-card.tsx`, where the enum-ordered slot for
+>    `extracting`/`structuring`/`merging`/`embedding` is marked.
+> 2. **`kind` pre-guessing is weaker than this bullet implies, and is a default rather than an
+>    inference.** Filename signals do not exist in the real corpus as often as assumed: the
+>    genuine syllabus `marketing-fundamentals-sem1.pdf` carries no syllabus signal at all and
+>    is guessed as a `reading`. (`bdba-loes-fall2025.docx` *is* caught, via `loes`.) Pinned as
+>    a known miss in `packages/core/src/documents/validate.test.ts` rather than patched — a
+>    pattern aggressive enough to catch it starts mislabelling ordinary readings.
+> 3. **The pulsing dot is now implemented.** `sync-pulse` — the second of the design system's
+>    two signature motions, specified 2026-07-17 and unimplemented until now — ships in
+>    `globals.css` as `.dot-motif-pulse`, an expanding azure ring with a *designed*
+>    reduced-motion alternative (the ring is removed outright; the blanket duration collapse
+>    in `@layer base` would otherwise freeze it mid-expansion as a permanent halo).
 - **Terminal states:** `ready` → card collapses to a summary ("Contributed to 4 topics",
   linked) with a **coverage line** ("587 of 600 pages mapped · 13 unmapped" — click to see
   the gaps and any syllabus objectives still missing) and, when deep review ran, a "Deep
