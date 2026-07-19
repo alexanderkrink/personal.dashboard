@@ -96,6 +96,9 @@ const extractSchema = z.object({
 
 const EXTRACT_FIELDS = ["sourceLabel", "documentText"] as const;
 
+/** Blank strings for every field — what a successful extraction echoes back. */
+const CLEARED = Object.fromEntries(EXTRACT_FIELDS.map((field) => [field, ""]));
+
 export async function extractSyllabus(
   _previous: FormState,
   formData: FormData,
@@ -139,7 +142,11 @@ export async function extractSyllabus(
     }
 
     revalidatePath(`/courses/${course.id}`);
-    return { status: "success" };
+    // Echo blank fields so the paste does not linger. `FormField` holds its value in
+    // client state, so without this the whole syllabus stays in the textarea after a
+    // successful run — and the proposal the user now needs to read is pushed below tens
+    // of thousands of characters they have already finished with.
+    return { status: "success", values: CLEARED };
   } catch (error) {
     // §6's two "not now / not configured" states, told apart so the message is true.
     if (error instanceof AIPausedError) return formError(AI_PAUSED_USER_MESSAGE, values);

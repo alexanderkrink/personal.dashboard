@@ -68,11 +68,17 @@ export function SyllabusExtractForm({
           >
             {(control) => (
               <>
+                {/* `max-h-64` is not styling. The shared Textarea sets
+                    `field-sizing-content`, which grows the control to fit its value —
+                    fine for a two-line note, catastrophic here: a real syllabus is
+                    40 000 characters and turned this page into a 32 000px scroll, with
+                    the submit button somewhere below the horizon. Capping the height and
+                    letting it scroll internally is what makes a full paste usable. */}
                 <Textarea
                   {...control}
                   required
                   rows={8}
-                  className="font-mono text-mono-data"
+                  className="max-h-64 overflow-y-auto font-mono text-mono-data"
                   placeholder="Paste the full text of the syllabus here…"
                 />
                 <p id="syllabus-text-hint" className="text-muted-foreground text-ui-sm">
