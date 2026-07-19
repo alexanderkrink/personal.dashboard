@@ -5462,15 +5462,19 @@ real course schedule, with weak spots feeding the same daily review queue.
    and ✅ all self-chosen env values set in `.env.local` + Vercel: `CRON_SECRET`,
    `AI_KILL_SWITCH`, `AI_MAX_TIER=deep`, `AI_MONTHLY_BUDGET_USD`.
    ⚠ **Corrected 2026-07-18 — the earlier "No env values remain outstanding" claim is false.**
-   All *previously-provisioned* values are set, but 🔴 **`CLOUDCONVERT_API_KEY` is still
-   outstanding**: DECIDED 2026-07-18, CloudConvert lands **inside item 5** (for a visual course
-   it *is* the extraction path; 4 of 5 Marketing decks measure 22–39 words/slide), so it is an
-   unconditional M1 dependency, not the hypothetical "if the v1.1 visual path ships" the
-   earlier note treated it as. It must be created and run through the full checklist with
-   item 5. Wiring status for the rest: 8 values sit in `.env.local` wired into **0 of 4**
-   checklist locations (`INNGEST_EVENT_KEY`, `INNGEST_SIGNING_KEY`, `VOYAGE_API_KEY`,
-   `GOOGLE_GENERATIVE_AI_API_KEY`, `CRON_SECRET`, `AI_KILL_SWITCH`, `AI_MAX_TIER`,
-   `AI_MONTHLY_BUDGET_USD`), landing with items 2 / 2b / 4 / 5 / 8 per the mapping in the M1
+   All *previously-provisioned* values are set, and ✅ **`CLOUDCONVERT_API_KEY` was created
+   and set in `.env.local` + Vercel on 2026-07-18** (scopes `task.read` + `task.write`, see
+   below) — resolving the 🔴 outstanding item this note previously carried. CloudConvert lands
+   **inside item 5** (for a visual course it *is* the extraction path; 4 of 5 Marketing decks
+   measure 22–39 words/slide), so it is an unconditional M1 dependency, not the hypothetical
+   "if the v1.1 visual path ships" the earlier note treated it as.
+   ⚠ **Provisioned ≠ wired — the distinction that keeps biting.** Wiring status as of
+   2026-07-19: ✅ `CRON_SECRET` is now through all four checklist locations (`env.ts`,
+   `.env.example`, `turbo.json`, `ci.yml`), landed by Wave 2 with the calendar cron. The
+   remaining **8** values sit in `.env.local`/Vercel wired into **0 of 4**:
+   `INNGEST_EVENT_KEY`, `INNGEST_SIGNING_KEY`, `VOYAGE_API_KEY`,
+   `GOOGLE_GENERATIVE_AI_API_KEY`, `AI_KILL_SWITCH`, `AI_MAX_TIER`, `AI_MONTHLY_BUDGET_USD`
+   and `CLOUDCONVERT_API_KEY` — landing with items 2 / 2b / 5 / 8 per the mapping in the M1
    progress note. `DEV_ICS_URL` is local-only and deliberately excluded.
    ⚠ **Naming drift, resolved 2026-07-18.** The two Inngest values were stored as
    `INGEST_SIGNING_KEY` / `INGEST_EVENT_KEY` — missing the second `n` — in **both**
@@ -5580,7 +5584,7 @@ real course schedule, with weak spots feeding the same daily review queue.
    The cost model assumes ≈ $35–60/month AI spend at full usage against a $75 soft cap
    (two-provider network, AI strategy §4); if the value set differs from 75, the guard
    thresholds in §6 scale off it, and the §4 planning range is unaffected.
-6. **Vercel plan**: ✅ **DECIDED 2026-07-18 — upgrading to Pro.** The earlier "decide when
+6. **Vercel plan**: ✅ **DONE — Pro upgrade completed 2026-07-18.** The earlier "decide when
    M1 pipeline volume is real" deferral is overtaken by two concrete pressures, one of which
    was not visible when it was written:
    - **Function duration.** Item 5's extraction step sends a CloudConvert-rendered 45-slide
