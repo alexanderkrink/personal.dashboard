@@ -190,11 +190,18 @@ export function WeightOverrideField({
  *
  * ## Why a native `<select>`
  *
- * Not a Base UI menu. This is inside `<form action={…}>`, and a native select
- * submits with the form whether or not JavaScript has finished loading — the same
- * progressive-enhancement stance the other two controls in this file take. It
- * also gets the platform's own mobile picker at 375px, which is a better control
- * than anything worth rebuilding here.
+ * Not a Base UI menu: it gets the platform's own mobile picker at 375px, which is
+ * a better control than anything worth rebuilding here, and it is one tab stop
+ * with real type-ahead rather than a listbox that has to reimplement both.
+ *
+ * ⚠ **This control does NOT degrade without JavaScript**, and unlike the other two
+ * in this file it cannot be read as if it did. There is no submit button — the form
+ * is submitted from `onChange` via `requestSubmit()` — and the select's own `choice`
+ * value is never read by the action. `intent` and `courseId` are hidden inputs that
+ * only the change handler fills in, so a no-JS submit would send `intent=set` with
+ * an empty `courseId` and fail the schema. That is an accepted trade (the rest of
+ * the calendar is already interactive), but it is a trade, not a free win, and
+ * anything built on this pattern inherits the same dependency.
  *
  * ## The two non-course options are NOT the same
  *

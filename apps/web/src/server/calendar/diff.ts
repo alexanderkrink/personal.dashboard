@@ -313,6 +313,10 @@ export type TombstoneAction =
    * that mark is now known to have been wrong. Leaving it set would keep the item
    * hidden at 24 h (`isTombstoneVisible`), so a row that is safe from deletion
    * would still have silently vanished from the UI.
+   *
+   * ⚠ It is NOT true for every past item that carries a mark — see
+   * `markPredatesOccurrence`. A mark made while the event was still in the future
+   * is a real cancellation and must survive the event's own date passing.
    */
   | { action: "retain"; id: string; clearMissingSince: boolean };
 
@@ -359,6 +363,54 @@ function isFeedWindowRolloff(item: TombstoneCandidate, nowMs: number): boolean {
   const startsAtMs = Date.parse(item.latestOccurrenceStartsAt);
   if (Number.isNaN(startsAtMs)) return true;
   return startsAtMs < nowMs;
+}
+
+/**
+ * Whether an existing tombstone was set while the event was still in the future.
+ *
+ * ## 🔴 The resurrection this closes — found 2026-07-19 (review)
+ *
+ * `isFeedWindowRolloff` asks *"is this item past?"*, and an item does not answer
+ * that question once and for all — it answers `false` today and `true` next week,
+ * because the item stands still while `now` moves. Every genuinely cancelled event
+ * therefore crosses from one branch to the other **while its own deletion clock is
+ * still running**, and the clock is 7 days:
+ *
+ *   Mon — the professor cancels Thursday, the feed drops it → `mark`, hidden at 24 h.
+ *   Fri — Thursday is now in the past → `retain`, `clearMissingSince: true`.
+ *
+ * The mark is erased, so the cancelled class comes **back into the calendar**, and
+ * it can never be deleted because every later sync takes the same branch. Two bad
+ * outcomes at once: the deletion path is unreachable for the ordinary cancellation
+ * (a class cancelled fewer than 7 days ahead — i.e. almost all of them), and a
+ * lecture that never happened is rendered as one that did. M1 item 9 hangs
+ * `attendance_records` off exactly these rows, so it would become an attendable
+ * session.
+ *
+ * ## The discriminator
+ *
+ * The mark's own timestamp says which it is, and it is already stored:
+ *
+ * - `missing_since` **before** the last occurrence → the feed dropped the event
+ *   while it was still upcoming. Only a cancellation looks like that. The mark is
+ *   correct and is kept, so the item stays hidden — but it is still `retain`, so it
+ *   is never deleted and the row survives for item 9.
+ * - `missing_since` **at or after** the last occurrence → the event had already
+ *   happened when the feed stopped carrying it. That is the window sliding, and the
+ *   mark is the old rule's mistake. Cleared, so the item returns to view.
+ *
+ * The 5 rows this branch healed take the second branch and are unaffected: they
+ * started 2026-01-19 and were marked 2026-07-19, six months later.
+ *
+ * A null occurrence date cannot be compared, and "no evidence" keeps its existing
+ * reading — the mark is cleared rather than left to hide the row forever.
+ */
+function markPredatesOccurrence(item: TombstoneCandidate): boolean {
+  if (item.missing_since === null || item.latestOccurrenceStartsAt === null) return false;
+  const markedMs = Date.parse(item.missing_since);
+  const startsAtMs = Date.parse(item.latestOccurrenceStartsAt);
+  if (Number.isNaN(markedMs) || Number.isNaN(startsAtMs)) return false;
+  return markedMs < startsAtMs;
 }
 
 /**
@@ -419,7 +471,10 @@ export function planTombstones(
       actions.push({
         action: "retain",
         id: item.id,
-        clearMissingSince: item.missing_since !== null,
+        // A mark made while the event was still upcoming is a cancellation and
+        // survives the event's date passing; only a mark made after it had already
+        // happened is the old rule's roll-off mistake. See `markPredatesOccurrence`.
+        clearMissingSince: item.missing_since !== null && !markPredatesOccurrence(item),
       });
       continue;
     }

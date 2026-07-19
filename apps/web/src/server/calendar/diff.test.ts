@@ -147,10 +147,14 @@ describe("planTombstones", () => {
 
   it("never deletes a past item, however long it has been absent", () => {
     // A year of absence. Under the old rule this was a delete on day seven.
+    //
+    // The occurrence predates the mark, which is what makes this a roll-off: the
+    // session had already happened when the feed stopped carrying it. That is also
+    // why the mark is cleared — see the resurrection test below for the mirror case.
     const result = planTombstones(
       [
         item({
-          latestOccurrenceStartsAt: "2026-01-19T08:30:00.000Z",
+          latestOccurrenceStartsAt: "2024-06-01T08:30:00.000Z",
           missing_since: ago(365 * DAY),
         }),
       ],
@@ -158,6 +162,43 @@ describe("planTombstones", () => {
       NOW,
     );
     expect(result).toEqual([{ action: "retain", id: "item-1", clearMissingSince: true }]);
+  });
+
+  /* -- 🔴 a cancellation must survive its own date passing ----------------- */
+
+  it("keeps the tombstone on an event cancelled BEFORE it was due", () => {
+    // Marked while still upcoming (2026-09-01) for a session on 2026-09-05, and
+    // read after that date has passed. Clearing the mark here would put a lecture
+    // that never happened back on the calendar — and, because every later sync
+    // takes the same branch, would make it undeletable forever.
+    expect(
+      planTombstones(
+        [
+          item({
+            latestOccurrenceStartsAt: "2026-09-05T09:00:00.000Z",
+            missing_since: "2026-09-01T06:00:00.000Z",
+          }),
+        ],
+        new Set(),
+        NOW,
+      ),
+    ).toEqual([{ action: "retain", id: "item-1", clearMissingSince: false }]);
+  });
+
+  it("still clears a mark made AFTER the session had already happened", () => {
+    // The live shape: session 2026-01-19, marked 2026-07-19 when the window rolled.
+    expect(
+      planTombstones(
+        [
+          item({
+            latestOccurrenceStartsAt: "2026-01-19T08:30:00.000Z",
+            missing_since: "2026-07-19T00:00:40.410Z",
+          }),
+        ],
+        new Set(),
+        NOW,
+      ),
+    ).toEqual([{ action: "retain", id: "item-1", clearMissingSince: true }]);
   });
 
   it("retains an item with no occurrences rather than deleting it", () => {
