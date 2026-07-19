@@ -53,12 +53,9 @@ vi.mock("@/lib/supabase/server", () => ({
 
         eq: () => {
           if (pendingUpdate === null) return builder;
-          const columns = pendingUpdate;
-          return Promise.resolve(
-            state.fail23505
-              ? { error: { code: "23505" } }
-              : (state.updates.push(columns), { error: null }),
-          );
+          if (state.fail23505) return Promise.resolve({ error: { code: "23505" } });
+          state.updates.push(pendingUpdate);
+          return Promise.resolve({ error: null });
         },
       };
       return builder;
