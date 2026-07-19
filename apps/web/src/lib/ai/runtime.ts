@@ -43,7 +43,18 @@ export interface StudyAIRuntimeOptions {
    * gets exactly what `env.ts` validated.
    */
   readonly overrides?: {
+    /**
+     * Can only ever turn the switch **ON**. `true` pauses AI regardless of the env var;
+     * `false` (or omitted) defers to `AI_KILL_SWITCH` and cannot re-enable spend that the
+     * environment has stopped.
+     *
+     * Asymmetric on purpose: an override that could set this to `false` would be a
+     * documented, exported way to run AI with the production circuit breaker engaged, and
+     * "production passes nothing" is a convention rather than a guarantee. Overrides may
+     * tighten the guard; they may not loosen it.
+     */
     readonly killSwitch?: boolean;
+    /** Clamped to the smaller of the override and the configured budget — tighten only. */
     readonly monthlyBudgetUsd?: number;
   };
 }
@@ -69,8 +80,13 @@ export function createStudyAIRuntime({ userId, overrides }: StudyAIRuntimeOption
     // circuit breaker only, exactly as recorded in PLAN.md §6.
     maxRank: env.AI_MAX_TIER,
     guard: {
-      killSwitch: overrides?.killSwitch ?? env.AI_KILL_SWITCH,
-      monthlyBudgetUsd: overrides?.monthlyBudgetUsd ?? env.AI_MONTHLY_BUDGET_USD,
+      // Tighten-only, both of them: OR for the switch, MIN for the budget. A caller can
+      // make this runtime stricter than the environment, never laxer.
+      killSwitch: env.AI_KILL_SWITCH || overrides?.killSwitch === true,
+      monthlyBudgetUsd: Math.min(
+        overrides?.monthlyBudgetUsd ?? Number.POSITIVE_INFINITY,
+        env.AI_MONTHLY_BUDGET_USD,
+      ),
       monthToDateSpendUsd: createCachedSpendReader(admin, userId),
     },
     log: createGenerationLogger(admin, userId),

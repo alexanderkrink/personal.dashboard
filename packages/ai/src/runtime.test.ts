@@ -349,6 +349,41 @@ describe("the kill switch and the budget guard stop spend before it happens", ()
     });
     expect(generateObject).not.toHaveBeenCalled();
   });
+
+  /**
+   * The DoD clause is "AI_KILL_SWITCH=true verifiably stops ALL spend" — not "stops
+   * structured calls". The unmetered escapes are the paths that spend without leaving an
+   * `ai_generations` row, so a kill switch that missed them would be false exactly where
+   * it is least observable. A Wave 4 chat route built on `unmeteredLanguageModel` must be
+   * killed by the same env var as everything else.
+   */
+  it("refuses to hand out a raw model or provider while the kill switch is set", () => {
+    const { runtime } = guardedRuntime({
+      killSwitch: true,
+      monthlyBudgetUsd: 75,
+      monthToDateSpendUsd: () => 0,
+    });
+
+    expect(() =>
+      runtime.unmeteredLanguageModel("chat-rag", "i-will-meter-this-call-myself"),
+    ).toThrow(AIPausedError);
+    expect(() => runtime.unmeteredProviders("i-will-meter-this-call-myself")).toThrow(
+      AIPausedError,
+    );
+  });
+
+  it("still hands out the raw model when the switch is off — the escape is gated, not removed", () => {
+    const { runtime } = guardedRuntime({
+      killSwitch: false,
+      monthlyBudgetUsd: 75,
+      monthToDateSpendUsd: () => 0,
+    });
+
+    expect(
+      runtime.unmeteredLanguageModel("chat-rag", "i-will-meter-this-call-myself"),
+    ).toBeDefined();
+    expect(runtime.unmeteredProviders("i-will-meter-this-call-myself")).toBeDefined();
+  });
 });
 
 describe("job resolution and the clamp", () => {

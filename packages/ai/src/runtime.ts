@@ -174,15 +174,21 @@ export interface AIRuntime {
    * no usage, no cost, invisible to the budget guard. It exists only because `streamText`
    * (chat/RAG, lesson prose) has no metered wrapper yet.
    *
-   * The kill switch and budget guard are NOT applied here either, because there is no call
-   * for them to gate — the caller makes the call. A caller reaching for this owes both:
-   * check `guardCheck()` before streaming, and write the row from `onFinish`.
+   * **The kill switch IS applied**: this throws `AIPausedError("kill-switch")` when
+   * `AI_KILL_SWITCH` is set, so §6's "one env var stops all spend" holds through this
+   * escape too and not merely for `generateStructured`. It is checkable synchronously
+   * because it is plain injected config — no rollup read, nothing to await.
+   *
+   * The **budget guard is not** applied, and cannot be here: the posture depends on an
+   * async rollup read and this is a synchronous getter. A caller reaching for this still
+   * owes two things — `await guardCheck()` before streaming, and a row written from
+   * `onFinish` — because spend through this path is otherwise both uncapped and invisible.
    */
   unmeteredLanguageModel(
     job: JobId,
     acknowledgement: UnmeteredAcknowledgement,
   ): ReturnType<typeof languageModelFor>;
-  /** ⚠ Both raw providers. Same warning as `unmeteredLanguageModel`. */
+  /** ⚠ Both raw providers. Same warning, and the same kill-switch check, as above. */
   unmeteredProviders(acknowledgement: UnmeteredAcknowledgement): AIProviders;
   /**
    * The §6 guard decision on its own, without making a call.
@@ -272,9 +278,19 @@ export function createAIRuntime(config: AIRuntimeConfig): AIRuntime {
   return {
     resolve,
     guardCheck: (job, kind) => decide(job, kind ?? "background"),
-    unmeteredLanguageModel: (job, _acknowledgement) =>
-      languageModelFor(providers, resolve(job).model),
-    unmeteredProviders: (_acknowledgement) => providers,
+    // The kill switch gates the escape hatches too. Handing back a live model while
+    // AI_KILL_SWITCH is set would make §6's headline promise ("flip one env var and all
+    // spend stops") true only of `generateStructured` — and the paths that go through
+    // here are exactly the ones that spend without leaving a row, so they are the worst
+    // ones to leave running. Synchronous because `killSwitch` is injected config.
+    unmeteredLanguageModel: (job, _acknowledgement) => {
+      if (config.guard.killSwitch) throw new AIPausedError("kill-switch", { job });
+      return languageModelFor(providers, resolve(job).model);
+    },
+    unmeteredProviders: (_acknowledgement) => {
+      if (config.guard.killSwitch) throw new AIPausedError("kill-switch");
+      return providers;
+    },
 
     async generateStructured<TVars extends PromptVars, TSchema extends z.ZodType>({
       prompt,
