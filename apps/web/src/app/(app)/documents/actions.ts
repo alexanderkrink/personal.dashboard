@@ -175,12 +175,41 @@ export async function registerUpload(input: unknown): Promise<RegisterResult> {
    */
   const { data: listed } = await supabase.storage
     .from(DOCUMENTS_BUCKET)
-    .list(`${userId}/${upload.courseId}/${upload.documentId}`, { limit: 1 });
+    .list(`${userId}/${upload.courseId}/${upload.documentId}`, { limit: 100 });
   if (!listed || listed.length === 0) {
     return {
       ok: false,
       message: "The upload didn’t finish. Check your connection and try again.",
     };
+  }
+
+  /**
+   * The size the SERVER can see, not the one the browser claimed.
+   *
+   * `size_bytes` arrives in the request body, is shown to the user, and is what
+   * `validate` re-checks the 50 MB cap against — so that guard was circular: a
+   * client that under-reported its size would be measured against its own lie.
+   * (Bounded, and therefore a data-integrity nit rather than a hole: Storage
+   * enforces the real ceiling at 52,428,800 bytes and rejects the transfer
+   * itself. But the number is *displayed*, and a displayed number that nothing
+   * reconciles will eventually be wrong in front of someone.)
+   *
+   * The listing was already being fetched to prove the bytes exist, and it
+   * carries `metadata.size` — the length Storage actually stored. So the fix
+   * costs nothing beyond raising the page limit enough to find the right entry
+   * by name.
+   */
+  const entry = listed.find((object) => object.name === upload.filename);
+  const listedSize = entry?.metadata?.size;
+  const sizeBytes =
+    typeof listedSize === "number" && listedSize > 0 ? listedSize : upload.sizeBytes;
+
+  // Re-run the cap against the authoritative number. A file that only fits under
+  // the limit while the client is describing it does not fit under the limit.
+  const trueSizeVerdict = validateDocumentSize({ sizeBytes, filename: upload.filename });
+  if (trueSizeVerdict !== null && !trueSizeVerdict.ok) {
+    await discardBytes();
+    return { ok: false, message: trueSizeVerdict.rejection.message };
   }
 
   const { error } = await supabase.from("documents").insert({
@@ -191,7 +220,9 @@ export async function registerUpload(input: unknown): Promise<RegisterResult> {
     storage_path: storagePath,
     filename: upload.filename,
     mime_type: upload.mimeType,
-    size_bytes: upload.sizeBytes,
+    // Storage's number, falling back to the client's only when the listing did
+    // not carry one. See the reconciliation block above.
+    size_bytes: sizeBytes,
     content_hash: upload.contentHash,
     status: "queued",
     deep_review: upload.deepReview ? "requested" : "off",
