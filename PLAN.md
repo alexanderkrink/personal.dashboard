@@ -4829,13 +4829,15 @@ feature's migration, never ahead of need.
 
 ## AI Strategy
 
-⚠ **This whole section is SPEC, NOT SHIPPED — it lands with M1 item 2b, which has not started.** Verified 2026-07-18: `packages/ai/package.json` depends only on `@ai-sdk/anthropic`, `provider.ts` wires only `createAnthropic`, and `env.ts` declares no Google key at all (`GOOGLE_GENERATIVE_AI_API_KEY` sits in `.env.local`, wired into 0 of 4 checklist locations). Read the present tense below as the target state.
+✅ **SHIPPED 2026-07-19 (M1 item 2b).** The provider layer described below is live in `packages/ai`: both providers wired, the job registry replacing the 3-tier map, the widened `definePrompt`, `src/prompts/` + `src/schemas/`, per-provider price tables, and the §2 failure ladder (68 unit tests). `GOOGLE_GENERATIVE_AI_API_KEY` and `VOYAGE_API_KEY` are wired into all 4 checklist locations, and CLAUDE.md's rule was rewritten from "by tier" to "by job" in the same change. Real calls to **both** providers verified end-to-end through `createAIRuntime`. Present tense below is now literal — with the two exceptions marked 🔴/⚠ inline. **Still spec, and owned by later agents:** the `ai_generations` table, the cost rollup, the kill switch and budget guard (§6, item 2c), and every prompt/schema (`src/prompts/` and `src/schemas/` ship empty on purpose — see §3).
 
-All LLM interaction lives in `packages/ai` (providers, prompt templates, Zod output schemas, the model registry). It *will* wire **two providers** through the Vercel AI SDK — `@ai-sdk/anthropic` (wired today) and `@ai-sdk/google` (**not yet installed**) — and no `@ai-sdk/*` import or model ID appears anywhere else in the repo; the package never reads `process.env` — `apps/web/src/env.ts` injects configuration (both provider keys included). That boundary is what makes the multi-provider network below enforceable: one place to swap models *or providers*, one place to version prompts, one place to meter and kill spend. (The boundary governs prompts, providers, schemas, and model calls — UI streaming hooks like `useChat` from `@ai-sdk/react` live in `apps/web`, pointed at endpoints backed by this package.)
+All LLM interaction lives in `packages/ai` (providers, prompt templates, Zod output schemas, the model registry). It wires **two providers** through the Vercel AI SDK — `@ai-sdk/anthropic` and `@ai-sdk/google` — and no `@ai-sdk/*` import or model ID appears anywhere else in the repo; the package never reads `process.env` — `apps/web/src/env.ts` injects configuration (both provider keys included). That boundary is what makes the multi-provider network below enforceable: one place to swap models *or providers*, one place to version prompts, one place to meter and kill spend. (The boundary governs prompts, providers, schemas, and model calls — UI streaming hooks like `useChat` from `@ai-sdk/react` live in `apps/web`, pointed at endpoints backed by this package.)
 
 ### 1. Model-per-job network
 
-⚠ **SPEC, NOT SHIPPED (M1 item 2b).** Today `packages/ai/src/models.ts` is still the 3-tier registry `MODELS = { fast: "claude-haiku-4-5", balanced: "claude-sonnet-5", deep: "claude-opus-4-8" }` (Anthropic-only) with the signature `getModel(provider, tier)`. **When 2b lands, CLAUDE.md's "model selection by tier" rule must be rewritten to "by job" in the same change** — until then, code written against the job API below violates the repo conventions.
+✅ **SHIPPED 2026-07-19 (M1 item 2b).** `packages/ai/src/models.ts` is the job registry below; the 3-tier map and `getModel(provider, tier)` are gone. `getModel(job)` is now pure — it returns `{ job, model, provider, rank }` with no SDK instance and no key, so it is unit-testable and the `AI_MAX_TIER` clamp lives in it as an option. `AIRuntime.languageModel(job)` is what turns a resolution into an SDK model. CLAUDE.md's "model selection by tier" rule was rewritten to "by job" in the same change, as required.
+
+🔴 **DISPROVEN 2026-07-19 — the model ID `gemini-3.1-pro` does not exist.** Probed live against the Generative Language API: `POST /v1beta/models/gemini-3.1-pro:generateContent` returns **HTTP 404** (`"models/gemini-3.1-pro is not found for API version v1beta"`), and `ListModels` has no such entry. The only live Gemini 3.1 Pro ID is **`gemini-3.1-pro-preview`** (1,048,576 input tokens, `generateContent` + `batchGenerateContent` + `createCachedContent` supported), which was called successfully. **The shipped registry pins `doc-structuring` to `gemini-3.1-pro-preview`**; the code block and pricing table below are corrected to match, and every *other* `gemini-3.1-pro` mention in this document (§Document pipeline, §1b, §2b, §4, §6) should be read as that ID until Google promotes a stable one. The other four §1 IDs were probed and all resolve: `claude-sonnet-5` and `claude-opus-4-8` exactly, and `claude-haiku-4-5` resolves as an alias to `claude-haiku-4-5-20251001` (it is absent from `ListModels` but accepted by the Messages API). ⚠ Note the shipped ID is a **preview**: preview IDs get retired, so this pin needs re-checking rather than trusting.
 
 Call sites select a **job**, never a model ID — `getModel("topic-merge")` resolves the job to its pinned `(provider, model)`. The registry in `packages/ai/src/models.ts` pins each job to an explicit model across two providers; coarse capability **ranks** (`fast < balanced < deep`) survive only to drive confidence escalation, the `AI_MAX_TIER` clamp (§6), and 429 failover:
 
@@ -4846,13 +4848,13 @@ export const MODELS = {
   "gemini-3.1-flash-lite": { provider: "google",    rank: "fast"     },
   "claude-haiku-4-5":      { provider: "anthropic", rank: "fast"     },
   "claude-sonnet-5":       { provider: "anthropic", rank: "balanced" },
-  "gemini-3.1-pro":        { provider: "google",    rank: "deep"     }, // long-context/multimodal specialist
+  "gemini-3.1-pro-preview": { provider: "google",   rank: "deep"     }, // long-context/multimodal specialist (🔴 see marker above: `gemini-3.1-pro` 404s)
   "claude-opus-4-8":       { provider: "anthropic", rank: "deep"     },
 } as const;
 
 // Every job names its model explicitly — the single source of truth for call sites.
 export const JOBS = {
-  "doc-structuring":     "gemini-3.1-pro",         // long-context + multimodal extraction
+  "doc-structuring":     "gemini-3.1-pro-preview", // long-context + multimodal extraction
   "deep-review-audit":   "claude-opus-4-8",        // independent 2nd reader — different family from the extractor
   "topic-routing":       "gemini-3.1-flash-lite",
   "topic-merge":         "claude-sonnet-5",
@@ -4922,7 +4924,7 @@ Rules of thumb encoded in the registry doc comment: **Google Gemini for long-con
 | Google · gemini-3.1-flash-lite | `fast` | $0.25 | $1.50 | ~$0.025 | Flat pricing, 1M ctx; cheapest capable classifier |
 | Anthropic · claude-haiku-4-5 | `fast` | $1.00 | $5.00 | $0.10 | 200K ctx; cache write $1.25; Anthropic cross-family critic |
 | Anthropic · claude-sonnet-5 | `balanced` | $3.00 ¹ | $15.00 ¹ | $0.30 | 1M ctx; cache write $3.75; batch −50% |
-| Google · gemini-3.1-pro | `deep` | $2.00 (<200K) / **$4.00 (>200K)** | $12.00 / **$18.00** | $0.20 | 1M ctx; long-context surcharge above 200K tokens; native multimodal |
+| Google · gemini-3.1-pro-preview | `deep` | $2.00 (<200K) / **$4.00 (>200K)** | $12.00 / **$18.00** | $0.20 | 1M ctx; long-context surcharge above 200K tokens; native multimodal. ⚠ §1 states one cache-read rate and no surcharged variant; `pricing.ts` carries $0.20 through both brackets rather than inventing a >200K figure. No per-token cache-*write* rate is stated for Google (its context caching bills storage per hour), so `pricing.ts` models it as `null`, not `0`. |
 | Anthropic · claude-opus-4-8 | `deep` | $5.00 | $25.00 | $0.50 | 1M ctx; cache write $6.25; batch −50% |
 
 ¹ Introductory pricing of $2.00/$10.00 applies through 2026-08-31; all math below uses the durable $3/$15 sticker.
@@ -4955,9 +4957,9 @@ The network runs on **two providers**, each used where it is strongest:
 
 Convention (already in CLAUDE.md): **every LLM call that produces data (not prose) goes through a Zod schema via the AI SDK's `generateObject`**. Chat/RAG and lesson prose use `streamText`; everything else is `generateObject`.
 
-- **Schemas live in `packages/ai`** — `src/schemas.ts` today, splitting into one file per feature area (`src/schemas/flashcards.ts`, `src/schemas/documents.ts`, …) as M1 lands, re-exported from the package index. Callers import the schema *and* its inferred type from `@study/ai`; the schema is the single source of truth for both the model contract and the TypeScript type.
+- **Schemas live in `packages/ai`** — ✅ split as of 2026-07-19 into `src/schemas/`, one file per feature area (`src/schemas/flashcards.ts`, `src/schemas/documents.ts`, …), re-exported from `src/schemas/index.ts` and the package index. ⚠ The directory ships **empty**: the M0 placeholder `documentSummarySchema` was retired rather than moved, because a plausible-looking `documents.ts` with no prompt and no job behind it would have read as the real document-pipeline contract. Nothing outside the package imported it. First real schemas arrive with `syllabus-components`. Callers import the schema *and* its inferred type from `@study/ai`; the schema is the single source of truth for both the model contract and the TypeScript type.
 - **Schema design constraints**: keep schemas flat-ish and non-recursive; skip numeric/string min-max constraints the provider can't enforce (the AI SDK strips unsupported JSON Schema keywords and Zod still validates them client-side, so `z.string().min(1)` is fine — it just means validation, not generation-time constraint). Use `.describe()` on every field; descriptions are prompt surface.
-- **Failure handling**, in order:
+- **Failure handling** — ✅ shipped 2026-07-19 as `runStructuredLadder` in `packages/ai/src/ladder.ts`, driven by `AIRuntime.generateStructured`. The control flow is separated from the SDK call (`attempt` is injected) so all three rungs are unit-tested with no network. Transport errors (429/500/529) deliberately propagate instead of entering the ladder — Inngest owns backoff (§6). In order:
   1. `generateObject` throws `NoObjectGeneratedError` when the model's output doesn't parse/validate (it carries `.text`, `.cause`, `.usage`). First response: **one corrective retry** — re-send with the validation error message appended ("Your previous output failed validation: … Return only corrected JSON."). This fixes the large majority of failures.
   2. If the corrective retry fails: **one rank escalation** to a higher-rank model, deliberately *cross-provider* where the job allows it (e.g. `gemini-3.1-flash-lite → claude-sonnet-5`) — a schema failure on one model family often clears on another. Failures that both a Gemini *and* a Claude model reject are almost always schema bugs, not model flakiness.
   3. Then **dead-letter**: mark the job failed, persist the raw `.text` and error in the `ai_generations` log (§5) for debugging, surface a "regenerate" affordance in the UI. Never loop.
@@ -4977,11 +4979,11 @@ Two models from the same family can share blind spots, so the whole verification
 
 ### 3. Prompt versioning and traceability
 
-`packages/ai/src/prompts.ts` already defines the registry primitive:
+`packages/ai/src/prompts/define.ts` defines the registry primitive (⚠ moved 2026-07-19 from `src/prompts.ts`, which would otherwise be an ambiguous module specifier next to the new `src/prompts/` directory). `TVars` is constrained to JSON-shaped values — objects and arrays, not just `string | number` — because real prompts pass TopicPage JSON, segment lists and critic verdicts. It is deliberately not `Record<string, unknown>`: that would type-check every call but erase the variable names, so a misspelled var would compile and interpolate `undefined`. JSON-shaped also keeps `input_hash` stable, which is what the §5 idempotency short-circuit rests on.
 
 ```ts
 definePrompt<{ subject: string }>({
-  id: "echo-example",      // stable kebab-case id
+  id: "quick-add",          // stable kebab-case id — equal to the JOB key that runs it
   version: 1,               // bump on ANY semantic change
   description: "…",
   render: (vars) => `…`,
@@ -4990,8 +4992,8 @@ definePrompt<{ subject: string }>({
 
 Policy built on top of it:
 
-- **One file per feature area** under `src/prompts/`, all templates exported through the registry. No inline prompt strings at call sites — a prompt that isn't a `definePrompt` doesn't ship.
-- **Id convention (normative):** a prompt's `id` is **kebab-case, stable, and equal to the key of the job that runs it** (`topic-merge`, `cards-basic`, `quick-add`, `case-brief`, `glossary-extract`, …). One job may own several prompt *versions*, never several ids. The version **never** appears in the id — it lives in the separate `version` field, which is what makes the targeted-regeneration query below possible. The one job that legitimately owns two prompts — `lesson-generate`, which has a generation prompt and a repair prompt — distinguishes them by a `variant` suffix on the id (`lesson-generate`, `lesson-generate-repair`), both pinned to the same model.
+- **One file per feature area** under `src/prompts/`, all templates exported through the registry. No inline prompt strings at call sites — a prompt that isn't a `definePrompt` doesn't ship. ✅ `src/prompts/index.ts` ships with `PROMPT_REGISTRY`, and it is **empty on purpose**: the M0 placeholder `echo-example` was retired because its id named no job, so it could not satisfy the very convention the registry exists to enforce — a placeholder needing an exemption from the rule is worse than none. First real entry is `syllabus-components`.
+- **Id convention (normative)** — ✅ enforced in code as of 2026-07-19, not just in prose: the type `PromptId = JobId | `${JobId}-${string}`` is the compiler half, and `promptIdViolation()` + `src/prompts/registry.test.ts` are the other half (they reject `cards-basic-v2`, `echo-example`, `topic_merge`, and duplicate ids — the template-literal type alone would accept a version suffix). `jobForPromptId()` resolves a variant-suffixed id back to its job, longest-match first, which is how the call wrapper gets from prompt → job → model without the caller naming either. The rule: a prompt's `id` is **kebab-case, stable, and equal to the key of the job that runs it** (`topic-merge`, `cards-basic`, `quick-add`, `case-brief`, `glossary-extract`, …). One job may own several prompt *versions*, never several ids. The version **never** appears in the id — it lives in the separate `version` field, which is what makes the targeted-regeneration query below possible. The one job that legitimately owns two prompts — `lesson-generate`, which has a generation prompt and a repair prompt — distinguishes them by a `variant` suffix on the id (`lesson-generate`, `lesson-generate-repair`), both pinned to the same model.
 - **Every persisted AI artifact is stamped** with five columns at write time: `prompt_id`, `prompt_version`, `provider` + `model` (the *concrete* `(provider, model)` resolved from the job at call time — a job can be re-pointed to a different provider/model later, so the stamp must record what actually ran), and `input_hash` (SHA-256 of the rendered prompt inputs). Flashcards, structured docs, lessons, exam reviews — every generated row carries these. The same `(provider, model)` stamp is what lets the §6 cost rollup price each call against its own provider's table.
 - **What the stamp buys us**:
   - *Traceability*: any bad output in the UI resolves to the exact template text (git history of the prompt file at that version) and the exact provider + model.
