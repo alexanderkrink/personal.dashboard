@@ -25,19 +25,21 @@ export const env = createEnv({
     // Voyage AI, for `pgvector` embeddings (§1 "Embeddings", Wave 4). Embeddings stay
     // single-vendor regardless of the two-provider LLM split — mixing embedding models
     // breaks vector comparability (§5), so this is a retrieval decision, not a generation
-    // one. Wired now so the four env locations stay in step; no embedding code uses it yet.
-    VOYAGE_API_KEY: z.string().min(1).optional(),
+    // one. REQUIRED since Wave 6: routing and retrieval run on these vectors, so an unset
+    // key is not a degraded feature — it is a pipeline that accepts documents and then
+    // fails them at runtime. Fail-closed at build beats discovering that per upload.
+    // CI builds with a placeholder (see ci.yml); only a real deploy needs a real key.
+    VOYAGE_API_KEY: z.string().min(1),
     // CloudConvert, for the PPTX→PDF visual path (§4.2). Not an optional nicety: PLAN's
     // 🔴 measured block shows four of five Marketing decks below the 40 words/slide
     // threshold, so for that course this key is what stands between real topic pages and
-    // mostly-empty ones. Optional here for the same reason the provider keys are — local
-    // dev and CI must still build without it, and an unset key costs the visual branch,
-    // never safety. The step fails the document with a readable sentence rather than
-    // silently downgrading to text-only, because a silent downgrade is exactly the
-    // "mostly-empty topic pages" outcome, arrived at without anybody noticing.
+    // mostly-empty ones. REQUIRED since Wave 6, for the same fail-closed reason as
+    // VOYAGE_API_KEY: the step already refuses to silently downgrade to text-only (a
+    // silent downgrade IS the mostly-empty-pages outcome), so a missing key only ever
+    // surfaces as runtime document failures — the build is the cheaper place to fail.
     // Token scopes are `task.read` + `task.write` only — deliberately no `webhook.write`,
     // which is why the conversion is polled inside the Inngest step.
-    CLOUDCONVERT_API_KEY: z.string().min(1).optional(),
+    CLOUDCONVERT_API_KEY: z.string().min(1),
     // ── The §6 kill switch and budget guard ─────────────────────────────────────
     // All three are read HERE and injected into `packages/ai` (which never reads
     // process.env). That boundary is the whole point of item 2b: one place to swap

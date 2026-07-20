@@ -33,6 +33,9 @@ beforeAll(async () => {
   vi.stubEnv("ACCESS_CODE", "test_access_code");
   vi.stubEnv("CRON_SECRET", "test_cron_secret_at_least_16");
   vi.stubEnv("INNGEST_SIGNING_KEY", `signkey-test-${"0".repeat(64)}`);
+  // Required since Wave 6 (fail-closed at build); tests satisfy them with fakes.
+  vi.stubEnv("VOYAGE_API_KEY", "pa-test");
+  vi.stubEnv("CLOUDCONVERT_API_KEY", "cc-test");
   vi.stubEnv("INNGEST_DEV", "0");
 
   processDocument = (await import("./process-document")).processDocument as typeof processDocument;

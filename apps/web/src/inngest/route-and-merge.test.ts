@@ -364,6 +364,9 @@ const BASE_ENV = {
   ACCESS_CODE: "test_access_code",
   CRON_SECRET: "test_cron_secret_long_enough",
   INNGEST_SIGNING_KEY: `signkey-test-${"a".repeat(64)}`,
+  // Required since Wave 6 (fail-closed at build); tests satisfy them with fakes.
+  VOYAGE_API_KEY: "pa-test",
+  CLOUDCONVERT_API_KEY: "cc-test",
 };
 
 vi.mock("@/inngest/documents", () => ({
