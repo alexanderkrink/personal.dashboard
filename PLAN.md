@@ -2272,6 +2272,66 @@ chat with citations, and context retrieval for the exam-review generator.
   `apps/web/src/components/topic-page/`; the remark plugin chain is the extension point the
   Bilingual Term Layer and Obsidian export later hook into.
 
+  > ⚠ **CORRECTED 2026-07-20 (Wave 5 Agent 2, item 6 shipped) — three things in this bullet
+  > were not buildable as written.**
+  >
+  > 1. **"deep-links to the document viewer" — there is no document viewer, and there was
+  >    never going to be one in M1.** `apps/web/src/app/(app)/documents/` has no `[id]`
+  >    segment, the only `createSignedUrl` call in the repo is server-side inside the
+  >    pipeline, and `typedRoutes` fails the build on an href to a route that does not
+  >    exist. `document-card.tsx` had already set the precedent for coverage gaps and stated
+  >    the reason. As shipped the chip is **not a link**: it resolves `{documentId, page}`
+  >    against the documents that actually fed the topic, renders `Chapter 6 · p. 2`, and
+  >    carries the *extracted title of the cited page* as its tooltip. On the Wave 4
+  >    artifact that reads `On that page: Topic Goals` behind all six formulas, which is the
+  >    observation the deep link existed to enable — reached without the viewer. When a
+  >    viewer lands the chip becomes an anchor and nothing else changes.
+  >
+  > 2. **A chip can now be wrong, and says so.** Three citation states, not one:
+  >    `resolved`, `unread-page` (the document is real, the extractor never produced that
+  >    page — the chip points nowhere), and `unknown-document`. The bullet assumed every
+  >    citation names something real; the Wave 4 corpus is the proof that assumption is not
+  >    free.
+  >
+  > 3. **The defect this surface exists to catch is invisible per block, so it is stated per
+  >    page.** "Cites p. 2" looks like ordinary provenance and the twentieth one looks no
+  >    different from the first. `analyseProvenance` in `packages/core` therefore reports a
+  >    page-level `CitationCollapse` (≥3 citations, exactly 1 distinct locator, ≥4 pages
+  >    available), rendered as a sentence above the prose. Block-level strength —
+  >    `absent` / `broken` / `single` / `corroborated` — drives *presentation weight*: an
+  >    unsourced block gets a dashed rule and a sentence rather than the same warm serif
+  >    treatment a sourced one gets. Wave 4's failure was invisible because bad output
+  >    rendered as beautifully as good output; that is now a mechanical property with guard
+  >    tests that go red against the frozen corpus when any of it is removed.
+  >
+  > Also shipped and not in this bullet: the **exam-weight override slider** (§9(d)), a
+  > **course-page topic index** that shows weakness before a page is opened, and the first
+  > consumers ever of the coverage map, `extraction_fidelity`, `needs_review` and `partial`
+  > on a topic surface.
+
+  > 🔴 **DISPROVEN 2026-07-20 (Wave 5 Agent 2) — the *History* drawer cannot show a
+  > `needs_review` chip for a newly created topic, because the create path persists neither
+  > the flag nor a revision row.**
+  >
+  > Agent 0 recorded that `topic_revisions` holds zero rows for the live topic despite
+  > `topics.revision = 1`. The consequence for this bullet is sharper than "the list is
+  > empty": `needs_review` is a column on `topic_revisions` **only**, and the create branch
+  > in `apps/web/src/inngest/route-and-merge.ts` inserts the topic and returns without
+  > writing one. So `verified.needsReview` — including Agent 1's new expansion-ratio and
+  > grounding findings — is **computed and then discarded** on every first merge. Its only
+  > durable trace is a `warn` row in `document_processing_events`, which is scoped to the
+  > document, not the topic, and matching it back to a topic by title would be a string
+  > match dressed up as a check.
+  >
+  > That means the topic most likely to be ungrounded — a brand-new one, generated whole
+  > from material nobody has checked — is precisely the one that can never carry the flag.
+  >
+  > The UI states the gap rather than hiding it: the drawer renders an explicit *"No history
+  > was recorded for this page … there is nothing to compare against and nothing to revert
+  > to"* instead of an empty list. **The fix is upstream and still owed**: the create path
+  > must write a `topic_revisions` row against the empty page, carrying `needs_review`. That
+  > is a pipeline change and was out of item 6's scope.
+
 ### 9. Exam review (auto-generated, weighted by exam relevance)
 
 - **Weight computation (pure function in `packages/core`), 0–1 per topic:** blend of
@@ -6296,14 +6356,14 @@ uploads every lecture's materials (topic pages appear minutes later).
 | 3 | Calendar hub CAL-1: provider interface, ical.js parsing w/ naked-TZID IANA fallback + real-feed DST fixtures, **sync engine (dedup, tombstones — the priority: IE signals cancellation only by disappearance)**, generic RRULE support to spec (IE feed has none), feed CRUD | M–L | Deadlines & calendar hub §3.4–3.6 |
 | 4 | Calendar hub CAL-2: **§5.1b `SUMMARY` normalizer + session parser (`(Ses. N-M)`, `Extra`/`Retake`, junk stripping, pseudo-event filter — 5 rows, two of which carry a real course prefix) + syllabus-first exam detection** (REVISED 2026-07-18; chain: syllabus header session-count → highest `SESSION n` heading in the program *body* plus inline exam labels → `max(sessionTo)` from the feed as fallback, with the fallback's three guards; extraction reads the whole document body, not just the header); course matching + matchers; weight resolution + priority score; This Week view; structured quick-add; daily cron + staleness sync | M–L | Deadlines & calendar hub §5.1b/§8 |
 | 5 | Document pipeline: upload (TUS) → validate (rejects >50 MB with a specific, actionable message — no splitting, no re-compression) → extract (PDF via **Gemini** vision; PPTX routed by word density at a **40 words/slide** threshold — text decks via XML, **visual decks via CloudConvert render → PDF → Gemini vision, in scope for M1** per the 2026-07-18 decision, with `CLOUDCONVERT_API_KEY` through the full env checklist) → route (**Gemini Flash-Lite**) → merge (**Sonnet 5**) → **cross-family merge critic (block-diff loss-detect + Gemini verify, auto-retry)** → embed → **coverage map + syllabus checklist** → status UX w/ Realtime; **opt-in Deep-review toggle** (**Opus 4.8** 2nd-reader audit) | L (the big one) | Document & notes pipeline |
-| 6 | Topic pages UI: rendered page, provenance chips, revision history/revert | M | Document & notes pipeline §8 |
+| 6 | 🟡 **CODE-COMPLETE, UNVERIFIED** (Wave 5 Agent 2, 2026-07-20) **Topic pages UI**: `/courses/[id]/topics/[slug]` in the `.reading` register (`react-markdown` + `remark-gfm`, RSC), block provenance chips with four strength states, page-level citation-collapse banner, coverage map with three separately-counted gap kinds, `extraction_fidelity` note, `needs_review` chip, `partial` banner, History drawer (diff + revert + an honest no-history state), exam-weight override slider, course-page topic index. Pure judgement in `@study/core` (`analyseProvenance`, `diffTopicPages`); guard tests red against the frozen Wave 4 corpus. ⚠ **Never rendered in a browser and never run against a live database** — nothing in Wave 5 is deployed, and the only topic that exists is the broken one on an untouchable account. Chips do **not** link: see the §8 correction. | M | Document & notes pipeline §8 |
 | 7 | Exam review v1: weight computation + Opus generation + staleness banner | S–M | Document & notes pipeline §9 |
 | 8 | `ai_generations` log + cost rollup + kill-switch env vars — ✅ **shipped 2026-07-19** (live table + `ai_daily_cost` view, per-provider costing verified against the live DB, kill switch proven to make zero provider calls). ⚠ The DoD's "every AI call" clause is **not yet fully met**: ~~`streamText` still has no metered wrapper (Wave 4, with chat/RAG)~~ ✅ **closed 2026-07-20 (Wave 5): `AIRuntime.streamProse()` meters the streaming path and the unmetered escapes are deleted — but it has no call site yet, so it is built, not exercised** · a transport-killed attempt is still unlogged (Inngest step wrapper) · an abandoned (never-consumed) stream still leaves no row | S | AI strategy §5–6 |
 | 9 | Participation & Attendance Ledger (PWA manifest, 2-tap logging) | M | Additional #4 |
 | 10 | Case-brief slice (pipeline step for `case`-tagged docs) — 🟡 **descoped to opportunistic 2026-07-18**: real case studies are much rarer in this program than the plan assumed, so this must not gate M1. Build it if a case lands; otherwise slide to M2 | S–M | Additional #2 |
 | 11 | *Stretch:* NL quick-add (CAL-3), syllabus → `assessments` extraction — ✅ **syllabus half SHIPPED 2026-07-19 (Wave 3)**: `syllabus-components` v1 on `claude-sonnet-5`, validated 17/17 components against all 3 real syllabi, behind the §2b confirm gate. Takes document **text**; upload/conversion stays with item 5. NL quick-add still open. | S+S | Calendar §6, Additional #3 |
 | 12 | ✅ **DONE** Auth v2: access-code gate (landing page + `proxy.ts` enforcement) → email+password sign-up/login (email verify + password reset via the Resend hook) → analyst-terminal `/login` redesign. Shipped Wave 1 (`eed1b12`, `8cb4c68`, `53c560c`). Single `ACCESS_CODE` env var, **not** per-invite (deferred to M4); constant-time Web Crypto comparison (Edge has no `node:crypto`); cookie derived from the code so rotation revokes. ✅ **All clauses met** — sign-up confirmed working end to end 2026-07-18; the earlier 500s were an `@example.com` artifact (Resend refuses that reserved domain) and a retest with a deliverable address passed. Lesson: never probe the Resend path with `example.com`; use a real `+alias` inbox or `generate_link` | M | Vision § Identity & design; Roadmap M0.5 |
-| 13 | ✅ **DONE** **Design-system migration**, split into 13a (tokens) + 13b (shell). 13a (`6603b3e`, `06ed42b`): `globals.css` ported to the azure tokens in both themes, Newsreader + JetBrains Mono, Geist Mono retired, Phosphor migrated (lucide gone, lockfile included), email button `#1c74d8`, `courses.color` → palette key. 13b (`2bfde9b`, `f404812`): `(app)` route group, collapsible sidebar + mobile tab bar, ⌘K palette, 12 shadcn components, `loading.tsx`/`error.tsx`, jsdom + RTL test infrastructure, motion + type-scale tokens. ⚠ `.reading` wrapper exists but has **no consumer** until topic pages (item 6) | M | Vision § Identity & design |
+| 13 | ✅ **DONE** **Design-system migration**, split into 13a (tokens) + 13b (shell). 13a (`6603b3e`, `06ed42b`): `globals.css` ported to the azure tokens in both themes, Newsreader + JetBrains Mono, Geist Mono retired, Phosphor migrated (lucide gone, lockfile included), email button `#1c74d8`, `courses.color` → palette key. 13b (`2bfde9b`, `f404812`): `(app)` route group, collapsible sidebar + mobile tab bar, ⌘K palette, 12 shadcn components, `loading.tsx`/`error.tsx`, jsdom + RTL test infrastructure, motion + type-scale tokens. ⚠ `.reading` wrapper exists but has **no consumer** until topic pages (item 6) — ✅ **RESOLVED 2026-07-20 (Wave 5 Agent 2)**: `/courses/[id]/topics/[slug]` is its first consumer. Code-complete, not yet seen in a browser. | M | Vision § Identity & design |
 
 **Definition of done**
 
@@ -6356,6 +6416,12 @@ uploads every lecture's materials (topic pages appear minutes later).
   - ❌ **"Reading register live on topic pages" is not met and was never deliverable in
     Wave 1** — the `.reading` class exists and is correct, but topic pages arrive with the
     document pipeline (item 6). Unmet by scope, not by failure.
+    - ⚠ **REVISED 2026-07-20 (Wave 5 Agent 2).** `.reading` now has its first consumer:
+      `/courses/[id]/topics/[slug]` wraps the page in it at a 68ch measure, with mono
+      surviving inside for provenance chips, locators and unrendered LaTeX. **The clause is
+      code-complete but NOT verified** — nothing in Wave 5 has been deployed, and no agent
+      has driven this route in a browser. Whether it *reads like a book* in both themes at
+      desktop and 375px is Alexander's call and is still open.
   - Note "every M1 UI surface" currently means 8 routes plus 4 auth surfaces; `/calendar` and
     `/documents` are designed empty states awaiting items 3–5.
 - Deployed on Vercel; CI green; participation loggable from a phone in < 5 seconds.
