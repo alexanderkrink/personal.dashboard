@@ -337,7 +337,12 @@ describe("coverageSummary", () => {
 
     const summary = coverageSummary(map);
     expect(summary).toContain("587 of 600 pages mapped across 24 topics");
-    expect(summary).toContain("13 unmapped");
+    // These 13 pages were DECLARED SKIPPED, and until Wave 5 the sentence called them
+    // "unmapped" — the same conflation that made the Wave 4 document read "53 unmapped"
+    // when 47 were unmapped and 6 were deliberately skipped. Each gap is now named as
+    // itself; PLAN §8's example sentence has the older, looser wording.
+    expect(summary).toContain("13 skipped");
+    expect(summary).not.toContain("13 unmapped");
     expect(summary).toContain("index");
   });
 
@@ -374,5 +379,72 @@ describe("coverageSummary", () => {
     });
 
     expect(coverageSummary(map)).toBe("1 of 1 pages mapped across 1 topic");
+  });
+});
+
+/**
+ * F4 — the mapped-ratio term in the trust predicate.
+ *
+ * Until Wave 5 `trustworthy` asked whether pages were *lost* and never whether pages
+ * *arrived*. These tests are written against the real recorded numbers from the Wave 4
+ * failure so the predicate is proven to discriminate, not merely to pass.
+ */
+describe("computeCoverage — the mapped ratio", () => {
+  /** The exact shape of the Wave 4 failure: 54 pages, 6 skipped, 48 read, 1 cited. */
+  const wave4 = {
+    sourceUnits: 54,
+    // Pages 2–53, less the four mid-document skips. 48 pages, exactly as recorded.
+    extractedPages: Array.from({ length: 52 }, (_, i) => i + 2).filter(
+      (p) => ![15, 16, 36, 43].includes(p),
+    ),
+    skipped: [
+      { fromPage: 1, toPage: 1, reason: "title slide" },
+      { fromPage: 15, toPage: 16, reason: "agenda and section transition slides" },
+      { fromPage: 36, toPage: 36, reason: "section transition slide" },
+      { fromPage: 43, toPage: 43, reason: "section transition slide" },
+      { fromPage: 54, toPage: 54, reason: "copyright / legal slide" },
+    ],
+    topicCount: 1,
+  };
+
+  it("RED: the recorded Wave 4 output is NOT trustworthy under the new predicate", () => {
+    const map = computeCoverage({ ...wave4, mappedPages: [2] });
+
+    // This is the assertion the Wave 4 pipeline could not make. It shipped
+    // `trustworthy: true, warnings: []` on exactly these numbers.
+    expect(map.pagesMapped).toBe(1);
+    expect(map.trustworthy).toBe(false);
+    expect(map.warnings.join(" ")).toMatch(/cited by any topic/);
+  });
+
+  it("GREEN: the same document with every readable page cited is trustworthy", () => {
+    const map = computeCoverage({ ...wave4, mappedPages: wave4.extractedPages, topicCount: 7 });
+
+    expect(map.pagesMapped).toBe(wave4.extractedPages.length);
+    expect(map.pagesUnmapped).toBe(0);
+    expect(map.trustworthy).toBe(true);
+  });
+
+  it("holds the line at the threshold rather than near it", () => {
+    // 48 mappable pages; 60% of 48 is 28.8, so 29 mapped passes and 28 does not.
+    const at = computeCoverage({ ...wave4, mappedPages: wave4.extractedPages.slice(0, 29) });
+    const below = computeCoverage({ ...wave4, mappedPages: wave4.extractedPages.slice(0, 28) });
+
+    expect(at.trustworthy).toBe(true);
+    expect(below.trustworthy).toBe(false);
+  });
+
+  it("does not punish a document whose pages were all legitimately skipped", () => {
+    const map = computeCoverage({
+      sourceUnits: 2,
+      extractedPages: [],
+      skipped: [{ fromPage: 1, toPage: 2, reason: "title slide" }],
+      mappedPages: [],
+      topicCount: 0,
+    });
+
+    // Nothing was mappable, so the ratio is vacuous — the skip ratio is the check that
+    // owns this document, and it fires on its own terms.
+    expect(map.warnings.join(" ")).not.toMatch(/cited by any topic/);
   });
 });

@@ -27,6 +27,7 @@ export {
   computeCoverage,
   coverageSummary,
   isGenuineSkipReason,
+  MINIMUM_MAPPED_RATIO,
   SUSPICIOUS_SKIP_RATIO,
 } from "./coverage";
 export {

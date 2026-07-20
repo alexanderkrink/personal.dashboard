@@ -20,7 +20,7 @@ import {
   topicMergePrompt,
   topicRoutingPrompt,
 } from "@study/ai";
-import { type Segment, segmentExtraction } from "@study/core";
+import { computeCoverage, type Segment, segmentExtraction } from "@study/core";
 import { expect, it } from "vitest";
 import { describeWithWave4Failure, loadWave4Failure } from "./wave4-failure-fixture";
 
@@ -144,5 +144,39 @@ describeWithWave4Failure("wave4 failure — prompt preimage reconstruction", () 
     expect(merged?.markdown).not.toMatch(/\$\$/);
     // …while the produced page carries six full LaTeX formulas.
     expect(loadWave4Failure().topicPage.formulas).toHaveLength(6);
+  });
+});
+
+/**
+ * F4's acceptance condition, stated against the real artifact rather than a reproduction of
+ * it: the coverage numbers this document actually stored must come back untrustworthy when
+ * fed through the predicate Wave 5 shipped.
+ */
+describeWithWave4Failure("wave4 failure — the recorded coverage, re-judged", () => {
+  it("recorded trustworthy: true with no warnings on 1 of 48 pages mapped", () => {
+    const { coverage } = loadWave4Failure();
+    expect(coverage.trustworthy).toBe(true);
+    expect(coverage.warnings).toEqual([]);
+    expect(coverage.pagesMapped).toBe(1);
+    expect(coverage.pagesUnmapped).toBe(47);
+  });
+
+  it("RED: the same inputs are NOT trustworthy under the Wave 5 predicate", () => {
+    const fixture = loadWave4Failure();
+    const sourceUnits = fixture.extractionEnvelope.sourceUnits;
+
+    const recomputed = computeCoverage({
+      sourceUnits: typeof sourceUnits === "number" ? sourceUnits : 0,
+      extractedPages: fixture.extraction.pages.map((page) => page.page),
+      skipped: fixture.extraction.skipped,
+      mappedPages: fixture.topicSources.flatMap((row) => row.locators.map((l) => l.page)),
+      topicCount: fixture.coverage.topicCount,
+    });
+
+    // Same document, same extraction, same `topic_sources` — opposite verdict.
+    expect(recomputed.pagesMapped).toBe(1);
+    expect(recomputed.pagesUnmapped).toBe(47);
+    expect(recomputed.trustworthy).toBe(false);
+    expect(recomputed.warnings.join(" ")).toMatch(/cited by any topic/);
   });
 });

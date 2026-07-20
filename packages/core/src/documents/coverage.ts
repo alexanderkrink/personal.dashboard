@@ -60,6 +60,19 @@ export interface CoverageSkippedRange {
  */
 export const SUSPICIOUS_SKIP_RATIO = 0.3;
 
+/**
+ * Below this share of readable pages actually cited by a topic, the notes are not
+ * trustworthy — however clean the extraction was.
+ *
+ * The number that motivated it is 1/48 ≈ 2%, so almost any threshold would have caught the
+ * Wave 4 failure. 0.6 is set where it is because the *interesting* failures are the partial
+ * ones: a pipeline that loses a third of a deck is the case a threshold has to catch, and it
+ * is the case a generous threshold waves through. A document legitimately below this — a
+ * deck of worked examples that all collapse into two topics — earns a warning, not a
+ * blocked upload; `trustworthy: false` is a statement about confidence, not a rejection.
+ */
+export const MINIMUM_MAPPED_RATIO = 0.6;
+
 /** A reason too generic to be a reviewable choice. Matched case-insensitively, whole-string. */
 const EMPTY_REASONS = new Set([
   "",
@@ -314,9 +327,31 @@ export function computeCoverage(input: CoverageInput): CoverageMap {
     );
   }
 
+  // ── The mapped-ratio term ─────────────────────────────────────────────────
+  //
+  // Read, correctly, and cited by nothing. Until Wave 5 the trust predicate had no
+  // `unmapped` term at all — it asked whether pages were *lost* and never whether pages
+  // reached the notes. So a document that read 48 pages, mapped 1 and left 47 unmapped
+  // shipped as `trustworthy: true` with `warnings: []` and an `info` log line. Coverage
+  // measured the catastrophe exactly and reported it as health.
+  //
+  // The denominator is the *mappable* pages — total minus credible skips — because a page
+  // the extractor deliberately skipped is not one the topic pages were ever going to cite,
+  // and counting it against them would make every deck with a title slide look lossy.
+  const mappable = Math.max(0, pagesTotal - credibleSkipped.size);
+  const mappedRatio = mappable === 0 ? 1 : mapped.size / mappable;
+  const poorlyMapped = pagesTotal > 0 && mappedRatio < MINIMUM_MAPPED_RATIO;
+
+  if (poorlyMapped) {
+    warnings.push(
+      `Only ${mapped.size} of ${mappable} readable page${mappable === 1 ? "" : "s"} in this document are cited by any topic. The rest was read but did not reach your notes — treat these notes as incomplete until that is explained.`,
+    );
+  }
+
   const trustworthy =
     checked &&
     undeclared.length === 0 &&
+    !poorlyMapped &&
     (pagesTotal === 0 || credibleSkipped.size / pagesTotal <= SUSPICIOUS_SKIP_RATIO);
 
   return {
@@ -351,15 +386,24 @@ export function coverageSummary(map: CoverageMap): string {
   }
 
   const head = `${map.pagesMapped} of ${map.pagesTotal} pages mapped across ${topics}`;
-  const gapCount = map.pagesTotal - map.pagesMapped;
-  if (gapCount <= 0) return head;
 
-  // The reasons, deduplicated and in gap order — this is the parenthetical §8 shows.
-  const reasons = Array.from(new Set(map.gaps.map((gap) => gap.reason))).slice(0, 3);
-  const detail = reasons.length === 0 ? "" : ` (${reasons.join(", ")})`;
+  // Each kind of gap counted as itself. This used to read `pagesTotal - pagesMapped`
+  // unmapped, which silently folded the declared skips into the unmapped figure — the Wave 4
+  // document reported "53 unmapped" for 47 unmapped and 6 deliberately skipped pages. A
+  // sentence that overstates the loss is not a safe direction to round in either: it trains
+  // the reader to discount the number.
+  const because = (kind: CoverageGap["kind"]): string => {
+    const reasons = Array.from(
+      new Set(map.gaps.filter((gap) => gap.kind === kind).map((gap) => gap.reason)),
+    ).slice(0, 3);
+    return reasons.length === 0 ? "" : ` (${reasons.join(", ")})`;
+  };
 
-  const undeclaredNote =
-    map.pagesUndeclared === 0 ? "" : ` · ${map.pagesUndeclared} unaccounted for`;
+  const parts = [
+    map.pagesUnmapped === 0 ? null : `${map.pagesUnmapped} unmapped${because("unmapped")}`,
+    map.pagesSkipped === 0 ? null : `${map.pagesSkipped} skipped${because("skipped")}`,
+    map.pagesUndeclared === 0 ? null : `${map.pagesUndeclared} unaccounted for`,
+  ].filter((part): part is string => part !== null);
 
-  return `${head} · ${gapCount} unmapped${detail}${undeclaredNote}`;
+  return parts.length === 0 ? head : `${head} · ${parts.join(" · ")}`;
 }
