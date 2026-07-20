@@ -1071,6 +1071,20 @@ create type document_status as enum (
   'queued', 'validating', 'extracting',
   'structuring', 'merging', 'embedding', 'ready', 'partial', 'failed'
 );
+```
+
+> ⚠ **`'structuring'` is a dead value, and it stays — deliberately (2026-07-20, Wave 6).**
+> No code path ever sets it: the pipeline goes `extracting → merging` directly (extraction
+> and structuring are one Gemini call, so a separate status never had a transition), the
+> status checklist in `document-card.tsx` does not render it, and zero rows hold it. It was
+> considered for removal and left in place because Postgres has no
+> `ALTER TYPE ... DROP VALUE`: removing an enum value means building a replacement type,
+> rewriting `documents.status` (a live, defaulted, RLS-policied column) across to it, and
+> dropping the original — a table rewrite risked against live rows to delete a label that
+> costs nothing. Remove it only if that column is ever rebuilt for a real reason; until
+> then an unused enum value is the cheapest debt in the schema.
+
+```sql
 
 create table documents (
   id              uuid primary key default gen_random_uuid(),
@@ -2375,6 +2389,18 @@ chat with citations, and context retrieval for the exam-review generator.
   > "this step already ran", so that merge's snapshot is silently lost. Not fixed here: it is
   > a different path (`source = 'deep_review'`) with no live rows at stake. Recorded in the
   > migration header.
+  >
+  > > ✅ **DECIDED 2026-07-20 (Wave 6 Agent 0) — fixed, before anything wires Step D.**
+  > > `createAuditTopic` now goes through `create_topic_with_first_revision` like the merge
+  > > create path: topic + revision-**0** snapshot in one statement, every later revision
+  > > number free. Migration `20260720213410` recreates the RPC with
+  > > `p_source text default 'merge'` so the audit create keeps its `'deep_review'`
+  > > attribution — the History drawer keeps saying who wrote the topic, and
+  > > `loadPriorContributions` (which reads `source = 'merge'` only) keeps ignoring the
+  > > create record. Red-then-green in `route-and-merge.test.ts`: the green test was run
+  > > against the old code first and failed on the swallowed snapshot, and a pinned RED test
+  > > transcribes the legacy revision-1 create and demonstrates the loss itself. Applied to
+  > > production; still zero `deep_review` rows at stake, by design.
   >
   > **What the UI shows now, and why both of Agent 2's states stay.** Existing rows are not
   > backfilled, so the live broken topic still has zero revisions: the drawer keeps rendering
@@ -6368,6 +6394,26 @@ uploads every lecture's materials (topic pages appear minutes later).
      Wave 4 lost `processDocument` (`Events received: 1`, `Executions ran: 0`, no error).
      **[ALEXANDER]** — installing the Vercel↔Inngest integration needs dashboard and OAuth
      access and cannot be done by an agent.
+
+     ✅ **DECIDED 2026-07-20 (Wave 6 Agent 0) — the "what did the platform record?" gap is
+     now closed mechanically, and the post-deploy procedure is REQUIRED until the
+     integration lands.** `pnpm inngest:verify` (`scripts/inngest-verify.mjs`) asks
+     Inngest's v2 REST API (`GET /v2/apps/study-dashboard/functions`, Bearer-authenticated
+     with `INNGEST_SIGNING_KEY`) for the registry the platform actually holds and diffs it
+     against the function list **derived from the served code** (`route.ts`'s `functions:`
+     array → each module's `createFunction` id, plus `<id>-failure` for `onFailure`
+     handlers — the SDK registers those as functions of their own). Exit 1 names any
+     function the code serves that the platform lacks; `--expect <id>` is the drill flag
+     that proves the check can fail (run 2026-07-20: drill exited 1; real run exited 0
+     with all 4 functions — `health-check`, `mark-reviews-stale`, `process-document`,
+     `process-document-failure` — registered).
+
+     **Required after EVERY production deploy that touches `route.ts`'s `functions:`
+     array, an event trigger, or function configuration:**
+     1. `pnpm inngest:sync` — re-register the deployed endpoint (proves it answered);
+     2. `pnpm inngest:verify` — prove the platform recorded what the code serves.
+     A deploy is not done until step 2 exits 0. Neither step replaces the integration:
+     they depend on a human remembering, which is the failure mode itself.
   6. 🟢 **Favicon / PWA icons** — or approval to generate them from the wordmark and accent.
   8. ✅ ~~**Which auth account is the real one**~~ — **resolved 2026-07-18:
      `krinkk02@gmail.com` (`0092dd81-…`).** The second auth user is a test account and owns no
