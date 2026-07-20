@@ -1,6 +1,12 @@
 "use server";
 
-import { validateDocumentSize } from "@study/core";
+import {
+  type DocumentStripPlan,
+  planDocumentStrip,
+  type TopicPageLike,
+  type TopicStripTargetLike,
+  validateDocumentSize,
+} from "@study/core";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { inngest } from "@/inngest/client";
@@ -282,40 +288,248 @@ export async function registerUpload(input: unknown): Promise<RegisterResult> {
 const DOCUMENT_REF = z.object({ documentId: z.uuid() });
 
 /**
- * Deletes a document and its bytes (PLAN §8: `failed` offers *Try again* and
- * *Delete*).
+ * What deleting this document will actually do — the numbers the confirmation
+ * dialog states before anything is destroyed.
  *
- * Row first, then object. The reverse order would leave a row pointing at
- * nothing if the second call failed — which reads to the user as a document that
- * exists but cannot be processed, the more confusing of the two failure modes.
- * This way a failure leaves an orphaned object, which the sweep already handles.
+ * Every field is a *measurement*, not an estimate: each one is read from the rows
+ * that are about to change. `stale…` fields are the honest half — content the
+ * strip provably cannot attribute and therefore will not remove.
+ */
+export interface DeleteImpact {
+  readonly filename: string;
+  /** Titles of topics that disappear entirely — this document was their only source. */
+  readonly topicsRemoved: readonly string[];
+  /** Titles of topics that survive with this document's blocks taken out of the page. */
+  readonly topicsRewritten: readonly string[];
+  /** Blocks removed from surviving pages. */
+  readonly blocksRemoved: number;
+  /** Blocks left on surviving pages because nothing attributed them to any document. */
+  readonly blocksUnattributed: number;
+  /** Surviving topics whose summary paragraph may still describe removed content. */
+  readonly staleSummaries: number;
+  /** `document_chunks` rows that go with the document. */
+  readonly chunks: number;
+}
+
+/**
+ * Reads everything the strip needs, and plans it. No writes.
+ *
+ * Shared by the preview and the delete so the dialog and the action can never
+ * disagree about what is going to happen — the same function produces both.
+ *
+ * Every read goes through the **request-scoped** client, so RLS bounds all of it
+ * to the caller's own rows; a documentId belonging to another tenant simply
+ * returns nothing rather than leaking a title.
+ */
+async function planStrip(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  documentId: string,
+): Promise<
+  | { readonly ok: false }
+  | {
+      readonly ok: true;
+      readonly document: {
+        readonly id: string;
+        readonly filename: string;
+        readonly storage_path: string;
+      };
+      readonly plan: DocumentStripPlan;
+      readonly chunks: number;
+    }
+> {
+  const { data: document } = await supabase
+    .from("documents")
+    .select("id, filename, storage_path")
+    .eq("id", documentId)
+    .maybeSingle();
+  if (!document) return { ok: false };
+
+  // Which topics this document was merged into.
+  const { data: ourSources } = await supabase
+    .from("topic_sources")
+    .select("topic_id")
+    .eq("document_id", document.id);
+
+  const topicIds = [...new Set((ourSources ?? []).map((row) => row.topic_id))];
+
+  const { count: chunks } = await supabase
+    .from("document_chunks")
+    .select("id", { count: "exact", head: true })
+    .eq("document_id", document.id);
+
+  let topics: TopicStripTargetLike[] = [];
+  if (topicIds.length > 0) {
+    const [{ data: topicRows }, { data: allSources }] = await Promise.all([
+      supabase.from("topics").select("id, title, page").in("id", topicIds),
+      // EVERY source on those topics, not just ours — that is what decides whether a
+      // topic survives the delete at all.
+      supabase.from("topic_sources").select("topic_id, document_id").in("topic_id", topicIds),
+    ]);
+
+    const sourcesByTopic = new Map<string, string[]>();
+    for (const row of allSources ?? []) {
+      const list = sourcesByTopic.get(row.topic_id);
+      if (list) list.push(row.document_id);
+      else sourcesByTopic.set(row.topic_id, [row.document_id]);
+    }
+
+    topics = (topicRows ?? []).map((row) => ({
+      topicId: row.id,
+      title: row.title,
+      // `topics.page` is `jsonb not null default '{}'`, so anything could be in there. The
+      // strip is typed structurally and tolerates every field being absent; a page stored as
+      // a JSON array or scalar is not a page and is treated as empty rather than thrown on.
+      page:
+        typeof row.page === "object" && row.page !== null && !Array.isArray(row.page)
+          ? (row.page as TopicPageLike)
+          : {},
+      sourceDocumentIds: sourcesByTopic.get(row.id) ?? [],
+    }));
+  }
+
+  return {
+    ok: true,
+    document,
+    plan: planDocumentStrip({ documentId: document.id, topics }),
+    chunks: chunks ?? 0,
+  };
+}
+
+/**
+ * "What happens if I delete this?" — answered before the button is pressed.
+ *
+ * Pure read. The dialog calls this on open so the confirmation can name the
+ * topics that will disappear rather than describing the delete in the abstract.
+ */
+export async function previewDocumentDelete(input: unknown): Promise<DeleteImpact | null> {
+  const parsed = DOCUMENT_REF.safeParse(input);
+  if (!parsed.success) return null;
+
+  const supabase = await createClient();
+  await requireUserId(supabase);
+
+  const planned = await planStrip(supabase, parsed.data.documentId);
+  if (!planned.ok) return null;
+
+  const { plan } = planned;
+  return {
+    filename: planned.document.filename,
+    topicsRemoved: plan.verdicts
+      .filter((verdict) => verdict.kind === "remove-topic")
+      .map((verdict) => verdict.title),
+    topicsRewritten: plan.verdicts
+      .filter((verdict) => verdict.kind === "rewrite-page")
+      .map((verdict) => verdict.title),
+    blocksRemoved: plan.blocksRemoved,
+    blocksUnattributed: plan.blocksUnattributed,
+    staleSummaries: plan.staleSummaries,
+    chunks: planned.chunks,
+  };
+}
+
+/**
+ * Deletes a document, its bytes, its provenance, its chunks — and its contribution
+ * to the topic pages it was merged into (PLAN §5's *strip*, PLAN §8's *Delete*).
+ *
+ * ## ✅ DECIDED 2026-07-20 — the strip is built, by block provenance rather than snapshot replay
+ *
+ * PLAN §5 carried a 🔴 DISPROVEN / ⚠ CORRECTED block saying the strip was still
+ * owed. It is now built, and it takes a different route than §5 specifies —
+ * `@study/core`'s `stripDocumentFromPage` filters the page by each block's own
+ * `sources[].documentId` instead of replaying revisions forward from a
+ * `topic_revisions` snapshot. The full reasoning is in that module's header; the
+ * short version is that `topic_revisions` was **empty** on production (the create
+ * path writes no snapshot), so a replay had no base for any topic that existed,
+ * and re-applying a later document's revision onto a different base is a
+ * three-way merge of LLM prose rather than the deterministic operation §5
+ * promises. Block provenance is exact, per-block, and needs no history.
+ *
+ * ## What is removed, and by whom
+ *
+ * | Thing | Removed by |
+ * | --- | --- |
+ * | `documents` row | this function |
+ * | `document_processing_events` | FK cascade |
+ * | `topic_sources` | FK cascade |
+ * | `document_chunks` (`source = 'document'`) | FK cascade |
+ * | a topic whose ONLY source was this document | `topic_sources_delete_sourceless_topic` trigger |
+ * | that topic's `source = 'topic_page'` chunks | `topics_delete_synthesized_chunks` trigger |
+ * | this document's blocks on a SURVIVING topic's page | this function, via the strip |
+ * | the storage object | this function |
+ *
+ * `topic_revisions` is **not** touched: it is append-only immutable history
+ * (`using (false)` on UPDATE and DELETE) and its `document_id` FK is
+ * `on delete set null (document_id)`, so the history survives with its provenance
+ * nulled. That is the designed behaviour, not an oversight.
+ *
+ * ## What is deliberately NOT removed
+ *
+ * A surviving topic's `summary` paragraph, and any block whose sources name no
+ * document. Neither carries the provenance needed to attribute it, and guessing
+ * would delete another document's content. Both are counted in {@link DeleteImpact}
+ * and stated in the confirmation dialog.
+ *
+ * ## Ordering
+ *
+ * Plan → delete row → strip surviving pages → delete object.
+ *
+ * The row goes first for the reason the original version of this function
+ * documented: the reverse order leaves a row pointing at nothing, which reads as
+ * a document that exists but cannot be processed. The strip runs *after* because
+ * the cascade is what removes the sourceless topics, so by then the only topics
+ * left to rewrite are the ones that genuinely survived. A failure between the two
+ * leaves stale blocks on a surviving page — visible, re-strippable, and strictly
+ * better than the alternative failure of deleting content for a document that
+ * still exists.
  */
 export async function deleteDocument(input: unknown): Promise<{ ok: boolean; message?: string }> {
   const parsed = DOCUMENT_REF.safeParse(input);
   if (!parsed.success) return { ok: false, message: "That document no longer exists." };
 
   const supabase = await createClient();
-  await requireUserId(supabase);
+  const userId = await requireUserId(supabase);
 
-  const { data: document } = await supabase
+  const planned = await planStrip(supabase, parsed.data.documentId);
+  if (!planned.ok) return { ok: false, message: "That document no longer exists." };
+  const { document, plan } = planned;
+
+  const { error } = await supabase
     .from("documents")
-    .select("id, storage_path")
-    .eq("id", parsed.data.documentId)
-    .maybeSingle();
-  if (!document) return { ok: false, message: "That document no longer exists." };
-
-  const { error } = await supabase.from("documents").delete().eq("id", document.id);
+    .delete()
+    .eq("id", document.id)
+    // RLS already bounds this to the caller. Restated because a DELETE is the one
+    // statement where a policy regression is unrecoverable rather than merely wrong.
+    .eq("user_id", userId);
   if (error) return { ok: false, message: "That didn’t delete. Try again." };
+
+  // Surviving topics only. `remove-topic` verdicts were carried out by the cascade
+  // above, and `unchanged` ones have nothing to write.
+  for (const verdict of plan.verdicts) {
+    if (verdict.kind !== "rewrite-page") continue;
+
+    const { error: pageError } = await supabase
+      .from("topics")
+      .update({ page: verdict.page as never })
+      .eq("id", verdict.topicId)
+      .eq("user_id", userId);
+    if (pageError) {
+      console.error(
+        `[delete] stripped row ${document.id} but not topic ${verdict.topicId}: ${pageError.message}`,
+      );
+    }
+  }
 
   const { error: storageError } = await supabase.storage
     .from(DOCUMENTS_BUCKET)
     .remove([document.storage_path]);
   if (storageError) {
     console.error(
-      `[upload] deleted row ${document.id} but not ${document.storage_path}: ${storageError.message}`,
+      `[delete] deleted row ${document.id} but not ${document.storage_path}: ${storageError.message}`,
     );
   }
 
+  // No `/topics` route exists yet, so there is nothing else to revalidate. When the topic
+  // pages land, a stripped topic needs revalidating here too.
   revalidatePath("/documents");
   return { ok: true };
 }
