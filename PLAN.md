@@ -882,6 +882,60 @@ UI in `apps/web`.
 > document**. This run's `embed-topic-summary` succeeded (130 tokens, 120 ms) and
 > `topics.summary_embedding` is **not null** — there is no stale routing vector to repair.
 
+> ⚠ **CORRECTED 2026-07-20 (Wave 5 Agent 1) — the block above is right about the artifact
+> and wrong about the mechanism. The citations did not collapse; the INPUT collapsed, and
+> the citations honestly followed it.**
+>
+> Two claims above are now disproven by measurement rather than argument. `input_hash` is
+> `sha256(`${prompt.id}@${prompt.version}\n${rendered}`)` (`packages/ai/src/runtime.ts`), so
+> every hash in `ai_generations` is a cryptographic receipt for the exact prompt text a
+> model saw. Reconstructing the prompts from the frozen extraction
+> (`apps/web/src/test/wave4-routing-preimage.test.ts`, six passing assertions) shows:
+>
+> - **"The router emitted a single segment `seg-1`" is FALSE.** Rendering
+>   `topicRoutingPrompt` with **all 48** segments reproduces the recorded routing
+>   `input_hash` `cf0ff737…` exactly; the one-segment rendering does not. All 48 segments
+>   reached the router.
+> - **Exactly one segment reached the merge.** Rendering `topicMergePrompt` with
+>   `segments=[seg-1]` reproduces the merge `input_hash` `494b858e…` exactly; the 48-segment
+>   rendering does not.
+>
+> So the loss is strictly **between routing and `planMerges`**, and the framing "the failure
+> is citation collapse" is a misdiagnosis: the model cited the only locator it was shown,
+> exactly as `prompts/topics.ts` instructs. There was no retrieval of real content that was
+> then mislabelled.
+>
+> **The mechanism, settled by live replay** (`apps/web/src/test/wave5-routing-replay.test.ts`
+> — a metered call that asserts the reconstruction hashes to `cf0ff737…` *before* calling,
+> which is what makes it a measurement and not a guess): the router returned **48 decisions
+> for 48 segments** — none missing, none duplicated, none for an unknown key — of which
+> **7 were creates and 41 were assigns**. **Not one `assignToTopicId` was a fabricated
+> uuid.** Every one of the 41 was the exact title string of a topic created earlier in the
+> *same batch*, and the two sets matched exactly in both directions.
+>
+> `routingDecisionSchema` cannot express *"assign this segment to the topic I am creating in
+> decision 5"* — that topic has no id yet. So a model routing 48 slides into an empty course
+> refers to its own creates **by title**, which is the only thing the schema lets it do.
+> `runRouting` read those as assignments to a real id and `planMerges` dropped every one it
+> could not resolve, through the single branch in the pipeline that logged nothing. The
+> recorded run's `embed-topic-title` call billed **2 input tokens** — one title — so the run
+> that actually failed was the degenerate case of the same shape: one create, 47
+> back-references to it, 47 silent drops.
+>
+> ⚠ **Severity is HIGH, and "the formulas were real" must not downgrade it.** The block
+> above is correct that five of the six formulas appear in the deck — on pages the merge
+> never saw. The page's notation diverges from the deck's throughout (`p` where the deck
+> writes `P`, `\geq 30` where it writes `n > 30`, the chi-square identity reversed), it
+> carries zero deck particulars (no `2.236`, no `n = 36`, no freezer example) and
+> `workedExamples: []` against four in the extraction. It is canonical-textbook material
+> written from parametric knowledge, not from the source. Correct-looking statistics is
+> *undetectable by the student*; the user-facing harm is the silent omission of 47 pages of
+> instructor material plus 20 citations pointing at a slide containing none of it.
+>
+> Fixed in `packages/core/src/topics/route-decisions.ts` (`resolveRoutingDecisions`), which
+> resolves a batch-local reference to the create it names, never follows an unresolvable id,
+> and measures the arity `routingBatchSchema` describes but does not enforce.
+
 ---
 
 ### 1. Architecture overview
@@ -1552,6 +1606,36 @@ it; they never own pages.**
    "Neural Networks" vs "Neural Nets — Intro" drift that slips past the LLM. Proposed-new
    titles within the same document are also cross-checked against each other.
 
+   > 🔴 **DISPROVEN 2026-07-20 (Wave 5 Agent 1) — 0.85 is far too low for title-only
+   > vectors, and it over-coalesces a topically-tight document into mega-topics.** Measured,
+   > not argued: with the routing fix in place, the real 48-segment deck routes into **7
+   > correct topics**, and the guard collapses them to **2** (40 segments and 8). Voyage
+   > cosines between the coerced titles, from
+   > `.local-fixtures/wave4-failure/wave5-pipeline-measurement.json`:
+   >
+   > | Proposed title | Coerced into | Cosine |
+   > | --- | --- | ---: |
+   > | Sampling Distributions of Proportions | Sampling Distributions | 0.958 |
+   > | Sampling Distributions of Variances | Sampling Distributions | 0.936 |
+   > | Statistical Inference | Sampling Distributions | 0.899 |
+   > | Populations and Samples | Sampling Distributions | 0.898 |
+   > | Chi-Square Distribution | Sampling Distributions | 0.862 |
+   >
+   > "Chi-Square Distribution" and "Statistical Inference" are plainly not the same concept
+   > as "Sampling Distributions". Short titles drawn from one chapter share most of their
+   > embedding neighbourhood, so 0.85 is inside the *normal* spread of sibling concepts
+   > rather than above it. Only "Central Limit Theorem" survived as its own topic.
+   >
+   > This was invisible before Wave 5 because routing never produced multiple surviving
+   > creates in the first place — the segments were being dropped before the guard could
+   > over-merge them. **Not changed here:** 0.85 is a stated product constant, the number is
+   > a review trigger rather than a build failure, and retuning it silently inside a
+   > grounding fix would be exactly the kind of unmeasured change this wave exists to undo.
+   > Recommendation for the next wave: raise `DUPLICATE_TITLE_THRESHOLD` to ~0.93, or
+   > compare `title + summary` rather than the bare title, and re-measure against this same
+   > 48-segment corpus, which is now a repeatable harness
+   > (`apps/web/src/test/wave5-routing-replay.test.ts`).
+
 #### Step B — Merge per topic (`topic-merge` · Sonnet 5, one step per topic)
 
 For each affected topic, one `generateObject` call: input = current full `TopicPage` JSON +
@@ -1640,6 +1724,18 @@ Silent omission — a topic from a 600-page book that never became a page — is
   the extractor's declared `skipped[]` (§4.1). Persisted to `documents.coverage`; the status
   card renders it as "587 of 600 pages mapped across 24 topics · 13 unmapped (front matter,
   index)" with the gaps clickable (§8).
+  > ⚠ **CORRECTED 2026-07-20 (Wave 5 Agent 1).** The example sentence above conflates two
+  > different gaps. The 13 pages in it are *declared skipped*, not unmapped, and
+  > `coverageSummary` computed the unmapped figure as `pagesTotal - pagesMapped` — which
+  > made the Wave 4 document read **"53 unmapped"** for 47 unmapped and 6 deliberately
+  > skipped. Each kind is now counted and named as itself, keeping its own reasons: the
+  > sentence for that document reads `1 of 54 pages mapped across 1 topic · 47 unmapped
+  > (read, but no topic page cites it) · 6 skipped (title slide, …)`.
+  >
+  > Also: `trustworthy` had **no `pagesUnmapped` term at all** — it asked whether pages were
+  > lost and never whether any reached the notes, which is why 1-of-48 shipped as
+  > `trustworthy: true, warnings: []` at `level: "info"`. `MINIMUM_MAPPED_RATIO = 0.6` over
+  > the *mappable* pages (total minus credible skips) is now part of the predicate.
 - **Syllabus checklist (the importance oracle):** when the course has a syllabus, its
   learning objectives / `examSignals` are the authoritative "must be covered" list. A
   `coverage-checklist` matcher (Gemini Flash-Lite, Zod) maps each objective to a covering
