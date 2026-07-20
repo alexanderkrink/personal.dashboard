@@ -20,5 +20,14 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["./vitest.setup.ts"],
     include: ["src/**/*.test.{ts,tsx}"],
+    // Under `turbo run --force`, every package's suite runs concurrently and
+    // jsdom + userEvent tests that take ~50ms alone have blown vitest's 5s/10s
+    // defaults purely from CPU contention (process-document at gate 0,
+    // history-drawer and delete-document-dialog at gate 6 — all pass alone in
+    // milliseconds). These bounds only decide when a HUNG test is declared
+    // dead; 30s changes nothing for a healthy suite and stops load from
+    // forging failures.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
   },
 });
