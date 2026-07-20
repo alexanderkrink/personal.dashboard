@@ -205,6 +205,32 @@ describe("resolveRoutingDecisions — what it refuses to trust", () => {
     ]);
   });
 
+  it("RED: an unresolvable assign carrying createNewTitle:'' still gets a real title", () => {
+    // `routingDecisionSchema` ACCEPTS this shape: its `superRefine` asks only for
+    // exactly-one-of, and the assign side already satisfies that, so `createNewTitle: ""`
+    // passes validation. A `?? segmentTitle` fall-through does not fire on `""` — it fires
+    // only on `null` — so this decision used to produce a topic titled "". That is the
+    // empty-title defect the create path guards against, reached through the other door.
+    const resolution = resolveRoutingDecisions({
+      decisions: [
+        decision({
+          segmentKey: "seg-1",
+          assignToTopicId: "Ghost Topic",
+          createNewTitle: "",
+        }),
+      ],
+      segments: segments(1),
+      knownTopicIds: [],
+    });
+
+    expect(resolution.proposals).toEqual([
+      { segmentKey: "seg-1", kind: "create", title: "Heading 1", rationale: "because" },
+    ]);
+    expect(resolution.unresolvable).toEqual([
+      { segmentKey: "seg-1", reference: "Ghost Topic", fallbackTitle: "Heading 1" },
+    ]);
+  });
+
   it("prefers a real topic id over a same-batch title that collides with it", () => {
     const resolution = resolveRoutingDecisions({
       decisions: [

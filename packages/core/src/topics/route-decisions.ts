@@ -141,6 +141,18 @@ function normaliseTitle(title: string): string {
 }
 
 /**
+ * The one spelling of "this title field carries nothing".
+ *
+ * `routingDecisionSchema` permits `createNewTitle: ""` on an assign decision — its
+ * `superRefine` only requires exactly-one-of, and the assign side already satisfies that —
+ * so every read of `createNewTitle` must treat `""` and `null` identically. Writing it once
+ * is what stops the two fall-through paths below from disagreeing.
+ */
+function emptyToNull(title: string | null): string | null {
+  return title === null || title === "" ? null : title;
+}
+
+/**
  * Turns one routing batch into proposals, resolving batch-local references.
  *
  * Pure and total. Two passes are required and the order is not incidental: a decision may
@@ -196,10 +208,7 @@ export function resolveRoutingDecisions(input: {
         kind: "create",
         // A create with no title still has to route somewhere; the segment's own heading is
         // the honest fallback and the duplicate guard will coalesce it if it collides.
-        title:
-          decision.createNewTitle === null || decision.createNewTitle === ""
-            ? segmentTitle
-            : decision.createNewTitle,
+        title: emptyToNull(decision.createNewTitle) ?? segmentTitle,
         rationale: decision.rationale,
       });
       continue;
@@ -227,7 +236,14 @@ export function resolveRoutingDecisions(input: {
     }
 
     // Names nothing. Never followed — fall through to a create, and say so.
-    const fallbackTitle = decision.createNewTitle ?? segmentTitle;
+    //
+    // `""` is treated as absent, exactly as `routingDecisionSchema`'s `superRefine` and
+    // {@link isAssignDecision} treat it. A bare `?? segmentTitle` here would let an assign
+    // carrying `createNewTitle: ""` — which the schema ACCEPTS, since exactly-one-of is
+    // satisfied by the assign side — create an untitled topic. That is the same
+    // empty-title defect this module exists to prevent on the create path above, and it
+    // must be spelled the same way in both places.
+    const fallbackTitle = emptyToNull(decision.createNewTitle) ?? segmentTitle;
     unresolvable.push({ segmentKey: decision.segmentKey, reference, fallbackTitle });
     proposals.push({
       segmentKey: decision.segmentKey,
