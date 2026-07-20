@@ -1161,6 +1161,7 @@ export type Database = {
           p_provider: string
           p_review_notes: string[]
           p_slug: string
+          p_source?: string
           p_summary: string
           p_title: string
           p_user_id: string

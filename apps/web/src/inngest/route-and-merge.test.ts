@@ -3,8 +3,10 @@
 // Node, not the jsdom default: this module's import graph reaches `@/env`, and t3-env
 // refuses to hand a server variable to anything with a `window` on it.
 
+import type { StoredTopicPage } from "@study/ai";
 import type { SupabaseAdminClient } from "@study/db";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createAuditTopic } from "./topic-edits";
 
 /**
  * Convergence of a second pass over an already-merged document (PLAN §5).
@@ -111,12 +113,14 @@ class FakeDb {
   }
 
   /**
-   * `create_topic_with_first_revision`, transcribed from the migration.
+   * `create_topic_with_first_revision`, transcribed from migrations `20260720194417` and
+   * `20260720213410`.
    *
    * Both inserts or neither — that atomicity is the whole point of the function, so a fake
    * that did them independently would test the opposite of the invariant. The revision is 0
    * (the empty page the create superseded), which is what keeps every later revision number
-   * free; see the migration for why the `createAuditTopic` precedent at revision 1 is wrong.
+   * free — the rule `createAuditTopic`'s old revision-1 precedent broke, and the reason it
+   * now routes through this RPC too. `p_source` defaults to 'merge' exactly as the SQL does.
    */
   createTopicWithFirstRevision(args: Row): { data: string | null; error: PgError | null } {
     const topicId = `generated-topics-${this.rows("topics").length + 1}`;
@@ -136,7 +140,7 @@ class FakeDb {
       revision: 0,
       page: args.p_previous_page,
       change_summary: args.p_change_summary,
-      source: "merge",
+      source: args.p_source ?? "merge",
       needs_review: args.p_needs_review,
       review_notes: args.p_review_notes ?? [],
       document_id: args.p_document_id,
@@ -515,17 +519,20 @@ beforeEach(() => {
   }
 });
 
+const fakeAdmin = () =>
+  ({
+    from: (table: string) => new Query(db, table),
+    rpc: (name: string, args: Row) => {
+      if (name !== "create_topic_with_first_revision") {
+        throw new Error(`fake db has no rpc ${name}`);
+      }
+      return Promise.resolve(db.createTopicWithFirstRevision(args));
+    },
+  }) as unknown as SupabaseAdminClient;
+
 const pass = () =>
   runRouteAndMerge({
-    admin: {
-      from: (table: string) => new Query(db, table),
-      rpc: (name: string, args: Row) => {
-        if (name !== "create_topic_with_first_revision") {
-          throw new Error(`fake db has no rpc ${name}`);
-        }
-        return Promise.resolve(db.createTopicWithFirstRevision(args));
-      },
-    } as unknown as SupabaseAdminClient,
+    admin: fakeAdmin(),
     userId: USER,
     documentId: DOCUMENT,
     courseId: COURSE,
@@ -933,5 +940,132 @@ describe("the database guard behind the gate", () => {
       document_id: DOCUMENT,
     });
     expect(rejected).toBeNull();
+  });
+});
+
+describe("createAuditTopic — the audit's create must leave revision 1 free for the next merge", () => {
+  /**
+   * The latent landmine recorded in migration `20260720194417`'s header and PLAN §5.
+   *
+   * `createAuditTopic` used to write its first revision at revision 1, via two separate
+   * PostgREST inserts. The NEXT merge into that topic reads `currentRevision = 1`, snapshots
+   * the pre-merge page at revision 1, collides with `unique (topic_id, revision)` — and
+   * `persistTopicMerge` swallows 23505 on that insert as "this exact step already ran". The
+   * merge's snapshot — the only durable copy of the page as the deep review wrote it — is
+   * silently lost, so a revert to revision 1 returns the audit's EMPTY create record instead
+   * of the audit's content. Latent while Step D is unwired; a landmine under wiring it.
+   *
+   * Both tests below drive the REAL `createAuditTopic` shape against the REAL
+   * `runRouteAndMerge`, on the fake db that enforces `unique (topic_id, revision)`.
+   */
+  const AUDIT_DOCUMENT = "44444444-4444-4444-8444-444444444444";
+  const LEGACY_TOPIC = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+
+  const STAMP = {
+    promptId: "deep-review-audit",
+    promptVersion: 1,
+    provider: "anthropic",
+    model: "fake-opus",
+    inputHash: "hash-deep-review-audit",
+  };
+
+  /** The page `createAuditTopic` builds from a `missing` finding, as the fake db stores it. */
+  const auditPage = (): Row => ({
+    ...EMPTY_PAGE,
+    summary: "What the audit said Gamma is.",
+    notes: [
+      {
+        id: "deep-review-intro",
+        heading: "Gamma",
+        markdown: "Consumer surplus, as the audit stated it.",
+        sources: [{ documentId: AUDIT_DOCUMENT, page: 3 }],
+      },
+    ],
+  });
+
+  it("RED, pinned: the legacy revision-1 create loses the next merge's snapshot to the 23505 swallow", async () => {
+    // What the old createAuditTopic did, transcribed: the topic at revision 1 and a
+    // revision-1 history row, as two independent inserts.
+    db.rows("topics").push({
+      id: LEGACY_TOPIC,
+      user_id: USER,
+      course_id: COURSE,
+      title: "Gamma",
+      slug: "gamma",
+      summary: "What the audit said Gamma is.",
+      page: auditPage(),
+      revision: 1,
+      title_embedding: null,
+      summary_embedding: null,
+    });
+    expect(
+      db.insert("topic_revisions", {
+        user_id: USER,
+        topic_id: LEGACY_TOPIC,
+        revision: 1,
+        page: { ...EMPTY_PAGE },
+        change_summary: "Deep review added this topic: Gamma.",
+        source: "deep_review",
+        needs_review: false,
+        document_id: AUDIT_DOCUMENT,
+      }),
+    ).toBeNull();
+
+    // The next merge: the fixture document's Gamma segment routes into the existing topic.
+    await pass();
+
+    // The merge ran — the topic moved on…
+    expect(revisionOf(LEGACY_TOPIC)).toBe(2);
+
+    // …but its pre-merge snapshot was swallowed by `unique (topic_id, revision)`. The only
+    // revision-1 row is still the audit's empty-page create record, and the page as the
+    // audit wrote it survives in NO snapshot: reverting returns the empty page.
+    const rows = db.rows("topic_revisions").filter((row) => row.topic_id === LEGACY_TOPIC);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ revision: 1, source: "deep_review" });
+    expect((rows[0]?.page as StoredTopicPage | undefined)?.notes).toEqual([]);
+    const auditPageSnapshotted = rows.some((row) =>
+      ((row.page as StoredTopicPage).notes ?? []).some((note) => note.id === "deep-review-intro"),
+    );
+    expect(auditPageSnapshotted).toBe(false);
+  });
+
+  it("GREEN: create at revision 0, so the next merge snapshots the audit's page at 1 cleanly", async () => {
+    const { topicId } = await createAuditTopic({
+      admin: fakeAdmin(),
+      userId: USER,
+      courseId: COURSE,
+      documentId: AUDIT_DOCUMENT,
+      title: "Gamma",
+      summary: "What the audit said Gamma is.",
+      markdown: "Consumer surplus, as the audit stated it.",
+      page: 3,
+      takenSlugs: new Set<string>(),
+      stamp: STAMP,
+    });
+
+    // The create leaves the topic at revision 1, carrying the audit's content.
+    expect(revisionOf(topicId)).toBe(1);
+
+    // The next merge into it: the routing fake assigns the fixture's Gamma segment to the
+    // existing topic by title.
+    await pass();
+
+    const revisions = db
+      .rows("topic_revisions")
+      .filter((row) => row.topic_id === topicId)
+      .sort((a, b) => (a.revision as number) - (b.revision as number));
+
+    // Two rows: the creation record (the empty page the audit superseded, attributed to the
+    // deep review) and the merge's pre-merge snapshot (the page as the audit wrote it) —
+    // the row the revision-1 create made structurally impossible to keep.
+    expect(revisions).toHaveLength(2);
+    expect(revisions[0]).toMatchObject({ revision: 0, source: "deep_review" });
+    expect((revisions[0]?.page as StoredTopicPage | undefined)?.notes).toEqual([]);
+    expect(revisions[1]).toMatchObject({ revision: 1, source: "merge" });
+    const snapshotted = revisions[1]?.page as StoredTopicPage | undefined;
+    expect(snapshotted?.notes.map((note) => note.id)).toContain("deep-review-intro");
+
+    expect(revisionOf(topicId)).toBe(2);
   });
 });

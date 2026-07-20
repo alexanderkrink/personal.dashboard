@@ -229,6 +229,23 @@ export interface CreateAuditTopicInput {
  * to snapshot. The snapshot is the *empty* page, which is exactly what reverting this
  * creation means: the History drawer offers "revert" and reverting returns the topic to
  * having no content, labelled as having come from the deep review.
+ *
+ * ## Why this goes through `create_topic_with_first_revision`, at revision ZERO
+ *
+ * The same reasons as `persistTopicMerge`'s create branch, and one more:
+ *
+ * 1. **Atomicity.** Two PostgREST inserts are two transactions; a crash between them leaves
+ *    a topic with no revision row — the state migration `20260720194417` exists to forbid.
+ * 2. **Revision 0, not 1.** This function used to write its first revision at revision 1,
+ *    which was a latent snapshot-loss bug: the NEXT merge into this topic reads
+ *    `currentRevision = 1`, snapshots the pre-merge page at revision 1, collides with
+ *    `unique (topic_id, revision)` — and `persistTopicMerge` swallows that 23505 as "this
+ *    exact step already ran", silently discarding the only durable copy of the page as the
+ *    audit wrote it. Revision 0 for the create keeps every later revision number free;
+ *    `route-and-merge.test.ts` pins both halves of this.
+ * 3. **`p_source: 'deep_review'`** (migration `20260720213410`) keeps the attribution the
+ *    History drawer depends on — "Deep review added this topic", not a lecture — and keeps
+ *    this row invisible to `loadPriorContributions`, which reads only `source = 'merge'`.
  */
 export async function createAuditTopic(
   input: CreateAuditTopicInput,
@@ -248,44 +265,31 @@ export async function createAuditTopic(
     ],
   };
 
-  const { data, error } = await input.admin
-    .from("topics")
-    .insert({
-      user_id: input.userId,
-      course_id: input.courseId,
-      title: input.title,
-      slug,
-      summary: input.summary,
-      page,
-      revision: 1,
-    })
-    .select("id")
-    .single();
+  const { data, error } = await input.admin.rpc("create_topic_with_first_revision", {
+    p_user_id: input.userId,
+    p_course_id: input.courseId,
+    p_title: input.title,
+    p_slug: slug,
+    p_summary: input.summary,
+    p_page: page,
+    // The page this create superseded — empty, supplied by the app so the two never drift.
+    p_previous_page: EMPTY_TOPIC_PAGE,
+    p_change_summary: `Deep review added this topic: ${input.title}.`,
+    p_needs_review: false,
+    p_review_notes: [],
+    p_document_id: input.documentId,
+    p_prompt_id: input.stamp.promptId,
+    p_prompt_version: input.stamp.promptVersion,
+    p_provider: input.stamp.provider,
+    p_model: input.stamp.model,
+    p_input_hash: input.stamp.inputHash,
+    p_source: "deep_review",
+  });
 
   if (error !== null || data === null) {
     throw new Error(`Could not create topic “${input.title}”: ${error?.message ?? "no row"}`);
   }
 
-  const { error: revisionError } = await input.admin.from("topic_revisions").insert({
-    user_id: input.userId,
-    topic_id: data.id,
-    revision: 1,
-    page: EMPTY_TOPIC_PAGE,
-    change_summary: `Deep review added this topic: ${input.title}.`,
-    source: "deep_review",
-    needs_review: false,
-    document_id: input.documentId,
-    prompt_id: input.stamp.promptId,
-    prompt_version: input.stamp.promptVersion,
-    provider: input.stamp.provider,
-    model: input.stamp.model,
-    input_hash: input.stamp.inputHash,
-  });
-
-  if (revisionError !== null && revisionError.code !== "23505") {
-    throw new Error(`Could not record the creation of ${data.id}: ${revisionError.message}`);
-  }
-
   input.takenSlugs.add(slug);
-  return { topicId: data.id, slug };
+  return { topicId: data, slug };
 }
