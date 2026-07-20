@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, JetBrains_Mono, Newsreader } from "next/font/google";
 import { ThemeProvider } from "@/components/theme-provider";
 import "./globals.css";
@@ -29,6 +29,23 @@ export const metadata: Metadata = {
     template: "%s · Study Dashboard",
   },
   description: "Your entire academic life in one dashboard.",
+  // iOS home-screen install (PLAN item 9, shared with the Today Queue). The
+  // manifest covers Android; Safari reads these meta tags instead. Scope is
+  // deliberately the install affordance alone — no service worker, no offline
+  // beyond the participation logger's localStorage queue, no push. Later scope.
+  appleWebApp: {
+    capable: true,
+    title: "Study",
+    // "default" keeps the system status bar opaque. black-translucent draws
+    // content underneath it and needs safe-area QA on a physical phone first.
+    statusBarStyle: "default",
+  },
+};
+
+export const viewport: Viewport = {
+  // The MEASURED dark canvas — must agree with manifest.ts, which documents
+  // why this is #04080b and not the ~#0b0e14 the token comment claims.
+  themeColor: "#04080b",
 };
 
 export default function RootLayout({

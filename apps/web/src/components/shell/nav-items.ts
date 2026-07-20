@@ -1,5 +1,5 @@
 import type { Icon } from "@phosphor-icons/react";
-import { BookOpen, CalendarBlank, FileText, House } from "@phosphor-icons/react";
+import { BookOpen, CalendarBlank, FileText, HandWaving, House } from "@phosphor-icons/react";
 
 /**
  * The M1 sidebar route map — the single source of truth for nav labels ↔ routes.
@@ -11,7 +11,7 @@ import { BookOpen, CalendarBlank, FileText, House } from "@phosphor-icons/react"
  * `href` is a literal union rather than `string` so `typedRoutes` can prove
  * every destination exists at build time.
  */
-export type NavHref = "/" | "/courses" | "/calendar" | "/documents";
+export type NavHref = "/" | "/courses" | "/calendar" | "/documents" | "/participation";
 
 export type NavItem = {
   readonly href: NavHref;
@@ -45,6 +45,12 @@ export const NAV_ITEMS: readonly NavItem[] = [
     label: "Documents",
     hint: "Lecture slides, readings and notes",
     icon: FileText,
+  },
+  {
+    href: "/participation",
+    label: "Participation",
+    hint: "Two-tap class logging and the attendance gate",
+    icon: HandWaving,
   },
 ] as const;
 
