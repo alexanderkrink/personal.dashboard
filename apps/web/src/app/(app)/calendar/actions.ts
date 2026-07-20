@@ -141,6 +141,16 @@ async function deleteFeed(id: string): Promise<FormState> {
     .select("id")
     .maybeSingle();
 
+  // 23503: an occurrence synced from this feed carries attendance or
+  // participation rows, and the ledger's NO ACTION FKs (20260720222423) refuse
+  // to let graded history vanish as a side effect of a feed delete. That is
+  // the schema doing its job — but "Try again" would be a lie here, because no
+  // retry can ever succeed while the history exists. Say why, terminally.
+  if (error?.code === "23503") {
+    return formError(
+      "This feed’s classes have logged attendance or participation. That graded history is protected, so the feed can’t be removed while those records exist.",
+    );
+  }
   if (error) return formError(SAVE_FAILED);
   if (!data) return formError(NOT_FOUND);
 
