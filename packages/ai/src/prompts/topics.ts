@@ -254,13 +254,17 @@ Return the complete corrected page, an updated \`changeSummary\`, and \`removals
  */
 export const MERGE_CRITIC_SYSTEM = `You are reviewing an automated edit to a student's course notes. Another system merged new source material into an existing topic page. Your job is to catch the ways that edit can go wrong, before it is saved.
 
-Look for exactly three things:
+Look for these things:
 
 1. DROPPED CONTENT — material that was on the old page, is not on the new page, and was not justified as superseded in the change summary. This is the most damaging failure: the student loses notes they already had, silently.
 
 2. UNSUPPORTED ADDITIONS — claims, figures, formulas or definitions on the new page that neither the old page nor the supplied source segments support. The merger is not allowed to fill gaps from its own knowledge.
 
+   Be literal about this. Open the source segments and look for the statement. A formula is unsupported unless the segments actually contain it — "this is standard textbook material and it is correct" is NOT support, and correct-looking content that the source never stated is the single hardest failure for a student to catch, because nothing about it looks wrong.
+
 3. MANGLED STRUCTURE — a page whose blocks have been shredded, duplicated, emptied, or reorganised into something a student cannot revise from.
+
+4. BAD ATTRIBUTION — a block whose \`sources\` do not match where its content actually came from: a citation of one page for material that is plainly on another, every block citing the same single page, or a block with no sources at all. A citation a student clicks and finds nothing behind is worse than no citation, because it teaches them the citations are noise.
 
 What is NOT a defect, and must not be reported:
 - Rewording, tightening or reorganising existing material. That is the job.
@@ -272,28 +276,44 @@ Set \`ok: false\` only when you found a MAJOR issue — real content harm. Minor
 
 export const mergeCriticPrompt = definePrompt<{
   topicTitle: string;
+  isNewTopic: boolean;
   oldPage: string;
   proposedPage: string;
   changeSummary: string;
   removals: string;
   segments: string;
+  /** Distinct pages the proposed page cites, counted in code. */
+  citedPages: number;
+  /** Distinct pages the segments below actually cover, counted in code. */
+  availablePages: number;
 }>({
   id: "merge-critic",
-  version: 1,
+  version: 2,
   description:
     "Cross-family adversarial review of one topic merge: dropped content, hallucinated additions, mangled structure (PLAN §5 Step B2).",
   render: ({
     topicTitle,
+    isNewTopic,
     oldPage,
     proposedPage,
     changeSummary,
     removals,
     segments,
+    citedPages,
+    availablePages,
   }) => `# Topic: ${topicTitle}
 
-## The page BEFORE the merge
+${
+  isNewTopic
+    ? `## This topic is NEW
 
-${oldPage}
+There is no previous page, so check 1 (dropped content) does not apply — there was nothing to drop, and \`removals\` is correctly empty. **Do not report it, and do not let its absence read as a clean verdict.**
+
+On a new page GROUNDING IS THE WHOLE JOB. Every single block was written in this one step, from the source segments below and nothing else. Checks 2 and 4 are all that stand between the student and a page of confident, plausible, unsourced material.`
+    : `## The page BEFORE the merge
+
+${oldPage}`
+}
 
 ## The page the merger PROPOSES
 
@@ -309,7 +329,9 @@ ${removals}
 
 ## The source material the merge was allowed to use
 
-Nothing on the proposed page may rest on anything outside the old page and these segments.
+Nothing on the proposed page may rest on anything outside${isNewTopic ? "" : " the old page and"} these segments.
+
+The segments below cover **${availablePages} page${availablePages === 1 ? "" : "s"}** of this document, and the proposed page cites **${citedPages}** distinct page${citedPages === 1 ? "" : "s"}. Both numbers were counted mechanically — do not recount them, use them. A large gap between the two means either that material was supplied and ignored, or that citations were attached to the wrong pages. Both are reportable.
 
 ${segments}
 

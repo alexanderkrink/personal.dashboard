@@ -16,7 +16,6 @@ export {
   type GroundingFinding,
   type GroundingFindingKind,
   MAX_EXPANSION_RATIO,
-  MIN_SOURCE_CHARS,
   measureExpansion,
 } from "./grounding";
 export {

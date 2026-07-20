@@ -95,13 +95,21 @@ export const topicFormulaSchema = z.object({
   name: z.string().describe("What the formula is called, e.g. 'Price elasticity of demand'."),
   latex: z.string().describe("The formula as LaTeX, without surrounding $ delimiters."),
   explanation: z.string().describe("What it computes and what each symbol means in this course."),
-  sources: z.array(blockSourceSchema),
+  sources: z
+    .array(blockSourceSchema)
+    .describe(
+      "Where this formula is actually WRITTEN — the `[p.N]` of the page that states it, not the page that mentions the concept. If no source you were given states it, do not state it either.",
+    ),
 });
 
 export const topicWorkedExampleSchema = z.object({
   problem: z.string().describe("The problem or case as posed."),
   solution: z.string().describe("The worked solution and the method, keeping the numbers."),
-  sources: z.array(blockSourceSchema),
+  sources: z
+    .array(blockSourceSchema)
+    .describe(
+      "Every `[p.N]` this example is worked on. An example that spans three slides cites all three.",
+    ),
 });
 
 /**
@@ -320,6 +328,7 @@ export const CRITIC_ISSUE_KINDS = [
   "dropped-content",
   "unsupported-addition",
   "mangled-structure",
+  "bad-attribution",
   "other",
 ] as const;
 
@@ -329,7 +338,7 @@ export const criticIssueSchema = z.object({
   kind: z
     .enum(CRITIC_ISSUE_KINDS)
     .describe(
-      "'dropped-content' = meaningful material gone without justification; 'unsupported-addition' = a claim the segments do not support; 'mangled-structure' = the page's shape was damaged.",
+      "'dropped-content' = meaningful material gone without justification; 'unsupported-addition' = a claim the segments do not support; 'mangled-structure' = the page's shape was damaged; 'bad-attribution' = a block's sources do not match where its content came from.",
     ),
   detail: z
     .string()

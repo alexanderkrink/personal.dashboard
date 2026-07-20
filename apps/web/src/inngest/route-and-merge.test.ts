@@ -304,6 +304,8 @@ function embedText(text: string): number[] {
 const llmCalls: string[] = [];
 /** Topic keys the fake model should fail the merge for, simulating a mid-loop timeout. */
 let failMergeFor = new Set<string>();
+/** Topics whose merge fake emits a note block carrying NO citation of this document. */
+let uncitedMergeFor = new Set<string>();
 let db: FakeDb;
 
 const BASE_ENV = {
@@ -375,6 +377,29 @@ vi.mock("@/lib/ai/runtime", () => ({
       }
 
       if (prompt.id === "merge-critic") {
+        // NOT a hardcoded pass. A critic fake that always returns ok makes every merge test
+        // green regardless of what the merge produced, which is how a suite ends up unable
+        // to tell a working critic from an absent one — the Wave 4 shape exactly. This one
+        // reads the page it was given and objects to a page with no citations at all.
+        const proposed = String(vars.proposedPage);
+        const blocks = (JSON.parse(proposed) as { notes?: unknown[] }).notes ?? [];
+        if (blocks.length > 0 && Number(vars.citedPages) === 0) {
+          return {
+            status: "success",
+            value: {
+              ok: false,
+              severity: "major" as const,
+              issues: [
+                {
+                  kind: "bad-attribution" as const,
+                  detail: "The proposed page cites no page of this document.",
+                  evidence: proposed.slice(0, 80),
+                },
+              ],
+            },
+            stamp,
+          };
+        }
         return { status: "success", value: { ok: true, severity: "none", issues: [] }, stamp };
       }
 
@@ -392,7 +417,13 @@ vi.mock("@/lib/ai/runtime", () => ({
         status: "success",
         value: {
           title,
-          page: { ...EMPTY_PAGE, summary: `${title} merged from ${String(vars.documentLabel)}` },
+          page: {
+            ...EMPTY_PAGE,
+            summary: `${title} merged from ${String(vars.documentLabel)}`,
+            notes: uncitedMergeFor.has(title)
+              ? [{ id: "orphan", heading: "Orphan", markdown: "content", sources: [] }]
+              : [],
+          },
           changeSummary: `added ${title}`,
           removals: [],
         },
@@ -412,6 +443,7 @@ beforeAll(async () => {
 beforeEach(() => {
   llmCalls.length = 0;
   failMergeFor = new Set();
+  uncitedMergeFor = new Set();
   db = new FakeDb();
   db.rows("documents").push({ id: DOCUMENT, user_id: USER, extraction: EXTRACTION });
   for (const [id, title] of [
@@ -453,6 +485,45 @@ const revisionOf = (topicId: string) =>
 /* ────────────────────────────────────────────────────────────────────────── */
 /* The tests                                                                  */
 /* ────────────────────────────────────────────────────────────────────────── */
+
+describe("runRouteAndMerge — the critic actually gates", () => {
+  /**
+   * The companion to the critic fake above, and the reason it is not a hardcoded pass.
+   *
+   * Until Wave 5 this suite's `merge-critic` fake returned `{ok: true}` unconditionally, so
+   * every assertion about the merge path held whether the critic worked, was misconfigured,
+   * or had been deleted. That is the same failure the wave was investigating: a check whose
+   * green test proves nothing about the check.
+   */
+  it("RED: a page with an uncited note is rejected, re-merged, and flagged", async () => {
+    uncitedMergeFor = new Set(["Alpha"]);
+
+    const summary = await pass();
+
+    // The automatic re-merge fired: one `topic-merge-repair` call, and a fourth critic call
+    // to judge its output.
+    expect(countOf("topic-merge")).toBe(3);
+    expect(countOf("topic-merge-repair")).toBe(1);
+    expect(countOf("merge-critic")).toBe(4);
+
+    const alpha = summary.topicOutcomes.find((outcome) => outcome.topicKey === TOPIC_ALPHA);
+    expect(alpha).toMatchObject({ status: "merged", needsReview: true });
+
+    // …and every other topic was untouched by it.
+    const others = summary.topicOutcomes.filter((outcome) => outcome.topicKey !== TOPIC_ALPHA);
+    expect(others.every((o) => o.status === "merged" && !o.needsReview)).toBe(true);
+  });
+
+  it("GREEN: the same run with citations present passes on the first attempt", async () => {
+    const summary = await pass();
+
+    expect(countOf("topic-merge")).toBe(3);
+    expect(countOf("merge-critic")).toBe(3);
+    expect(
+      summary.topicOutcomes.every((outcome) => outcome.status === "merged" && !outcome.needsReview),
+    ).toBe(true);
+  });
+});
 
 describe("runRouteAndMerge — the first pass", () => {
   it("merges every topic, snapshots the two it updated, and records provenance", async () => {

@@ -769,11 +769,23 @@ async function verifyMerge(input: {
     const verdict = await criticiseMerge({
       runtime: input.runtime,
       topicTitle: target.title,
+      isNewTopic,
       oldPage: JSON.stringify(target.current),
       proposedPage: JSON.stringify(candidate.page),
       changeSummary: candidate.changeSummary,
       removals: candidate.removals,
       segments: target.segments,
+      // Counted here rather than asked of Flash-Lite. A model asked to count citations in a
+      // 12,000-character JSON page will get it wrong, and the whole value of these two
+      // numbers is that they are exact.
+      citedPages: new Set(
+        flattenTopicPage(candidate.page)
+          .flatMap((block) => block.sources)
+          .filter((source) => source.documentId === input.documentId)
+          .map((source) => source.page)
+          .filter((page): page is number => typeof page === "number"),
+      ).size,
+      availablePages: input.routedPages.length,
     });
     if (verdict.status === "dead-letter") {
       // The critic failing is not the merge failing. Persisting an unreviewed merge is the

@@ -162,7 +162,10 @@ describe("measureExpansion", () => {
     expect(measurement.detail).toBeNull();
   });
 
-  it("RED: flags a source too thin to ground anything, whatever the ratio", () => {
+  it("does NOT flag a short source that produced a proportionate page", () => {
+    // A topic fed one short slide is an ordinary case. An absolute floor on input size was
+    // tried here and removed: it fired on real one-slide segments and taught the reader to
+    // ignore the flag. The ratio is the whole rule.
     const measurement = measureExpansion({
       sourceText: "x".repeat(120),
       page: page({ summary: "y".repeat(300) }),
@@ -170,7 +173,7 @@ describe("measureExpansion", () => {
     });
 
     expect(measurement.ratio).toBeLessThan(MAX_EXPANSION_RATIO);
-    expect(measurement.implausible).toBe(true);
+    expect(measurement.implausible).toBe(false);
   });
 
   it("does not judge an UPDATE, whose page is mostly prior material", () => {

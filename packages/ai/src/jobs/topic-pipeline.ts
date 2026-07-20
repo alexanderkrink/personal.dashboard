@@ -248,6 +248,8 @@ export function remergeTopic(
 export interface CriticiseMergeOptions {
   readonly runtime: AIRuntime;
   readonly topicTitle: string;
+  /** True on a first merge, where check 1 is vacuous and grounding is the whole job. */
+  readonly isNewTopic: boolean;
   readonly oldPage: string;
   readonly proposedPage: string;
   readonly changeSummary: string;
@@ -257,6 +259,10 @@ export interface CriticiseMergeOptions {
     readonly title: string;
     readonly markdown: string;
   }[];
+  /** Distinct pages the proposed page cites. Counted here, never asked of the model. */
+  readonly citedPages: number;
+  /** Distinct pages the segments cover. Counted here, never asked of the model. */
+  readonly availablePages: number;
 }
 
 /**
@@ -272,16 +278,22 @@ export interface CriticiseMergeOptions {
 export function criticiseMerge({
   runtime,
   topicTitle,
+  isNewTopic,
   oldPage,
   proposedPage,
   changeSummary,
   removals,
   segments,
+  citedPages,
+  availablePages,
 }: CriticiseMergeOptions): Promise<GenerateStructuredResult<MergeCriticVerdict>> {
   return runtime.generateStructured({
     prompt: mergeCriticPrompt,
     vars: {
       topicTitle,
+      isNewTopic,
+      citedPages,
+      availablePages,
       oldPage,
       proposedPage,
       changeSummary,

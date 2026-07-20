@@ -123,9 +123,6 @@ export function detectUngroundedContent(input: {
  */
 export const MAX_EXPANSION_RATIO = 8;
 
-/** Below this many characters, an input is too thin for a merge to be grounded in it. */
-export const MIN_SOURCE_CHARS = 400;
-
 export interface ExpansionMeasurement {
   readonly sourceChars: number;
   readonly pageChars: number;
@@ -153,10 +150,14 @@ export function measureExpansion(input: {
   const pageChars = JSON.stringify(input.page).length;
   const ratio = sourceChars === 0 ? Number.POSITIVE_INFINITY : pageChars / sourceChars;
 
+  // The RATIO alone, deliberately. An absolute floor on input size was tried and removed:
+  // a topic legitimately fed one short slide is an ordinary case, and flagging it teaches
+  // the reader to ignore the flag. The ratio catches the Wave 4 run at 21× without needing
+  // an opinion about how short a slide is allowed to be.
+  //
   // Only meaningful on a create. An update's page is mostly prior material, so its ratio
   // against one document's contribution says nothing.
-  const implausible =
-    input.isNewTopic && (sourceChars < MIN_SOURCE_CHARS || ratio > MAX_EXPANSION_RATIO);
+  const implausible = input.isNewTopic && ratio > MAX_EXPANSION_RATIO;
 
   return {
     sourceChars,
