@@ -60,3 +60,13 @@ export {
   type SkippedRangeLike,
   segmentExtraction,
 } from "./segment";
+export {
+  type DocumentStripPlan,
+  type PageStripResult,
+  planDocumentStrip,
+  type StripBlockKind,
+  type StripCounts,
+  stripDocumentFromPage,
+  type TopicStripTargetLike,
+  type TopicStripVerdict,
+} from "./strip";
