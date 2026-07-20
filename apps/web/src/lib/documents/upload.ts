@@ -1,5 +1,6 @@
 "use client";
 
+import { DOCUMENT_MIME_TYPES } from "@study/core";
 import { Upload } from "tus-js-client";
 import { env } from "@/env";
 import { createClient } from "@/lib/supabase/client";
@@ -39,6 +40,32 @@ export class UploadCancelledError extends Error {
     super("Upload cancelled.");
     this.name = "UploadCancelledError";
   }
+}
+
+/**
+ * The Content-Type the upload DECLARES to Storage.
+ *
+ * `storage.buckets.allowed_mime_types` (migration `20260720213501`) checks the DECLARED
+ * type, not the bytes — and some pickers report `File.type` as `""` for a `.pptx` the
+ * dialog's extension-based `accept` filter happily allowed (Windows without Office
+ * installed, some Linux MIME registries). Falling back to `application/octet-stream`
+ * there would have Storage refuse a file the pipeline's byte-sniffing validator would
+ * accept, surfaced as a misleading "check your connection" error. So the fallback is
+ * derived from the extension the picker filtered on; the byte-level verdict still
+ * belongs to `validateDocument`, which reads the stored bytes and corrects
+ * `documents.mime_type` afterwards. An unknown extension with no type keeps the honest
+ * `application/octet-stream` and lets the bucket refuse it — that path never carried
+ * bytes the pipeline could read.
+ */
+export function declaredContentType(file: {
+  readonly name: string;
+  readonly type: string;
+}): string {
+  if (file.type !== "") return file.type;
+  const name = file.name.toLowerCase();
+  if (name.endsWith(".pdf")) return DOCUMENT_MIME_TYPES.pdf;
+  if (name.endsWith(".pptx")) return DOCUMENT_MIME_TYPES.pptx;
+  return "application/octet-stream";
 }
 
 /**
@@ -112,7 +139,7 @@ export async function uploadToStorage(input: TusUploadInput): Promise<string> {
       metadata: {
         bucketName: DOCUMENTS_BUCKET,
         objectName,
-        contentType: input.file.type || "application/octet-stream",
+        contentType: declaredContentType(input.file),
         cacheControl: "3600",
       },
       // ⚠ Exactly 6 MB. Not a tunable — see the header comment.
