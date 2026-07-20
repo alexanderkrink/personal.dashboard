@@ -61,6 +61,7 @@ export const topicRevisionRowSchema = z.object({
   change_summary: z.string(),
   source: z.string(),
   needs_review: z.boolean(),
+  review_notes: z.array(z.string()),
   document_id: z.uuid().nullable(),
   prompt_id: z.string(),
   prompt_version: z.number(),
@@ -114,6 +115,9 @@ export interface TopicRevisionView {
   readonly changeSummary: string;
   readonly source: string;
   readonly needsReview: boolean;
+  /** Why this revision was flagged — the loss-detector, grounding and critic findings, one
+   * per entry, already rendered for a human. Empty when `needsReview` is false. */
+  readonly reviewNotes: readonly string[];
   readonly documentId: string | null;
   readonly documentLabel: string | null;
   readonly promptId: string;
@@ -217,6 +221,7 @@ export function toRevisionView(
     changeSummary: row.change_summary,
     source: row.source,
     needsReview: row.needs_review,
+    reviewNotes: row.review_notes,
     documentId: row.document_id,
     documentLabel,
     promptId: row.prompt_id,

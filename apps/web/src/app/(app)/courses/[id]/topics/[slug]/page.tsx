@@ -53,7 +53,7 @@ const TOPIC_COLUMNS =
 const DOCUMENT_COLUMNS =
   "id, filename, session_label, kind, status, extraction_fidelity, failure_reason, coverage, extraction, failed_topics, created_at";
 const REVISION_COLUMNS =
-  "id, revision, page, change_summary, source, needs_review, document_id, prompt_id, prompt_version, model, created_at";
+  "id, revision, page, change_summary, source, needs_review, review_notes, document_id, prompt_id, prompt_version, model, created_at";
 
 export default async function TopicPage({ params }: { params: Params }) {
   const { id, slug } = await params;

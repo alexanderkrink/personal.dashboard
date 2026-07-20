@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import { NeedsReviewChip } from "@/components/topic-page/grounding-banner";
 import { TopicPageBody } from "@/components/topic-page/topic-page-body";
 import {
   buildTopicView,
@@ -139,6 +140,7 @@ function wellGroundedView(): TopicView {
     change_summary: "Added the CLT block and the standard-error formula from Lecture 7.",
     source: "merge",
     needs_review: false,
+    review_notes: [],
     document_id: GOOD_DOC,
     prompt_id: "topic-merge",
     prompt_version: 2,
@@ -370,5 +372,120 @@ describe("TopicPageBody — a block that cannot show where it came from", () => 
     expect(
       screen.getByText(/1 citation points at a page or document this topic never read/i),
     ).toBeInTheDocument();
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/* Wave 5 gate — affordances Agent 2 shipped without a failing test           */
+/*                                                                            */
+/* Each of these was reachable for the first time only after the create-path  */
+/* revision-0 fix landed (needs_review had no place to live before). A render  */
+/* test is not enough; the assertion must go red if the affordance breaks.     */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+function flaggableView(overrides: {
+  readonly documentStatus?: string;
+  readonly failedTopics?: readonly unknown[];
+  readonly fidelity?: string | null;
+  readonly latestNeedsReview?: boolean;
+}): TopicView {
+  const topic: TopicRow = {
+    id: TOPIC,
+    course_id: COURSE,
+    title: "Sampling Distributions",
+    slug: "sampling-distributions",
+    summary: "How sample statistics behave.",
+    page: {
+      summary: "s",
+      notes: [],
+      keyTerms: [],
+      formulas: [],
+      workedExamples: [],
+      openQuestions: [],
+    },
+    exam_weight: 0.5,
+    exam_weight_override: null,
+    revision: 2,
+    updated_at: "2026-07-20T10:00:00Z",
+  };
+
+  const document: TopicDocumentRow = {
+    id: GOOD_DOC,
+    filename: "Sampling Distributions.pdf",
+    session_label: "Lecture 7",
+    kind: "slides",
+    status: overrides.documentStatus ?? "ready",
+    extraction_fidelity: overrides.fidelity === undefined ? "visual" : overrides.fidelity,
+    failure_reason: null,
+    coverage: {
+      checked: true,
+      pagesTotal: 30,
+      pagesMapped: 27,
+      pagesSkipped: 3,
+      pagesUndeclared: 0,
+      pagesUnmapped: 0,
+      topicCount: 4,
+      trustworthy: true,
+      gaps: [],
+      warnings: [],
+      missingObjectives: [],
+    },
+    extraction: { extraction: { pages: pages(2, 30) } },
+    failed_topics: overrides.failedTopics ?? [],
+    created_at: "2026-07-20T09:00:00Z",
+  };
+
+  const revision: TopicRevisionRow = {
+    id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+    revision: 1,
+    page: { summary: "", notes: [], keyTerms: [], formulas: [], workedExamples: [] },
+    change_summary: "Added the CLT block.",
+    source: "merge",
+    needs_review: overrides.latestNeedsReview ?? false,
+    review_notes: [],
+    document_id: GOOD_DOC,
+    prompt_id: "topic-merge",
+    prompt_version: 2,
+    model: "claude-sonnet-5",
+    created_at: "2026-07-20T10:00:00Z",
+  };
+
+  return buildTopicView({ topic, documents: [document], revisions: [revision] });
+}
+
+describe("NeedsReviewChip", () => {
+  it("shows the chip when the newest revision is flagged", () => {
+    render(<NeedsReviewChip view={flaggableView({ latestNeedsReview: true })} />);
+    expect(screen.getByTestId("needs-review")).toBeInTheDocument();
+    expect(screen.getByText(/Flagged for review/i)).toBeInTheDocument();
+  });
+
+  it("shows nothing when the newest revision is not flagged", () => {
+    render(<NeedsReviewChip view={flaggableView({ latestNeedsReview: false })} />);
+    expect(screen.queryByTestId("needs-review")).toBeNull();
+  });
+});
+
+describe("PartialBanner", () => {
+  it("warns, and counts the topics, when a feeding document only half-merged", () => {
+    render(
+      <TopicPageBody view={flaggableView({ documentStatus: "partial", failedTopics: [{}, {}] })} />,
+    );
+    expect(screen.getByText(/only half-merged/i)).toBeInTheDocument();
+    expect(screen.getByText(/failed to merge into 2 topics/i)).toBeInTheDocument();
+  });
+
+  it("stays silent for a document that merged cleanly", () => {
+    render(<TopicPageBody view={flaggableView({ documentStatus: "ready" })} />);
+    expect(screen.queryByText(/only half-merged/i)).toBeNull();
+  });
+});
+
+describe("FidelityNotes — text-only branch", () => {
+  it("tells the reader that anything only inside a diagram is missing", () => {
+    render(<TopicPageBody view={flaggableView({ fidelity: "text-only" })} />);
+    const notes = screen.getByTestId("fidelity");
+    expect(notes.textContent).toContain("read from its text only");
+    expect(notes.textContent).toContain("not in these notes");
   });
 });

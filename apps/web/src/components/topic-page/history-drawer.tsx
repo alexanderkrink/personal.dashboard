@@ -44,6 +44,8 @@ export interface HistoryRevision {
   readonly changeSummary: string;
   readonly source: string;
   readonly needsReview: boolean;
+  /** Why this revision was flagged, one reason per entry. Empty when not flagged. */
+  readonly reviewNotes: readonly string[];
   readonly createdAt: string;
   readonly promptId: string;
   readonly promptVersion: number;
@@ -183,6 +185,17 @@ function RevisionRow({
         {revision.headline}
       </p>
       <p className="mt-1 text-muted-foreground">{revision.changeSummary}</p>
+
+      {revision.reviewNotes.length === 0 ? null : (
+        <ul
+          className="mt-2 space-y-1 border-warning/30 border-l-2 pl-2 text-ui-xs text-warning"
+          data-testid="review-notes"
+        >
+          {revision.reviewNotes.map((note) => (
+            <li key={note}>{note}</li>
+          ))}
+        </ul>
+      )}
 
       <p className="mt-1 font-mono text-muted-foreground text-ui-xs">
         {`r${revision.revision} · ${new Date(revision.createdAt).toLocaleString()} · ${revision.promptId}@v${revision.promptVersion} · ${revision.model}`}

@@ -44,6 +44,7 @@ const revision: HistoryRevision = {
   changeSummary: "Added the CLT block.",
   source: "merge",
   needsReview: false,
+  reviewNotes: [],
   createdAt: "2026-07-20T10:00:00Z",
   promptId: "topic-merge",
   promptVersion: 2,
@@ -134,6 +135,49 @@ describe("HistoryDrawer — with revisions", () => {
 
     expect(screen.getByTestId("revision-row").getAttribute("data-needs-review")).toBe("true");
     expect(screen.getByText(/Flagged — review this change/)).toBeInTheDocument();
+  });
+
+  it("says WHY a revision was flagged, not just that it was", async () => {
+    render(
+      <HistoryDrawer
+        courseId="c"
+        currentPage={CURRENT}
+        currentRevision={2}
+        revisions={[
+          {
+            ...revision,
+            needsReview: true,
+            reviewNotes: [
+              "This page states 6 formulas the source never displayed.",
+              "The key term “Chi-square distribution” appears nowhere in the source.",
+            ],
+          },
+        ]}
+        slug="s"
+        topicId="t"
+      />,
+    );
+    await open();
+
+    const notes = screen.getByTestId("review-notes");
+    expect(notes.textContent).toContain("6 formulas the source never displayed");
+    expect(notes.textContent).toContain("appears nowhere in the source");
+  });
+
+  it("renders no review-notes block when a revision carries none", async () => {
+    render(
+      <HistoryDrawer
+        courseId="c"
+        currentPage={CURRENT}
+        currentRevision={2}
+        revisions={[revision]}
+        slug="s"
+        topicId="t"
+      />,
+    );
+    await open();
+
+    expect(screen.queryByTestId("review-notes")).toBeNull();
   });
 
   it("sends the revert through the server action", async () => {
