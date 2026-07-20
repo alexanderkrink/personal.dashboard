@@ -1724,6 +1724,47 @@ fresh. This keeps merges effectively idempotent despite being LLM-driven.
 > the promised feature is not built. One bounded re-billing remains and is deliberate — a
 > re-run still pays for one `topic-routing` call and the segment embeddings, which is what
 > tells the pass which topics the document belongs to in the first place.
+>
+> ---
+>
+> ✅ **DECIDED 2026-07-20 (delete-document branch) — the strip is now BUILT, and it strips by
+> BLOCK PROVENANCE rather than by snapshot replay. The paragraph above this block describes a
+> mechanism that was never viable; this is what shipped instead.**
+>
+> Built to serve *Delete a document*, which needs the same operation "Reprocess" does: remove
+> everything one document contributed. `stripDocumentFromPage` / `planDocumentStrip` in
+> `@study/core` (`packages/core/src/topics/strip.ts`, pure, 22 tests) filter each topic page
+> by every block's own `sources[].documentId`, dropping a block only when *every* one of its
+> sources names the document being removed.
+>
+> **Why not the replay this section specifies.** Three reasons, measured:
+>
+> 1. **There is nothing to replay from.** `topic_revisions` held **0 rows** on production
+>    against 2 live topics, because the create path writes no snapshot (`reprocess.ts` says
+>    so explicitly). Replay-forward is undefined for every topic that exists.
+> 2. **Replay is only exact when this document merged last.** A snapshot stores the whole page
+>    *before* a revision, not that revision's delta. Re-applying a later document's revision
+>    onto a base that no longer holds this document's text is a three-way merge of LLM prose,
+>    which contradicts this section's own "deterministic, not an LLM call".
+> 3. **Block provenance is exact and already recorded.** Verified on real data: all 9 blocks
+>    across both live topics carry a `documentId`. Per-block rather than per-revision, so a
+>    topic built by three documents loses exactly one third.
+>
+> **What the strip deliberately does NOT remove**, because neither carries provenance and
+> guessing would delete another document's content: a surviving topic's `summary` paragraph,
+> and any block whose sources name no document. Both are **counted** and stated verbatim in
+> the delete confirmation dialog — the copy tracks the measurement.
+>
+> **Also shipped:** migration `20260720000042_topic_sources_delete_sourceless_topic` — an
+> `after delete on topic_sources` trigger removing a topic whose last source went with the
+> document. In the database, not the Server Action, because the Inngest pipeline writes this
+> table with the service key where RLS and Server Actions are both out of the path. Verified
+> on the live database under the fixture tenant: the solo-sourced topic and its `topic_page`
+> chunk go, the co-sourced topic and its remaining source stay.
+>
+> **Still owed:** "Reprocess" as a *button* — the strip exists and delete uses it, but nothing
+> yet wires strip-then-rerun onto a single document. `retryDocument` is still the converging
+> retry described above, not a reprocess.
 
 ---
 
@@ -1989,6 +2030,22 @@ chat with citations, and context retrieval for the exam-review generator.
   pages updated — retry the rest" with a one-click retry (sends `document/retry-merges`);
   `failed` → human-readable reason ("This PDF is password-protected"), *Try again* and
   *Delete* actions. Never a raw stack trace.
+
+  > ⚠ **REVISED 2026-07-20 — *Delete* belongs on every settled card, not only on `failed`.**
+  >
+  > As written, a `ready` document collapsed to a summary with no way to remove it, so the
+  > state a user most often wants to undo — a deck that processed badly and needs
+  > re-uploading — was the one state with no exit. *Delete* now appears on `ready` and
+  > `partial` as well; `failed` keeps its existing pairing with *Try again*.
+  >
+  > All three now go through a **confirmation dialog** rather than acting on one click, because
+  > since the strip landed (§5) the delete reaches past the file: it can remove whole topics and
+  > rewrite the pages of others. The dialog states the consequence in counted nouns — topics
+  > removed, notes stripped, search passages dropped — **and states what it leaves behind**, which
+  > is a co-authored topic's summary paragraph and any block whose sources name no document.
+  > A confirmation that claimed to remove "everything this file contributed" would be false in
+  > exactly the case the user cares about most, so the copy is generated from the same
+  > `planDocumentStrip` measurement the delete itself runs.
 - **Topic pages** show provenance affordances: each block's source chip (Lecture 7 · slide
   12) deep-links to the document viewer; a *History* drawer lists
   revisions labeled by source ("Lecture 7 expanded this page", "Deep review added this
