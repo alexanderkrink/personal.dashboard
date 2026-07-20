@@ -136,6 +136,15 @@ export {
   type PromptVarValue,
   promptIdViolation,
 } from "./prompts/index";
+export {
+  MERGE_CRITIC_SYSTEM,
+  mergeCriticPrompt,
+  TOPIC_MERGE_SYSTEM,
+  TOPIC_ROUTING_SYSTEM,
+  topicMergePrompt,
+  topicMergeRepairPrompt,
+  topicRoutingPrompt,
+} from "./prompts/topics";
 /**
  * Types only. `createAIProvider` and `languageModelFor` are deliberately NOT re-exported:
  * they hand back a raw SDK model with no stamp, no metering and no kill switch, and an
