@@ -909,6 +909,15 @@ UI in `apps/web`.
 > any loss check that iterates `topic_revisions` iterates an empty set on a new topic and
 > cannot fail.
 >
+> > ✅ **DECIDED 2026-07-20 (Wave 5 Agent 1) — fixed at the root; this observation was the
+> > earliest sighting of the wave's defining pattern.** The create path writes a revision-0
+> > snapshot atomically with the topic (migration `20260720194417`). Agent 0 read this as a
+> > curiosity about an empty table; it was the same defect as the loss-detector's inert
+> > checks 1-3, the History drawer with nothing to render, and — worst — `needs_review` and
+> > the Wave 5 grounding findings being computed and discarded on exactly the path that
+> > produces ungrounded pages. **The create path was the unchecked path, four times over.**
+> > The live topic above is not backfilled and still has zero revisions.
+>
 > **D13 settled:** there are **no `warn` events** for this document, and that is correct.
 > The dossier's inference fails twice — `emit()` in `packages/ai/src/embeddings.ts:277`
 > writes to `ai_generations`, **not** `document_processing_events`, so a transport-error
@@ -1936,6 +1945,15 @@ fresh. This keeps merges effectively idempotent despite being LLM-driven.
 > 1. **There is nothing to replay from.** `topic_revisions` held **0 rows** on production
 >    against 2 live topics, because the create path writes no snapshot (`reprocess.ts` says
 >    so explicitly). Replay-forward is undefined for every topic that exists.
+>    > ⚠ **CORRECTED 2026-07-20 (Wave 5 Agent 1) — reason 1 no longer holds.** The create path
+>    > now writes a revision-0 snapshot of the empty page, atomically with the topic
+>    > (`create_topic_with_first_revision`, migration `20260720194417`), so every topic created
+>    > from here on HAS something to replay from. **The strip is not being rewritten**: reasons
+>    > 2 and 3 are untouched and they are the load-bearing ones — replay is still only exact
+>    > when this document merged last, and block provenance is still exact, per-block, and
+>    > already recorded. This note exists so the next reader does not cite reason 1 as a live
+>    > blocker. Topics created *before* this migration are not backfilled and remain
+>    > un-replayable.
 > 2. **Replay is only exact when this document merged last.** A snapshot stores the whole page
 >    *before* a revision, not that revision's delta. Re-applying a later document's revision
 >    onto a base that no longer holds this document's text is a three-way merge of LLM prose,
@@ -2331,6 +2349,43 @@ chat with citations, and context retrieval for the exam-review generator.
   > to"* instead of an empty list. **The fix is upstream and still owed**: the create path
   > must write a `topic_revisions` row against the empty page, carrying `needs_review`. That
   > is a pipeline change and was out of item 6's scope.
+
+  > ✅ **DECIDED 2026-07-20 (Wave 5 Agent 1) — paid. The create path now writes a revision-0
+  > snapshot, and the invariant is in the database rather than in call ordering.**
+  >
+  > Migration `20260720194417_topic_first_revision_on_create`:
+  >
+  > - `create_topic_with_first_revision(...)` inserts the topic and its first revision in ONE
+  >   statement. Two PostgREST calls are two transactions and can be interrupted between
+  >   them, and a deferred constraint cannot span transactions — so "insert, then insert" was
+  >   never going to be an invariant, only a habit. `security invoker`; EXECUTE granted to
+  >   `service_role` only, so "background jobs only" is enforced rather than documented.
+  > - `check (revision >= 1)` widened to `>= 0`. **That check is why the create path could not
+  >   simply write the row it should always have written.** A revision row holds the page
+  >   BEFORE the merge stamped on it; a create supersedes the empty page, which is revision 0,
+  >   and the topic then lands at `topics.revision = 1`.
+  > - `review_notes text[]`, written on **both** branches. `needs_review` says a merge was
+  >   flagged; the notes say why, and "this page states 6 formulas the source never displayed"
+  >   is the actionable half. The verifier already rendered these strings and dropped them.
+  >
+  > ⚠ **`createAuditTopic` writes its first revision at revision 1, and that is a latent bug
+  > this deliberately did not copy.** The next merge into such a topic reads
+  > `currentRevision = 1`, tries to snapshot at revision 1, collides with
+  > `unique (topic_id, revision)` — and `route-and-merge.ts` swallows 23505 on that insert as
+  > "this step already ran", so that merge's snapshot is silently lost. Not fixed here: it is
+  > a different path (`source = 'deep_review'`) with no live rows at stake. Recorded in the
+  > migration header.
+  >
+  > **What the UI shows now, and why both of Agent 2's states stay.** Existing rows are not
+  > backfilled, so the live broken topic still has zero revisions: the drawer keeps rendering
+  > the honest no-history state and the course list shows no chip — correct, because nothing
+  > was recorded for it. A topic created after this fix gets a revision-0 row, so the drawer
+  > renders real history and a flagged one shows the chip. `topicRevisionRowSchema` parses
+  > `revision` as a bare `z.number()`, so revision 0 is not filtered out.
+  >
+  > **Still owed, and Agent 2's to place:** `REVISION_COLUMNS` does not select `review_notes`,
+  > so the reasons are stored but not yet displayed anywhere. The chip currently says "this
+  > was flagged" when it could say what for.
 
 ### 9. Exam review (auto-generated, weighted by exam relevance)
 
