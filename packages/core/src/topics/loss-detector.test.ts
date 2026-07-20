@@ -23,7 +23,9 @@ function input(overrides: Partial<LossDetectorInput>): LossDetectorInput {
     before: page(),
     after: page(),
     documentId: DOC,
-    routedPages: [1, 2, 3],
+    // Two pages, deliberately: below `MIN_ROUTED_FOR_CITATION_CHECK`, so the
+    // citation-share check (5) is inert here and every test of it opts in explicitly.
+    routedPages: [1, 2],
     unaccountedPages: [],
     coverageChecked: true,
     ...overrides,
@@ -145,7 +147,7 @@ describe("detectMergeLoss — the phantom-locator case", () => {
     const result = detectMergeLoss(
       input({
         after: page({ notes: [note("new-block", "text", [14])] }),
-        routedPages: [1, 2, 3],
+        routedPages: [1, 2],
       }),
     );
 
@@ -159,7 +161,7 @@ describe("detectMergeLoss — the phantom-locator case", () => {
 
   it("accepts a citation inside the routed pages", () => {
     const result = detectMergeLoss(
-      input({ after: page({ notes: [note("new-block", "text", [2])] }), routedPages: [1, 2, 3] }),
+      input({ after: page({ notes: [note("new-block", "text", [2])] }), routedPages: [1, 2] }),
     );
 
     expect(result.findings).toEqual([]);
@@ -214,7 +216,7 @@ describe("detectMergeLoss — the phantom-locator case", () => {
             { id: "x", heading: "h", markdown: "m", sources: [{ documentId: DOC, page: 14 }] },
           ],
         }),
-        routedPages: [1, 2, 3],
+        routedPages: [1, 2],
       }),
     );
 
@@ -248,7 +250,7 @@ describe("detectMergeLoss — the phantom-locator case", () => {
             },
           ],
         }),
-        routedPages: [1, 2, 3],
+        routedPages: [1, 2],
       }),
     );
 
@@ -267,7 +269,7 @@ describe("detectMergeLoss — the phantom-locator case", () => {
     const result = detectMergeLoss(
       input({
         after: page({ notes: [note("new-block", "text", [14])] }),
-        routedPages: [1, 2, 3],
+        routedPages: [1, 2],
         unaccountedPages: [14],
       }),
     );
@@ -321,6 +323,7 @@ describe("detectMergeLoss — a clean merge", () => {
           keyTerms: [{ term: "Margin", definition: "old, sharpened", sources: [] }],
         }),
         removals: [],
+        routedPages: [1, 2, 3],
       }),
     );
 
@@ -330,9 +333,81 @@ describe("detectMergeLoss — a clean merge", () => {
     expect(result.blocksAfter).toBe(3);
   });
 
-  it("treats a first merge into an empty page as clean", () => {
+  /**
+   * ⚠ This test used to assert `findings` was empty for a first merge that cited one of
+   * three routed pages, and in doing so it PINNED THE CREATE PATH AS UNCHECKED.
+   *
+   * Checks 1–3 all iterate `before`, which on a create is `EMPTY_TOPIC_PAGE` and flattens to
+   * zero blocks — so all three loops run over an empty set and cannot produce a finding no
+   * matter how bad the merge is. Check 4 skips any unit already in `routedPages`, so it
+   * cannot see uncited pages either. A green test over that combination reads as "the create
+   * path is verified" when nothing whatsoever was verified, which is precisely how Wave 4
+   * shipped a page built from 1 of 48 routed pages with no finding against it.
+   */
+  it("does not flag a first merge that cites what it was given", () => {
     const result = detectMergeLoss(
-      input({ before: {}, after: page({ notes: [note("first", "content", [1])] }) }),
+      input({
+        before: {},
+        after: page({ notes: [note("first", "content", [1, 2, 3])] }),
+        routedPages: [1, 2, 3],
+      }),
+    );
+
+    expect(result.findings).toEqual([]);
+  });
+
+  it("RED: flags a first merge that cites one of the three pages it was given", () => {
+    const result = detectMergeLoss(
+      input({
+        before: {},
+        after: page({ notes: [note("first", "content", [1])] }),
+        routedPages: [1, 2, 3],
+      }),
+    );
+
+    expect(result.hasRedFlag).toBe(true);
+    expect(result.findings[0]).toMatchObject({ kind: "uncited-routed-pages", severity: "red" });
+    expect(result.findings[0]?.detail).toContain("2, 3");
+  });
+
+  it("RED: flags the Wave 4 shape — 48 pages routed, one cited", () => {
+    const routedPages = Array.from({ length: 48 }, (_, i) => i + 2);
+    const result = detectMergeLoss(
+      input({
+        before: {},
+        after: page({ notes: [note("objectives", "content", [2])] }),
+        routedPages,
+      }),
+    );
+
+    expect(result.hasRedFlag).toBe(true);
+    expect(result.findings[0]).toMatchObject({
+      kind: "uncited-routed-pages",
+      subject: "47 of 48 pages",
+    });
+  });
+
+  it("does not run the citation-share check on an UPDATE", () => {
+    // The page is mostly prior material, so a low share against one document's contribution
+    // is not evidence of anything.
+    const result = detectMergeLoss(
+      input({
+        before: page({ notes: [note("existing", "old", [1])] }),
+        after: page({ notes: [note("existing", "old and new", [1])] }),
+        routedPages: [1, 2, 3],
+      }),
+    );
+
+    expect(result.findings).toEqual([]);
+  });
+
+  it("does not run the citation-share check below three routed pages", () => {
+    const result = detectMergeLoss(
+      input({
+        before: {},
+        after: page({ notes: [note("first", "content", [1])] }),
+        routedPages: [1, 2],
+      }),
     );
 
     expect(result.findings).toEqual([]);

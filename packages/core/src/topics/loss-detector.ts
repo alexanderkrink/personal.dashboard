@@ -47,6 +47,24 @@ import {
   type TopicPageLike,
 } from "./page";
 
+/**
+ * Below this share of routed pages cited, the produced page is not representing its input.
+ *
+ * Wave 4 sat at 1/48 ≈ 2%. The floor is at half because the case worth catching is the
+ * partial one — a topic fed ten slides that cites three — and anything stricter would fire
+ * on the ordinary merge that consolidates several slides into one well-cited block and
+ * spend a Sonnet re-merge doing it.
+ */
+const CITED_ROUTED_SHARE_FLOOR = 0.5;
+
+/**
+ * Below this many routed pages the ratio is noise, so the check does not run.
+ *
+ * A topic fed one or two slides can legitimately cite one of them; the denominator is too
+ * small for a share to mean anything.
+ */
+const MIN_ROUTED_FOR_CITATION_CHECK = 3;
+
 /** A removal the merge explicitly declared. `blockKey` matches {@link DiffBlock.key}. */
 export interface DeclaredRemoval {
   readonly blockKey: string;
@@ -63,7 +81,9 @@ export type LossFindingKind =
   /** The same, but the extraction dropped pages undeclared, so it cannot be adjudicated. */
   | "unverifiable-locator"
   /** A removal was declared for a block that was never there. Bookkeeping drift. */
-  | "phantom-removal";
+  | "phantom-removal"
+  /** Pages were routed to this topic and the produced page cites almost none of them. */
+  | "uncited-routed-pages";
 
 export type LossSeverity = "red" | "amber";
 
@@ -207,6 +227,49 @@ export function detectMergeLoss(input: LossDetectorInput): LossDetectorResult {
         detail: lossy
           ? `“${block.label}” cites page ${unit} of this document, which no segment routed to this topic covers — and this document's extraction has pages it neither returned nor declared skipped, so the citation cannot be checked either way.`
           : `“${block.label}” cites page ${unit} of this document, but no segment routed to this topic covers that page.`,
+      });
+    }
+  }
+
+  // ── 5. Routed pages that the page never cites ──────────────────────────────
+  //
+  // Check 4 runs `cited ⊆ routed` and skips any unit already in `routed`, so it is
+  // structurally incapable of noticing the opposite: pages that WERE routed to this topic
+  // and that nothing on the produced page points at. That is the direction the Wave 4
+  // failure ran in, and it is the direction that matters on a create — where checks 1–3
+  // are inert by construction, because `before` is the empty page and every loop above
+  // iterates an empty set.
+  //
+  // A ratio rather than a per-page rule, and a low floor. A topic fed five slides that
+  // cites four of them is a normal merge and must not spend a second Sonnet call; a topic
+  // fed forty-eight that cites one is the failure. The floor is set to separate those two
+  // cases and nothing finer.
+  // Scoped to the create path, and derived rather than passed: `EMPTY_TOPIC_PAGE` flattens
+  // to zero blocks, so `before.length === 0` IS "this merge is writing the first version of
+  // this page". Only then is every block on the page attributable to this document's
+  // segments. On an update the page is mostly prior material and a low citation share
+  // against one contribution means nothing — firing there would be a false accusation
+  // costing a Sonnet re-merge.
+  const isFirstVersion = before.length === 0;
+
+  if (isFirstVersion && input.routedPages.length >= MIN_ROUTED_FOR_CITATION_CHECK) {
+    const citedFromThisDocument = new Set<number>();
+    for (const block of after) {
+      for (const unit of citedUnits(block.sources, input.documentId)) {
+        if (routed.has(unit)) citedFromThisDocument.add(unit);
+      }
+    }
+
+    const share = citedFromThisDocument.size / routed.size;
+    if (share < CITED_ROUTED_SHARE_FLOOR) {
+      const uncited = [...routed]
+        .filter((page) => !citedFromThisDocument.has(page))
+        .sort((a, b) => a - b);
+      findings.push({
+        kind: "uncited-routed-pages",
+        severity: "red",
+        subject: `${uncited.length} of ${routed.size} pages`,
+        detail: `${routed.size} pages of this document were routed to this topic, but the page only cites ${citedFromThisDocument.size} of them. Nothing on it points at page${uncited.length === 1 ? "" : "s"} ${uncited.slice(0, 10).join(", ")}${uncited.length > 10 ? "…" : ""} — that material was supplied and is not represented.`,
       });
     }
   }

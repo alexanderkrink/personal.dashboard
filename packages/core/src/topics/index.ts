@@ -11,6 +11,15 @@ export {
   type UnguardedProposal,
 } from "./duplicate-guard";
 export {
+  detectUngroundedContent,
+  type ExpansionMeasurement,
+  type GroundingFinding,
+  type GroundingFindingKind,
+  MAX_EXPANSION_RATIO,
+  MIN_SOURCE_CHARS,
+  measureExpansion,
+} from "./grounding";
+export {
   type DeclaredRemoval,
   detectMergeLoss,
   type LossDetectorInput,

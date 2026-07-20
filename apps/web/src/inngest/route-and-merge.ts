@@ -48,9 +48,11 @@ import {
   type DocumentOutcome,
   type DuplicateCoercion,
   detectMergeLoss,
+  detectUngroundedContent,
   type ExistingTopicTitle,
   flattenTopicPage,
   type LossFinding,
+  measureExpansion,
   type PriorContribution,
   planMergeWork,
   type RoutedSegment,
@@ -729,6 +731,11 @@ async function verifyMerge(input: {
 }): Promise<VerifiedMerge> {
   const { target, merge } = input;
 
+  // The literal text the merge prompt carried. Every grounding question below is asked
+  // against THIS, not against the document — a merge can only be faithful to what it saw.
+  const sourceText = target.segments.map((segment) => segment.markdown).join("\n\n");
+  const isNewTopic = target.topicId === null;
+
   const check = (candidate: TopicMerge): readonly string[] => {
     const loss = detectMergeLoss({
       before: target.current,
@@ -742,7 +749,20 @@ async function verifyMerge(input: {
     // Only RED findings gate. Amber ones — a phantom removal, an unverifiable citation
     // against a lossy extraction — are recorded but must not spend a second Sonnet call:
     // an amber finding is by construction something the re-merge has no way to fix.
-    return loss.findings.filter((finding) => finding.severity === "red").map(describeFinding);
+    const red = loss.findings.filter((finding) => finding.severity === "red").map(describeFinding);
+
+    // Grounding, against the merge's own input. Neither the loss-detector (which compares
+    // two versions of the page) nor the critic (which is another model, and which on the
+    // real failure was handed the same thin segment and waved six unsupported formulas
+    // through) asks this question. These findings DO gate: unlike a thin input, "you stated
+    // six formulas your source does not contain" is something a second pass can act on.
+    const ungrounded = detectUngroundedContent({
+      page: candidate.page,
+      sourceText,
+      isNewTopic,
+    }).map((finding) => `[grounding] ${finding.detail}`);
+
+    return [...red, ...ungrounded];
   };
 
   const criticise = async (candidate: TopicMerge): Promise<readonly string[]> => {
@@ -767,9 +787,24 @@ async function verifyMerge(input: {
     return verdict.value.issues.map((issue) => `[critic:${issue.kind}] ${issue.detail}`);
   };
 
+  // ── The thinness gate ─────────────────────────────────────────────────────
+  //
+  // Deliberately NOT part of `check()`, because a re-merge cannot fix it: the second pass
+  // receives exactly the same segments as the first. What it can do is stop the page being
+  // written as trustworthy. Wave 4 produced 12,296 characters from 577 — a 21× expansion —
+  // and this catches that class whatever the upstream cause turns out to be, including
+  // causes neither hypothesis about the routing failure named.
+  const expansion = measureExpansion({ sourceText, page: merge.page, isNewTopic });
+  const thinness = expansion.detail === null ? [] : [`[grounding] ${expansion.detail}`];
+
   const firstIssues = [...check(merge), ...(await criticise(merge))];
   if (firstIssues.length === 0) {
-    return { merge, needsReview: false, findings: [], remerged: false };
+    return {
+      merge,
+      needsReview: thinness.length > 0,
+      findings: thinness,
+      remerged: false,
+    };
   }
 
   await logProcessingEvent(input.admin, {
@@ -799,10 +834,10 @@ async function verifyMerge(input: {
 
   if (second.status === "dead-letter") {
     // Keep the first merge. It is the best content available, and it goes in flagged.
-    return { merge, needsReview: true, findings: firstIssues, remerged: true };
+    return { merge, needsReview: true, findings: [...firstIssues, ...thinness], remerged: true };
   }
 
-  const secondIssues = [...check(second.value), ...(await criticise(second.value))];
+  const secondIssues = [...check(second.value), ...(await criticise(second.value)), ...thinness];
   return {
     merge: second.value,
     needsReview: secondIssues.length > 0,
