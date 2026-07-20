@@ -7,13 +7,13 @@ import {
   FilePdf,
   FilePpt,
   TextAlignLeft,
-  Trash,
   WarningCircle,
   XCircle,
 } from "@phosphor-icons/react";
 import { formatBytes } from "@study/core";
 import { useTransition } from "react";
-import { deleteDocument, retryDocument } from "@/app/(app)/documents/actions";
+import { retryDocument } from "@/app/(app)/documents/actions";
+import { DeleteDocumentDialog } from "@/components/documents/delete-document-dialog";
 import { Button } from "@/components/ui/button";
 import type {
   DocumentCoverage,
@@ -208,17 +208,12 @@ export function DocumentCard({
               <ArrowClockwise aria-hidden className="size-3.5" />
               Try again
             </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={pending}
-              onClick={() =>
-                startTransition(() => void deleteDocument({ documentId: document.id }))
-              }
-            >
-              <Trash aria-hidden className="size-3.5" />
-              Delete
-            </Button>
+            {/* §8's *Delete* on a failed card. It now goes through the same
+                confirmation as every other state — a failed document can still
+                have merged into topics before it failed (that is exactly what
+                `partial` is), so the one-click version was under-stating its
+                reach here too. */}
+            <DeleteDocumentDialog documentId={document.id} filename={document.filename} />
           </div>
         </div>
       ) : null}
@@ -243,6 +238,19 @@ export function DocumentCard({
       {document.status === "partial" ? (
         <div className="mt-2">
           <CoverageLine coverage={document.coverage} />
+        </div>
+      ) : null}
+
+      {/* ── Delete, on every settled card ───────────────────────────────────
+          ⚠ REVISED 2026-07-20. §8 gives *Delete* only to `failed`, and a `ready`
+          document collapsed to a summary with no way to remove it — so the one
+          state a user most often wants to undo (a deck that processed badly and
+          needs re-uploading) was the one state with no exit. A document is
+          deletable whenever it is not mid-run; `failed` keeps its own pairing
+          with *Try again* above, so this row covers `ready` and `partial`. */}
+      {document.status === "ready" || document.status === "partial" ? (
+        <div className="mt-3 flex justify-end border-border/60 border-t pt-2">
+          <DeleteDocumentDialog documentId={document.id} filename={document.filename} />
         </div>
       ) : null}
     </li>
