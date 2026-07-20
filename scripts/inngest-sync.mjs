@@ -73,6 +73,7 @@ if (!response.ok) {
 
 console.log(`✓ HTTP ${response.status} ${body}`);
 console.log(
-  "\nRegistered. Confirm the function list in the Inngest dashboard — this script can\n" +
-    "prove the endpoint answered, but not which functions Inngest recorded.",
+  "\nRegistered. This script proves the endpoint answered, not which functions Inngest\n" +
+    "recorded — run `pnpm inngest:verify` to check the platform's registry against the\n" +
+    "functions this code actually serves.",
 );

@@ -51,7 +51,9 @@ export const { GET, POST, PUT } = serve({
   // when something calls `PUT /api/inngest`, and NOTHING here does that on deploy:
   // the Inngest app shows `Vercel project: -`, so the Vercel↔Inngest integration is
   // not installed and a deploy does not resync. Until it is, run `pnpm inngest:sync`
-  // after deploying any change to this list.
+  // after deploying any change to this list, then `pnpm inngest:verify` — the sync
+  // proves the endpoint answered; the verify proves what the platform recorded,
+  // by diffing its registry against the functions derived from THIS array.
   //
   // The cost of forgetting is silent and total. Wave 4 shipped `processDocument`
   // against a registry eight hours older than the function: `Events received: 1`,

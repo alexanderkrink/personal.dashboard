@@ -21,6 +21,7 @@
     "db:push": "pnpm --filter @study/db db:push",
     "db:migration": "pnpm --filter @study/db db:migration",
     "inngest:sync": "node scripts/inngest-sync.mjs",
+    "inngest:verify": "node scripts/inngest-verify.mjs",
     "prepare": "husky"
   },
   "devDependencies": {
