@@ -8,5 +8,6 @@ export {
 } from "./assessment-weights";
 export * from "./calendar";
 export * from "./documents";
+export * from "./participation";
 export { err, mapResult, ok, type Result, unwrap } from "./result";
 export * from "./topics";

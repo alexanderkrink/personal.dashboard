@@ -7,11 +7,6 @@ export type Json =
   | Json[]
 
 export type Database = {
-  // Allows to automatically instantiate createClient with right options
-  // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
-  __InternalSupabase: {
-    PostgrestVersion: "14.5"
-  }
   public: {
     Tables: {
       ai_generations: {
@@ -132,6 +127,41 @@ export type Database = {
             columns: ["course_id", "user_id"]
             isOneToOne: false
             referencedRelation: "courses"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
+      attendance_records: {
+        Row: {
+          created_at: string
+          id: string
+          occurrence_id: string
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          occurrence_id: string
+          status?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          occurrence_id?: string
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "attendance_records_occurrence_id_fkey"
+            columns: ["occurrence_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "calendar_occurrences"
             referencedColumns: ["id", "user_id"]
           },
         ]
@@ -732,6 +762,47 @@ export type Database = {
         }
         Relationships: []
       }
+      participation_logs: {
+        Row: {
+          created_at: string
+          id: string
+          kind: string
+          note: string | null
+          occurrence_id: string
+          quality: number | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          kind: string
+          note?: string | null
+          occurrence_id: string
+          quality?: number | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          kind?: string
+          note?: string | null
+          occurrence_id?: string
+          quality?: number | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "participation_logs_occurrence_id_fkey"
+            columns: ["occurrence_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "calendar_occurrences"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
       profiles: {
         Row: {
           created_at: string
@@ -898,6 +969,44 @@ export type Database = {
             columns: ["course_id", "user_id"]
             isOneToOne: false
             referencedRelation: "courses"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
+      talking_points: {
+        Row: {
+          body: string
+          created_at: string
+          id: string
+          occurrence_id: string
+          updated_at: string
+          used: boolean
+          user_id: string
+        }
+        Insert: {
+          body: string
+          created_at?: string
+          id?: string
+          occurrence_id: string
+          updated_at?: string
+          used?: boolean
+          user_id: string
+        }
+        Update: {
+          body?: string
+          created_at?: string
+          id?: string
+          occurrence_id?: string
+          updated_at?: string
+          used?: boolean
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "talking_points_occurrence_id_fkey"
+            columns: ["occurrence_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "calendar_occurrences"
             referencedColumns: ["id", "user_id"]
           },
         ]
@@ -1344,3 +1453,4 @@ export const Constants = {
     },
   },
 } as const
+
