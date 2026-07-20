@@ -371,7 +371,7 @@ export async function extractPptx(bytes: Uint8Array): Promise<PptxExtraction> {
 
     // ── Notes, via the slide's own relationship part ──────────────────────
     const slideRelsXml = await readPart(
-      part.replace(/^ppt\/slides\//, "ppt/slides/_rels/") + ".rels",
+      `${part.replace(/^ppt\/slides\//, "ppt/slides/_rels/")}.rels`,
     );
     let notes: string | null = null;
     if (slideRelsXml !== null) {
