@@ -129,9 +129,43 @@ export interface FixtureChunk {
   readonly locator: { page: number; toPage?: number };
 }
 
+/**
+ * The `documents` row itself, for consumers that render a document rather than only its
+ * coverage — the topic page names the file, its session label and its extraction fidelity.
+ */
+export interface FixtureDocumentRow {
+  readonly id: string;
+  readonly filename: string;
+  readonly session_label: string | null;
+  readonly kind: string;
+  readonly status: string;
+  readonly extraction_fidelity: string | null;
+  readonly failure_reason: string | null;
+  readonly failed_topics: readonly unknown[];
+  readonly created_at: string;
+}
+
+/** The `topics` row, for consumers that build a whole topic view from the corpus. */
+export interface FixtureTopicRow {
+  readonly id: string;
+  readonly course_id: string;
+  readonly title: string;
+  readonly slug: string;
+  readonly summary: string;
+  readonly page: FixtureTopicPage;
+  readonly exam_weight: number;
+  readonly exam_weight_override: number | null;
+  readonly revision: number;
+  readonly updated_at: string;
+}
+
 export interface Wave4Failure {
   /** `documents.coverage` — `trustworthy: true` with 47 unmapped pages. */
   readonly coverage: FixtureCoverage;
+  /** The whole `documents` row: `Sampling Distributions.pdf`, "Chapter 6", `visual`. */
+  readonly document: FixtureDocumentRow;
+  /** The whole `topics` row: "Sampling Distributions", `revision: 1`, no override. */
+  readonly topic: FixtureTopicRow;
   /** The real extraction, already unwrapped from `documents.extraction -> 'extraction'`. */
   readonly extraction: FixtureExtraction;
   /** The sibling keys alongside `extraction`: `route`, `fidelity`, `sourceUnits`, `wordsPerSlide`. */
@@ -199,19 +233,21 @@ export function loadWave4Failure(): Wave4Failure {
   }
 
   const document = first(
-    readJson<{ coverage: FixtureCoverage }[]>("document.json"),
+    readJson<(FixtureDocumentRow & { coverage: FixtureCoverage })[]>("document.json"),
     "document.json",
   );
   const extractionRow = first(
     readJson<{ extraction: Record<string, unknown> }[]>("extraction.json"),
     "extraction.json",
   );
-  const topic = first(readJson<{ page: FixtureTopicPage }[]>("topic.json"), "topic.json");
+  const topic = first(readJson<FixtureTopicRow[]>("topic.json"), "topic.json");
 
   const { extraction, ...extractionEnvelope } = extractionRow.extraction;
 
   return {
     coverage: document.coverage,
+    document,
+    topic,
     extraction: extraction as FixtureExtraction,
     extractionEnvelope,
     topicPage: topic.page,

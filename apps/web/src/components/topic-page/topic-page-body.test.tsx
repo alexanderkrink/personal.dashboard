@@ -1,0 +1,374 @@
+import { render, screen } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+import { TopicPageBody } from "@/components/topic-page/topic-page-body";
+import {
+  buildTopicView,
+  type TopicDocumentRow,
+  type TopicRevisionRow,
+  type TopicRow,
+  type TopicView,
+} from "@/lib/topics/topic-view";
+import { describeWithWave4Failure, loadWave4Failure } from "@/test/wave4-failure-fixture";
+
+/**
+ * The guard tests for every grounding affordance on the topic page.
+ *
+ * ## The structural point of this file
+ *
+ * Each affordance below is asserted **twice**: once against the real, frozen Wave 4 failure
+ * — the artifact that shipped with twenty citations on one slide, 1 of 54 pages mapped and
+ * `trustworthy: true` — and once against a well-grounded synthetic page. Both directions
+ * are load-bearing. A test that only proves the warning appears on a fixture written to
+ * make it appear proves nothing; a test that only proves it stays quiet on a good page
+ * proves less. Deleting any affordance turns the first suite red, which is the property
+ * that makes these guards rather than decoration.
+ *
+ * ⚠ The Wave 4 half is **real production data** and is gitignored — it is
+ * `krinkk02@gmail.com`'s document, captured before Wave 5 touched anything. It is present
+ * on Alexander's machine and absent in CI, so that suite *skips* rather than fails when the
+ * corpus is missing. The well-grounded half is **synthetic**: no grounded topic page has
+ * ever been produced by this pipeline, so there was nothing real to compare against.
+ */
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/* The synthetic well-grounded page                                           */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+const GOOD_DOC = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const COURSE = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const TOPIC = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+
+function pages(from: number, to: number) {
+  return Array.from({ length: to - from + 1 }, (_, i) => ({
+    page: from + i,
+    title: `Slide ${from + i}`,
+    markdown: "…",
+  }));
+}
+
+/**
+ * A page built the way the pipeline is supposed to build one: blocks citing the pages they
+ * were actually written from, spread across the deck.
+ */
+function wellGroundedView(): TopicView {
+  const topic: TopicRow = {
+    id: TOPIC,
+    course_id: COURSE,
+    title: "Sampling Distributions",
+    slug: "sampling-distributions",
+    summary: "How sample statistics behave.",
+    page: {
+      summary: "How sample statistics behave across repeated samples.",
+      notes: [
+        {
+          id: "why-sample",
+          heading: "Why we sample",
+          markdown: "We rarely observe a whole population.",
+          sources: [{ documentId: GOOD_DOC, page: 3 }],
+        },
+        {
+          id: "clt",
+          heading: "The Central Limit Theorem",
+          markdown: "For $n > 30$ the sampling distribution is approximately normal.",
+          sources: [
+            { documentId: GOOD_DOC, page: 18 },
+            { documentId: GOOD_DOC, page: 19 },
+          ],
+        },
+      ],
+      keyTerms: [
+        {
+          term: "Standard error",
+          definition: "The standard deviation of a sampling distribution.",
+          sources: [{ documentId: GOOD_DOC, page: 12 }],
+        },
+      ],
+      formulas: [
+        {
+          name: "Standard error of the mean",
+          latex: "\\sigma_{\\bar{X}} = \\sigma / \\sqrt{n}",
+          explanation: "Spread of the sample mean.",
+          sources: [{ documentId: GOOD_DOC, page: 21 }],
+        },
+      ],
+      workedExamples: [
+        {
+          problem: "A freezer holds packs with $\\sigma = 2.236$ and $n = 36$.",
+          solution: "The standard error is $2.236/6 = 0.373$.",
+          sources: [{ documentId: GOOD_DOC, page: 27 }],
+        },
+      ],
+      openQuestions: [],
+    },
+    exam_weight: 0.5,
+    exam_weight_override: null,
+    revision: 2,
+    updated_at: "2026-07-20T10:00:00Z",
+  };
+
+  const document: TopicDocumentRow = {
+    id: GOOD_DOC,
+    filename: "Sampling Distributions.pdf",
+    session_label: "Lecture 7",
+    kind: "slides",
+    status: "ready",
+    extraction_fidelity: "visual",
+    failure_reason: null,
+    coverage: {
+      checked: true,
+      pagesTotal: 30,
+      pagesMapped: 27,
+      pagesSkipped: 3,
+      pagesUndeclared: 0,
+      pagesUnmapped: 0,
+      topicCount: 4,
+      trustworthy: true,
+      gaps: [{ fromPage: 1, toPage: 1, kind: "skipped", reason: "title slide" }],
+      warnings: [],
+      missingObjectives: [],
+    },
+    extraction: { extraction: { pages: pages(2, 30) } },
+    failed_topics: [],
+    created_at: "2026-07-20T09:00:00Z",
+  };
+
+  const revision: TopicRevisionRow = {
+    id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+    revision: 1,
+    page: { summary: "", notes: [], keyTerms: [], formulas: [], workedExamples: [] },
+    change_summary: "Added the CLT block and the standard-error formula from Lecture 7.",
+    source: "merge",
+    needs_review: false,
+    document_id: GOOD_DOC,
+    prompt_id: "topic-merge",
+    prompt_version: 2,
+    model: "claude-sonnet-5",
+    created_at: "2026-07-20T10:00:00Z",
+  };
+
+  return buildTopicView({ topic, documents: [document], revisions: [revision] });
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/* The real Wave 4 artifact                                                   */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+function wave4View(): TopicView {
+  const fixture = loadWave4Failure();
+
+  const topic: TopicRow = {
+    id: fixture.topic.id,
+    course_id: fixture.topic.course_id,
+    title: fixture.topic.title,
+    slug: fixture.topic.slug,
+    summary: fixture.topic.summary,
+    page: fixture.topicPage,
+    exam_weight: fixture.topic.exam_weight,
+    exam_weight_override: fixture.topic.exam_weight_override,
+    revision: fixture.topic.revision,
+    updated_at: fixture.topic.updated_at,
+  };
+
+  const document: TopicDocumentRow = {
+    id: fixture.document.id,
+    filename: fixture.document.filename,
+    session_label: fixture.document.session_label,
+    kind: fixture.document.kind,
+    status: fixture.document.status,
+    extraction_fidelity: fixture.document.extraction_fidelity,
+    failure_reason: fixture.document.failure_reason,
+    coverage: fixture.coverage,
+    extraction: { extraction: fixture.extraction },
+    failed_topics: fixture.document.failed_topics,
+    created_at: fixture.document.created_at,
+  };
+
+  // `topic_revisions` really is empty for this topic — that is one of the findings.
+  return buildTopicView({ topic, documents: [document], revisions: [] });
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/* Guards — red against the artifact, green against the good page             */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+describeWithWave4Failure("TopicPageBody — the real Wave 4 failure", () => {
+  it("renders the page at all", () => {
+    render(<TopicPageBody view={wave4View()} />);
+    expect(screen.getByTestId("notes")).toBeInTheDocument();
+    expect(screen.getByTestId("formulas")).toBeInTheDocument();
+    expect(screen.getByTestId("key-terms")).toBeInTheDocument();
+  });
+
+  /**
+   * GUARD 1 — the citation-collapse banner. Delete `CollapseBanner` or weaken
+   * `detectCollapse` and this fails.
+   */
+  it("says at the top that every citation points at one page", () => {
+    render(<TopicPageBody view={wave4View()} />);
+    const banner = screen.getByText(/Every citation on this page points at one page/i);
+    expect(banner).toBeInTheDocument();
+    expect(
+      screen.getByText(/All 20 citations on this page point at the same place/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/out of 48 pages that were read/i)).toBeInTheDocument();
+  });
+
+  /**
+   * GUARD 2 — the coverage map's low-coverage state. `1 of 54 pages mapped · 47 unmapped ·
+   * 6 skipped`, with the three counts named as three different things (the Wave 5
+   * correction) and the whole disclosure marked poor.
+   */
+  it("shows 1-of-54 coverage as a poor state, counting unmapped and skipped separately", () => {
+    render(<TopicPageBody view={wave4View()} />);
+    const map = screen.getByTestId("coverage-map");
+    expect(map.textContent).toContain("1 of 54 pages mapped");
+    expect(map.textContent).toContain("47 unmapped");
+    expect(map.textContent).toContain("6 skipped");
+    expect(map.querySelector('[data-coverage-poor="true"]')).not.toBeNull();
+    expect(
+      screen.getByText(/Most of this document reached no topic page at all/i),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * GUARD 3 — the chips resolve to a real locator. Every one names the document by its
+   * session label and the page it claims, and every one of them says page 2.
+   */
+  it("resolves every provenance chip to the same real locator", () => {
+    const view = wave4View();
+    render(<TopicPageBody view={view} />);
+
+    const chips = screen.getAllByText("Chapter 6 · p. 2");
+    expect(chips.length).toBe(20);
+
+    // Resolved, not broken: page 2 really was read. The defect is that ONLY it was cited.
+    for (const chip of chips) {
+      expect(chip.getAttribute("data-citation-status")).toBe("resolved");
+    }
+    expect(view.provenance.distinctLocatorCount).toBe(1);
+    expect(view.provenance.citationCount).toBe(20);
+  });
+
+  /**
+   * GUARD 4 — the chip tells the reader what is actually on the page it points at. This is
+   * the single most damning detail in the artifact: six formulas sourced to a slide titled
+   * "Topic Goals".
+   */
+  it("names what is on the cited page, which is the objectives slide", () => {
+    render(<TopicPageBody view={wave4View()} />);
+    const chip = screen.getAllByText("Chapter 6 · p. 2")[0];
+    expect(chip?.getAttribute("title")).toBe("On that page: Topic Goals");
+  });
+
+  /** GUARD 5 — `extraction_fidelity`, never rendered anywhere before this component. */
+  it("states the extraction fidelity", () => {
+    render(<TopicPageBody view={wave4View()} />);
+    expect(screen.getByTestId("fidelity").textContent).toContain("read visually");
+  });
+
+  it("has no worked examples, because the merge produced none", () => {
+    render(<TopicPageBody view={wave4View()} />);
+    expect(screen.queryByTestId("worked-examples")).toBeNull();
+  });
+});
+
+describe("TopicPageBody — a well-grounded page", () => {
+  it("renders without any of the pathology affordances", () => {
+    render(<TopicPageBody view={wellGroundedView()} />);
+
+    expect(screen.queryByText(/Every citation on this page points at one page/i)).toBeNull();
+    expect(screen.queryByText(/Some of this page has no source/i)).toBeNull();
+    expect(screen.queryByText(/Most of this document reached no topic page/i)).toBeNull();
+    expect(
+      screen.getByTestId("coverage-map").querySelector('[data-coverage-poor="true"]'),
+    ).toBeNull();
+  });
+
+  it("spreads its citations across the deck", () => {
+    const view = wellGroundedView();
+    render(<TopicPageBody view={view} />);
+
+    expect(view.provenance.collapse).toBeNull();
+    expect(view.provenance.distinctLocatorCount).toBe(6);
+    expect(screen.getByText("Lecture 7 · p. 18")).toBeInTheDocument();
+    expect(screen.getByText("Lecture 7 · p. 27")).toBeInTheDocument();
+  });
+
+  it("marks a corroborated block differently from a singly-sourced one", () => {
+    const { container } = render(<TopicPageBody view={wellGroundedView()} />);
+    expect(container.querySelector('[data-provenance="corroborated"]')).not.toBeNull();
+    expect(container.querySelector('[data-provenance="single"]')).not.toBeNull();
+    expect(container.querySelector('[data-provenance="absent"]')).toBeNull();
+    expect(container.querySelector('[data-provenance="broken"]')).toBeNull();
+  });
+
+  it("still states its coverage rather than staying silent because it is good", () => {
+    render(<TopicPageBody view={wellGroundedView()} />);
+    expect(screen.getByTestId("coverage-map").textContent).toContain("27 of 30 pages mapped");
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/* The two block-level states, forced                                         */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+describe("TopicPageBody — a block that cannot show where it came from", () => {
+  function viewWith(sources: { documentId: string; page: number }[]): TopicView {
+    const good = wellGroundedView();
+    return buildTopicView({
+      topic: {
+        id: TOPIC,
+        course_id: COURSE,
+        title: "T",
+        slug: "t",
+        summary: "",
+        page: {
+          summary: "",
+          notes: [{ id: "orphan", heading: "An unsourced claim", markdown: "Trust me.", sources }],
+          keyTerms: [],
+          formulas: [],
+          workedExamples: [],
+          openQuestions: [],
+        },
+        exam_weight: 0.5,
+        exam_weight_override: null,
+        revision: 1,
+        updated_at: "2026-07-20T10:00:00Z",
+      },
+      documents: [
+        {
+          id: GOOD_DOC,
+          filename: "Sampling Distributions.pdf",
+          session_label: "Lecture 7",
+          kind: "slides",
+          status: "ready",
+          extraction_fidelity: "visual",
+          failure_reason: null,
+          coverage: good.documents[0]?.coverage ?? null,
+          extraction: { extraction: { pages: pages(2, 30) } },
+          failed_topics: [],
+          created_at: "2026-07-20T09:00:00Z",
+        },
+      ],
+      revisions: [],
+    });
+  }
+
+  it("says so in prose when a block cites nothing at all", () => {
+    const { container } = render(<TopicPageBody view={viewWith([])} />);
+    expect(screen.getByText(/Nothing cites this/i)).toBeInTheDocument();
+    expect(container.querySelector('[data-provenance="absent"]')).not.toBeNull();
+    expect(screen.getByText(/1 block cites nothing at all/i)).toBeInTheDocument();
+  });
+
+  it("marks a chip broken when it points at a page the extractor never read", () => {
+    const { container } = render(
+      <TopicPageBody view={viewWith([{ documentId: GOOD_DOC, page: 400 }])} />,
+    );
+    expect(container.querySelector('[data-citation-status="unread-page"]')).not.toBeNull();
+    expect(container.querySelector('[data-provenance="broken"]')).not.toBeNull();
+    expect(
+      screen.getByText(/1 citation points at a page or document this topic never read/i),
+    ).toBeInTheDocument();
+  });
+});

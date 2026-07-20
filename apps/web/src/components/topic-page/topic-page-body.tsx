@@ -127,7 +127,7 @@ export function TopicPageBody({ view }: { view: TopicView }) {
             <Question aria-hidden className="size-4" />
             Open questions
           </h2>
-          {page.openQuestions.map((question, index) => (
+          {page.openQuestions.map((question) => (
             <div
               className="rounded-md border border-warning/40 bg-warning/8 p-3"
               key={`${question.kind}:${question.question}`}
