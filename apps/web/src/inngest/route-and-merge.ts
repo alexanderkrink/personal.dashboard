@@ -55,6 +55,8 @@ import {
   planMergeWork,
   type RoutedSegment,
   type RoutingProposal,
+  type RoutingResolution,
+  resolveRoutingDecisions,
   type Segment,
   type SkippedTarget,
   segmentExtraction,
@@ -93,6 +95,12 @@ export interface RouteAndMergeSummary {
    */
   readonly topicOutcomes: readonly TopicMergeOutcome[];
   readonly segments: number;
+  /**
+   * Distinct segments that reached a merge target. **Not** `topicsTouched`, which counts
+   * topics — a distinction that hid the Wave 4 failure, where 1 segment produced 1 topic and
+   * the summary read as though the document had been processed.
+   */
+  readonly segmentsMerged: number;
   readonly topicsTouched: number;
   readonly topicsCreated: number;
   readonly coercions: number;
@@ -409,16 +417,43 @@ export async function runRouting(input: {
     throw new RoutingDeadLetterError(result.reason, result.message);
   }
 
-  const byKey = new Map(segmentation.segments.map((segment) => [segment.key, segment]));
+  // ── A.3.1: adjudicate the batch BEFORE embedding anything ─────────────────
+  //
+  // `resolveRoutingDecisions` is pure and lives in `@study/core`. It owns three things this
+  // loop used to do inline and got wrong:
+  //
+  //  1. an `assignToTopicId` naming a topic **this same batch is creating**, by title,
+  //     because the schema gives the model no way to name a topic that has no id yet. That
+  //     is the normal shape of routing into an empty course, and reading it as a broken uuid
+  //     is what lost 47 of 48 segments in Wave 4;
+  //  2. an `assignToTopicId` naming nothing at all, which is never followed;
+  //  3. the arity `routingBatchSchema` describes but does not enforce — a segment with no
+  //     decision, or with two.
+  //
+  // Adjudicating first is also what makes the title embeddings correct. The old code chose
+  // which titles to embed with one predicate and which proposals were creates with a
+  // *different* one, then walked the embedding array with a cursor — so a single decision
+  // the two predicates disagreed about mis-paired every vector after it.
+  const resolution = resolveRoutingDecisions({
+    decisions: result.value.decisions,
+    segments: segmentation.segments,
+    knownTopicIds: input.existingTopics.map((topic) => topic.id),
+  });
+
+  await reportRoutingResolution({ admin, userId, documentId, courseId, resolution });
 
   // ── A.4: the deterministic duplicate guard ────────────────────────────────
   //
-  // Every proposed NEW title is embedded and checked. Assignments cost nothing here, so
-  // only the creates are embedded — on a document that routes cleanly into an existing
-  // index that is zero extra tokens.
-  const createTitles = result.value.decisions
-    .filter((decision) => decision.assignToTopicId === null && decision.createNewTitle !== null)
-    .map((decision) => decision.createNewTitle ?? "");
+  // Every proposed NEW title is embedded and checked. Assignments to a real topic cost
+  // nothing here, so only the creates are embedded — on a document that routes cleanly into
+  // an existing index that is zero extra tokens.
+  const createIndexes = resolution.proposals
+    .map((proposal, index) => (proposal.kind === "create" ? index : -1))
+    .filter((index) => index >= 0);
+  const createTitles = createIndexes.map((index) => {
+    const proposal = resolution.proposals[index];
+    return proposal !== undefined && proposal.kind === "create" ? proposal.title : "";
+  });
 
   const titleVectors =
     createTitles.length === 0
@@ -429,40 +464,23 @@ export async function runRouting(input: {
           purpose: "embed-topic-title",
         });
 
-  let titleCursor = 0;
-  const proposals: RoutingProposal[] = [];
-  for (const decision of result.value.decisions) {
-    if (!byKey.has(decision.segmentKey)) {
-      // The model invented or mangled a segment key. Dropping it is right — there is no
-      // segment to merge — but it must be visible, not silent.
-      await logProcessingEvent(admin, {
-        userId,
-        documentId,
-        courseId,
-        step: "route",
-        level: "warn",
-        detail: `Routing returned a decision for an unknown segment "${decision.segmentKey}"; it was ignored.`,
-      });
-      continue;
-    }
+  // Paired by position against the list that was actually sent, not by a cursor walked over
+  // a differently-filtered list.
+  const embeddingByProposal = new Map<number, readonly number[] | null>(
+    createIndexes.map((proposalIndex, i) => [proposalIndex, titleVectors.embeddings[i] ?? null]),
+  );
 
-    const assigned = decision.assignToTopicId;
-    if (assigned !== null && assigned !== "") {
-      proposals.push({ segmentKey: decision.segmentKey, kind: "assign", topicId: assigned });
-      continue;
-    }
-
-    const title = decision.createNewTitle ?? "";
-    const embedding = titleVectors.embeddings[titleCursor] ?? null;
-    titleCursor += 1;
-    proposals.push({
-      segmentKey: decision.segmentKey,
-      kind: "create",
-      title,
-      rationale: decision.rationale,
-      titleEmbedding: embedding,
-    });
-  }
+  const proposals: RoutingProposal[] = resolution.proposals.map((proposal, index) =>
+    proposal.kind === "assign"
+      ? proposal
+      : {
+          segmentKey: proposal.segmentKey,
+          kind: "create",
+          title: proposal.title,
+          rationale: proposal.rationale,
+          titleEmbedding: embeddingByProposal.get(index) ?? null,
+        },
+  );
 
   const existingTitles: ExistingTopicTitle[] = input.existingTopics.map((topic) => ({
     id: topic.id,
@@ -504,6 +522,79 @@ export async function runRouting(input: {
     unaccountedPages: segmentation.unaccountedPages,
     coverageChecked: segmentation.coverageChecked,
   };
+}
+
+/**
+ * Everything the adjudicator changed or could not resolve, in the progress feed.
+ *
+ * The Wave 4 failure was invisible, and that was the whole problem: `planMerges` dropped 47
+ * routed segments through the one branch in the pipeline that logged nothing, while every
+ * sibling branch — unknown segment key, duplicate coercion, unaccounted pages — warned. The
+ * levels below encode which departures are normal and which are faults, because a feed that
+ * warns about the normal path teaches a reader to ignore it.
+ */
+async function reportRoutingResolution(input: {
+  readonly admin: SupabaseAdminClient;
+  readonly userId: string;
+  readonly documentId: string;
+  readonly courseId: string;
+  readonly resolution: RoutingResolution;
+}): Promise<void> {
+  const { resolution } = input;
+  const event = (level: "info" | "warn", detail: string) =>
+    logProcessingEvent(input.admin, {
+      userId: input.userId,
+      documentId: input.documentId,
+      courseId: input.courseId,
+      step: "route",
+      level,
+      detail,
+    });
+
+  // Expected, not a fault: routing a document into a course with no topics produces exactly
+  // this. Recorded at `info` so the grouping is legible without crying wolf.
+  if (resolution.batchLocal.length > 0) {
+    const titles = [...new Set(resolution.batchLocal.map((entry) => entry.title))];
+    await event(
+      "info",
+      `${resolution.batchLocal.length} section${resolution.batchLocal.length === 1 ? " was" : "s were"} routed to ${titles.length} topic${titles.length === 1 ? "" : "s"} this file is creating (${titles.slice(0, 4).join(", ")}${titles.length > 4 ? "…" : ""}).`,
+    );
+  }
+
+  // Faults, each of which used to be silent or fatal-by-omission.
+  for (const entry of resolution.unresolvable) {
+    await event(
+      "warn",
+      `Routing asked to file a section under “${entry.reference}”, which is not a topic in this course and not one this file creates. It was not followed — the section became “${entry.fallbackTitle}” instead.`,
+    );
+  }
+  for (const key of resolution.unknownSegmentKeys) {
+    await event("warn", `Routing returned a decision for an unknown section "${key}"; ignored.`);
+  }
+  if (resolution.duplicateSegmentKeys.length > 0) {
+    await event(
+      "warn",
+      `Routing returned more than one decision for ${resolution.duplicateSegmentKeys.length} section${resolution.duplicateSegmentKeys.length === 1 ? "" : "s"} (${resolution.duplicateSegmentKeys.slice(0, 5).join(", ")}); only the first was used.`,
+    );
+  }
+  if (resolution.segmentsWithoutDecision.length > 0) {
+    await event(
+      "warn",
+      `Routing returned no decision for ${resolution.segmentsWithoutDecision.length} section${resolution.segmentsWithoutDecision.length === 1 ? "" : "s"} (${resolution.segmentsWithoutDecision.slice(0, 8).join(", ")}). Nothing in ${resolution.segmentsWithoutDecision.length === 1 ? "it" : "them"} reached your notes.`,
+    );
+  }
+
+  // N1: the decision array itself, compactly, so the next incident is diagnosable from the
+  // feed instead of from an `input_hash` preimage reconstruction. `ai_generations` stores no
+  // response body and routing decisions are written to no table — which is precisely why
+  // four independent investigations could not settle what the router returned.
+  const digest = resolution.proposals
+    .map((p) => `${p.segmentKey}→${p.kind === "assign" ? p.topicId : `new:${p.title}`}`)
+    .join(", ");
+  await event(
+    "info",
+    `Routing decisions (${resolution.proposals.length}): ${digest.length > 1800 ? `${digest.slice(0, 1800)}…` : digest}`,
+  );
 }
 
 export class RoutingDeadLetterError extends Error {
@@ -1097,6 +1188,30 @@ export async function runRouteAndMerge(input: RouteAndMergeInput): Promise<Route
 
   const targets = planMerges(routing.routed, routing.segments, existingTopics);
 
+  // ── The hard invariant: every segment reaches a merge target ──────────────
+  //
+  // Not a threshold and not a ratio. Segmentation decided what this document is made of, and
+  // anything that does not arrive here is content the student uploaded and will never see.
+  // Wave 4 shipped 1 of 48 with `trustworthy: true` and no warning anywhere, so this is
+  // computed and stated explicitly rather than inferred from a nearby number — note that
+  // `topicsTouched` below counts TOPICS, and the segments-merged figure existed nowhere in
+  // this codebase before it was added here.
+  const segmentsMerged = new Set(
+    targets.flatMap((target) => target.segments.map((segment) => segment.key)),
+  ).size;
+
+  if (segmentsMerged !== routing.segments.length) {
+    const lost = routing.segments.length - segmentsMerged;
+    await logProcessingEvent(admin, {
+      userId,
+      documentId,
+      courseId,
+      step: "route",
+      level: "warn",
+      detail: `${segmentsMerged} of ${routing.segments.length} sections of this file reached a topic. ${lost} ${lost === 1 ? "section" : "sections"} did not, and ${lost === 1 ? "its" : "their"} content is not in your notes.`,
+    });
+  }
+
   // ── Convergence gate (PLAN §5's "Idempotency & re-processing") ─────────────
   //
   // Everything above this line is cheap and deterministic enough to repeat. Everything below
@@ -1184,6 +1299,7 @@ export async function runRouteAndMerge(input: RouteAndMergeInput): Promise<Route
     outcome,
     topicOutcomes,
     segments: routing.segments.length,
+    segmentsMerged,
     topicsTouched: targets.length,
     topicsCreated: created,
     coercions: routing.coercions.length,

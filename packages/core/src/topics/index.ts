@@ -52,6 +52,17 @@ export {
   type SkippedTarget,
 } from "./reprocess";
 export {
+  type BatchLocalAssign,
+  isAssignDecision,
+  isCreateDecision,
+  type ResolvedProposal,
+  type RoutableSegmentLike,
+  type RoutingDecisionLike,
+  type RoutingResolution,
+  resolveRoutingDecisions,
+  type UnresolvableAssign,
+} from "./route-decisions";
+export {
   type ExtractedHeadingLike,
   type ExtractedPageLike,
   type Segment,
