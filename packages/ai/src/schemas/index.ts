@@ -62,6 +62,11 @@ export {
   storedExtractionSchema,
 } from "./documents";
 export {
+  QUICK_ADD_KINDS,
+  type QuickAddParse,
+  quickAddParseSchema,
+} from "./quick-add";
+export {
   ASSESSMENT_KINDS,
   assessmentKindSchema,
   type SyllabusComponent,

@@ -59,6 +59,12 @@ export {
   structureSlideText,
 } from "./jobs/doc-structuring";
 export {
+  type ParseQuickAddOptions,
+  parseQuickAdd,
+  type QuickAddCourse,
+  renderQuickAddCourses,
+} from "./jobs/quick-add";
+export {
   type ExtractSyllabusComponentsOptions,
   extractSyllabusComponents,
 } from "./jobs/syllabus-components";
@@ -136,6 +142,7 @@ export {
   type PromptVarValue,
   promptIdViolation,
 } from "./prompts/index";
+export { QUICK_ADD_SYSTEM, quickAddPrompt } from "./prompts/quick-add";
 export {
   MERGE_CRITIC_SYSTEM,
   mergeCriticPrompt,
