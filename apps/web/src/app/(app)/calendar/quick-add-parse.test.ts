@@ -100,7 +100,7 @@ vi.mock("@/lib/ai/runtime", () => {
           value: state.parse,
           stamp: {
             promptId: "quick-add",
-            promptVersion: 1,
+            promptVersion: 2,
             job: "quick-add",
             provider: "google",
             model: "gemini-3.1-flash-lite",

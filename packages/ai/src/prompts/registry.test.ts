@@ -138,9 +138,13 @@ describe("definePrompt variable typing", () => {
   });
 
   it("keeps variable names inferred rather than erased to unknown", () => {
+    // An id that is NOT a registered prompt's, and a version far from any real one:
+    // `quick-add@2` is now the REAL registered template (prompts/quick-add.ts), and a
+    // fixture sharing its exact id@version with different render text is precisely the
+    // stamp-ambiguity this repo's version rule exists to prevent.
     const prompt = definePrompt({
       id: "quick-add",
-      version: 2,
+      version: 99,
       description: "Fixture proving inference survives the widened constraint.",
       render: (vars: { utterance: string; today: string }) => `${vars.today}: ${vars.utterance}`,
     });

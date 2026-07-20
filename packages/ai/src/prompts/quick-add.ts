@@ -39,7 +39,12 @@ export const quickAddPrompt = definePrompt<{
   courseList: string;
 }>({
   id: "quick-add",
-  version: 1,
+  // v2, not v1: five `quick-add@1` rows already existed in `ai_generations`
+  // (2026-07-19, a Wave 5 working-tree experiment whose ~27-token render was a
+  // different text — this template measures ~570 input tokens). The five-column
+  // stamp cannot tell two texts apart at the same id@version, so this text takes
+  // the next version rather than colliding with rows it did not produce.
+  version: 2,
   description:
     "Natural-language quick-add: one utterance plus today's date, timezone and the course list, parsed into a proposed calendar entry for the confirm card (PLAN §Calendar §6).",
   render: ({

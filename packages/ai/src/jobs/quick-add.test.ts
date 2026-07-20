@@ -15,7 +15,7 @@ import { parseQuickAdd, renderQuickAddCourses } from "./quick-add";
 
 const STAMP: AIGenerationStamp = {
   promptId: "quick-add",
-  promptVersion: 1,
+  promptVersion: 2,
   job: "quick-add",
   provider: "google",
   model: "gemini-3.1-flash-lite",
@@ -90,7 +90,9 @@ describe("parseQuickAdd — the binding", () => {
       system: string;
     };
     expect(call.prompt.id).toBe("quick-add");
-    expect(call.prompt.version).toBe(1);
+    // v2: `quick-add@1` was already burned by pre-wave rows carrying a different
+    // rendered text (see prompts/quick-add.ts). Ran red against version: 1.
+    expect(call.prompt.version).toBe(2);
     expect(call.kind).toBe("interactive");
     expect(call.system).toContain("NEVER invent a date");
     // The caller's clock, verbatim — the model has no other today to resolve "friday" from.

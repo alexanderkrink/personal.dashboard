@@ -164,7 +164,9 @@ describe.skipIf(!enabled)("quick-add live parse (metered)", () => {
     const row = rows.data?.find((candidate) => candidate.outcome === "success");
     expect(row).toBeDefined();
     expect(row?.prompt_id).toBe("quick-add");
-    expect(row?.prompt_version).toBe(1);
+    // v2: `quick-add@1` carries pre-wave rows rendered from a different (working-tree)
+    // text; the registered template starts at 2 so its rows are unambiguous.
+    expect(row?.prompt_version).toBe(2);
     expect(row?.provider).toBe("google");
     expect(row?.model).toBe("gemini-3.1-flash-lite");
     expect(row?.cost_usd ?? 0).toBeGreaterThan(0);
