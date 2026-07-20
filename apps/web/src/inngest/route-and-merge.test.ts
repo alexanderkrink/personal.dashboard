@@ -110,6 +110,49 @@ class FakeDb {
     return null;
   }
 
+  /**
+   * `create_topic_with_first_revision`, transcribed from the migration.
+   *
+   * Both inserts or neither — that atomicity is the whole point of the function, so a fake
+   * that did them independently would test the opposite of the invariant. The revision is 0
+   * (the empty page the create superseded), which is what keeps every later revision number
+   * free; see the migration for why the `createAuditTopic` precedent at revision 1 is wrong.
+   */
+  createTopicWithFirstRevision(args: Row): { data: string | null; error: PgError | null } {
+    const topicId = `generated-topics-${this.rows("topics").length + 1}`;
+    const topic: Row = {
+      id: topicId,
+      user_id: args.p_user_id,
+      course_id: args.p_course_id,
+      title: args.p_title,
+      slug: args.p_slug,
+      summary: args.p_summary,
+      page: args.p_page,
+      revision: 1,
+    };
+    const revision: Row = {
+      user_id: args.p_user_id,
+      topic_id: topicId,
+      revision: 0,
+      page: args.p_previous_page,
+      change_summary: args.p_change_summary,
+      source: "merge",
+      needs_review: args.p_needs_review,
+      review_notes: args.p_review_notes ?? [],
+      document_id: args.p_document_id,
+      prompt_id: args.p_prompt_id,
+      prompt_version: args.p_prompt_version,
+      provider: args.p_provider,
+      model: args.p_model,
+      input_hash: args.p_input_hash,
+    };
+
+    const rejected = this.insert("topic_revisions", revision);
+    if (rejected !== null) return { data: null, error: rejected };
+    this.rows("topics").push(topic);
+    return { data: topicId, error: null };
+  }
+
   upsert(table: string, row: Row, onConflict: readonly string[]): PgError | null {
     const existing = this.rows(table).find((candidate) =>
       onConflict.every((column) => candidate[column] === row[column]),
@@ -306,6 +349,8 @@ const llmCalls: string[] = [];
 let failMergeFor = new Set<string>();
 /** Topics whose merge fake emits a note block carrying NO citation of this document. */
 let uncitedMergeFor = new Set<string>();
+/** Topics whose merge fake returns a page far larger than the segments it was given. */
+let bloatedMergeFor = new Set<string>();
 let db: FakeDb;
 
 const BASE_ENV = {
@@ -419,7 +464,11 @@ vi.mock("@/lib/ai/runtime", () => ({
           title,
           page: {
             ...EMPTY_PAGE,
-            summary: `${title} merged from ${String(vars.documentLabel)}`,
+            summary: bloatedMergeFor.has(title)
+              ? // The Wave 4 ratio, reproduced: a page an order of magnitude larger than the
+                // material it was built from. The fixture's segments are ~40 characters.
+                `${title}: ${"correct-looking statistics ".repeat(200)}`
+              : `${title} merged from ${String(vars.documentLabel)}`,
             notes: uncitedMergeFor.has(title)
               ? [{ id: "orphan", heading: "Orphan", markdown: "content", sources: [] }]
               : [],
@@ -444,6 +493,7 @@ beforeEach(() => {
   llmCalls.length = 0;
   failMergeFor = new Set();
   uncitedMergeFor = new Set();
+  bloatedMergeFor = new Set();
   db = new FakeDb();
   db.rows("documents").push({ id: DOCUMENT, user_id: USER, extraction: EXTRACTION });
   for (const [id, title] of [
@@ -469,6 +519,12 @@ const pass = () =>
   runRouteAndMerge({
     admin: {
       from: (table: string) => new Query(db, table),
+      rpc: (name: string, args: Row) => {
+        if (name !== "create_topic_with_first_revision") {
+          throw new Error(`fake db has no rpc ${name}`);
+        }
+        return Promise.resolve(db.createTopicWithFirstRevision(args));
+      },
     } as unknown as SupabaseAdminClient,
     userId: USER,
     documentId: DOCUMENT,
@@ -485,6 +541,100 @@ const revisionOf = (topicId: string) =>
 /* ────────────────────────────────────────────────────────────────────────── */
 /* The tests                                                                  */
 /* ────────────────────────────────────────────────────────────────────────── */
+
+describe("runRouteAndMerge — a created topic carries its review flag", () => {
+  /**
+   * The defect, restated as code.
+   *
+   * `needs_review` is a column on `topic_revisions` and on no other table. The create branch
+   * used to insert the topic and return — so on every FIRST merge, `verified.needsReview`
+   * was computed and thrown away, along with the findings behind it.
+   *
+   * That is exactly inverted. The grounding checks and the expansion-ratio gate were built
+   * for the Wave 4 failure: a thin input producing an ungrounded, newly created topic in a
+   * course with no topics. The create path. The page most likely to be wrong was the only
+   * one that could not be flagged.
+   */
+  function legacyCreate(db_: FakeDb, args: Row): string {
+    // What the old branch did: the topic, and nothing else.
+    const topicId = `legacy-topic-${db_.rows("topics").length + 1}`;
+    db_.rows("topics").push({
+      id: topicId,
+      user_id: args.p_user_id,
+      course_id: args.p_course_id,
+      title: args.p_title,
+      slug: args.p_slug,
+      summary: args.p_summary,
+      page: args.p_page,
+      revision: 1,
+    });
+    return topicId;
+  }
+
+  it("RED: the old create branch left no row anywhere to carry the flag", () => {
+    const legacyDb = new FakeDb();
+    legacyCreate(legacyDb, {
+      p_user_id: USER,
+      p_course_id: COURSE,
+      p_title: "Gamma",
+      p_slug: "gamma",
+      p_summary: "s",
+      p_page: EMPTY_PAGE,
+      // The verifier said this page needs review. There is nowhere to put that.
+      p_needs_review: true,
+      p_review_notes: ["[grounding] This page is 21× the size of the material…"],
+    });
+
+    expect(legacyDb.rows("topics")).toHaveLength(1);
+    expect(legacyDb.rows("topic_revisions")).toEqual([]);
+
+    // The flag and its reasons exist nowhere durable. A `warn` processing event is
+    // document-scoped; no topic page can read it.
+    const flagged = legacyDb.rows("topic_revisions").filter((row) => row.needs_review === true);
+    expect(flagged).toEqual([]);
+  });
+
+  it("GREEN: a flagged create writes a revision-0 row carrying needs_review and why", async () => {
+    bloatedMergeFor = new Set(["Gamma"]);
+
+    const summary = await pass();
+
+    // Gamma is the created topic in this fixture.
+    const created = db.rows("topics").find((row) => row.title === "Gamma");
+    expect(created).toBeDefined();
+
+    const revisions = db.rows("topic_revisions").filter((row) => row.topic_id === created?.id);
+    expect(revisions).toHaveLength(1);
+
+    const first = revisions[0];
+    // Revision 0 — the empty page this create superseded — so the next merge's snapshot at
+    // revision 1 does not collide with it.
+    expect(first?.revision).toBe(0);
+    expect(first?.needs_review).toBe(true);
+    expect(first?.review_notes).toEqual(
+      expect.arrayContaining([expect.stringContaining("[grounding]")]),
+    );
+    const notes = (first?.review_notes ?? []) as string[];
+    expect(notes.join(" ")).toContain("is not summarising it");
+
+    const gamma = summary.topicOutcomes.find((outcome) => outcome.topicKey === created?.id);
+    expect(gamma ?? { needsReview: true }).toMatchObject({ needsReview: true });
+  });
+
+  it("a clean create still writes its revision row, unflagged", async () => {
+    await pass();
+
+    const created = db.rows("topics").find((row) => row.title === "Gamma");
+    const first = db.rows("topic_revisions").find((row) => row.topic_id === created?.id);
+
+    // The row is the invariant, not the flag: a topic never exists without its first
+    // revision, whether or not anything was wrong with it.
+    expect(first).toBeDefined();
+    expect(first?.revision).toBe(0);
+    expect(first?.needs_review).toBe(false);
+    expect(first?.review_notes).toEqual([]);
+  });
+});
 
 describe("runRouteAndMerge — the critic actually gates", () => {
   /**
@@ -539,8 +689,12 @@ describe("runRouteAndMerge — the first pass", () => {
     expect(revisionOf(TOPIC_ALPHA)).toBe(2);
     expect(revisionOf(TOPIC_BETA)).toBe(2);
 
-    // Creates write no snapshot — there is no prior page to preserve.
-    expect(db.rows("topic_revisions")).toHaveLength(2);
+    // Two updates and one create. Until Wave 5 this read `toHaveLength(2)` under the
+    // comment "creates write no snapshot — there is no prior page to preserve", which
+    // PINNED the defect: `needs_review` lives only on `topic_revisions`, so a create
+    // writing none discarded its own review flag. The snapshot IS the prior page — the
+    // empty one, at revision 0.
+    expect(db.rows("topic_revisions")).toHaveLength(3);
     expect(db.rows("topic_sources")).toHaveLength(3);
   });
 
@@ -593,7 +747,7 @@ describe("runRouteAndMerge — a second pass over the same document", () => {
     await pass();
 
     expect(countOf("topic-merge")).toBe(0);
-    expect(db.rows("topic_revisions")).toHaveLength(2);
+    expect(db.rows("topic_revisions")).toHaveLength(3);
     expect(revisionOf(TOPIC_ALPHA)).toBe(2);
   });
 
@@ -639,7 +793,7 @@ describe("runRouteAndMerge — the mid-loop retry", () => {
 
     expect(revisionOf(TOPIC_ALPHA)).toBe(2);
     expect(revisionOf(TOPIC_BETA)).toBe(2);
-    expect(db.rows("topic_revisions")).toHaveLength(2);
+    expect(db.rows("topic_revisions")).toHaveLength(3);
     expect(db.rows("topic_sources")).toHaveLength(3);
 
     expect(second.outcome.status).toBe("ready");
@@ -649,7 +803,7 @@ describe("runRouteAndMerge — the mid-loop retry", () => {
     llmCalls.length = 0;
     await pass();
     expect(countOf("topic-merge")).toBe(0);
-    expect(db.rows("topic_revisions")).toHaveLength(2);
+    expect(db.rows("topic_revisions")).toHaveLength(3);
     expect(revisionOf(TOPIC_BETA)).toBe(2);
   });
 

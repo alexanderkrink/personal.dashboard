@@ -932,27 +932,58 @@ async function persistTopicMerge(input: {
   if (topicId === null) {
     const slug = slugFor(verified.merge.title || target.title, input.takenSlugs);
     createdSlug = slug;
-    const { data, error } = await admin
-      .from("topics")
-      .insert({
-        user_id: userId,
-        course_id: courseId,
-        title: verified.merge.title || target.title,
-        slug,
-        summary: page.summary,
-        page,
-        revision: 1,
-        ...(input.summaryEmbedding === null
-          ? {}
-          : { summary_embedding: toStoredVector(input.summaryEmbedding) }),
-      })
-      .select("id")
-      .single();
 
-    if (error || data === null) {
+    // ── Topic AND its revision-0 snapshot, in ONE statement ──────────────────
+    //
+    // Not two calls in careful order. `needs_review` lives on `topic_revisions` and nowhere
+    // else, so until Wave 5 the create branch inserted the topic, returned, and threw
+    // `verified.needsReview` away — including the grounding findings and the expansion-ratio
+    // gate, both of which exist specifically to catch a thin-input ungrounded NEW topic.
+    // The path most likely to produce a bad page was the only one that could not be flagged.
+    //
+    // Two PostgREST calls are two transactions and can be interrupted between them, which is
+    // how a topic ends up existing without the revision carrying its flag. The invariant is
+    // therefore in the database: `create_topic_with_first_revision` does both inserts or
+    // neither. See its migration for why revision 0 rather than 1.
+    const { data, error } = await admin.rpc("create_topic_with_first_revision", {
+      p_user_id: userId,
+      p_course_id: courseId,
+      p_title: verified.merge.title || target.title,
+      p_slug: slug,
+      p_summary: page.summary,
+      p_page: page,
+      // The page this create superseded. Empty, and supplied by the app rather than invented
+      // in SQL so the two never drift.
+      p_previous_page: EMPTY_TOPIC_PAGE,
+      p_change_summary: verified.merge.changeSummary,
+      p_needs_review: verified.needsReview,
+      p_review_notes: [...verified.findings],
+      p_document_id: documentId,
+      p_prompt_id: stamp.promptId,
+      p_prompt_version: stamp.promptVersion,
+      p_provider: stamp.provider,
+      p_model: stamp.model,
+      p_input_hash: stamp.inputHash,
+    });
+
+    if (error !== null || data === null) {
       throw new Error(`Could not create topic “${target.title}”: ${error?.message ?? "no row"}`);
     }
-    topicId = data.id;
+    topicId = data;
+
+    // The routing vector is applied separately and is deliberately allowed to fail: PLAN §7
+    // puts embedding failures on the `partial` path, and keeping it out of the atomic pair
+    // above means a Voyage outage cannot cost a topic its revision row.
+    if (input.summaryEmbedding !== null) {
+      const { error: vectorError } = await admin
+        .from("topics")
+        .update({ summary_embedding: toStoredVector(input.summaryEmbedding) })
+        .eq("id", topicId)
+        .eq("user_id", userId);
+      if (vectorError !== null) {
+        console.error(`[route-and-merge] summary vector not stored for ${topicId}:`, vectorError);
+      }
+    }
   } else {
     // (1) history first — see the ordering note above.
     const { error: revisionError } = await admin.from("topic_revisions").insert({
@@ -963,6 +994,9 @@ async function persistTopicMerge(input: {
       change_summary: verified.merge.changeSummary,
       source: "merge",
       needs_review: verified.needsReview,
+      // Why it was flagged, not just that it was. The verifier already renders these for a
+      // person; before Wave 5 they were computed and dropped on both branches.
+      review_notes: [...verified.findings],
       document_id: documentId,
       prompt_id: stamp.promptId,
       prompt_version: stamp.promptVersion,

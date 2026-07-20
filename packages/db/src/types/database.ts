@@ -915,6 +915,7 @@ export type Database = {
           prompt_id: string
           prompt_version: number
           provider: string
+          review_notes: string[]
           revision: number
           source: string
           topic_id: string
@@ -932,6 +933,7 @@ export type Database = {
           prompt_id: string
           prompt_version: number
           provider: string
+          review_notes?: string[]
           revision: number
           source?: string
           topic_id: string
@@ -949,6 +951,7 @@ export type Database = {
           prompt_id?: string
           prompt_version?: number
           provider?: string
+          review_notes?: string[]
           revision?: number
           source?: string
           topic_id?: string
@@ -1142,6 +1145,27 @@ export type Database = {
       confirm_syllabus_extraction: {
         Args: { p_extraction_id: string }
         Returns: undefined
+      }
+      create_topic_with_first_revision: {
+        Args: {
+          p_change_summary: string
+          p_course_id: string
+          p_document_id: string
+          p_input_hash: string
+          p_model: string
+          p_needs_review: boolean
+          p_page: Json
+          p_previous_page: Json
+          p_prompt_id: string
+          p_prompt_version: number
+          p_provider: string
+          p_review_notes: string[]
+          p_slug: string
+          p_summary: string
+          p_title: string
+          p_user_id: string
+        }
+        Returns: string
       }
       match_chunks: {
         Args: {
