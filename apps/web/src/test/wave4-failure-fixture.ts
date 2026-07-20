@@ -155,6 +155,27 @@ export function hasWave4Failure(): boolean {
   return existsSync(join(FIXTURE_DIR, "topic.json"));
 }
 
+/**
+ * A frozen prompt preimage — the exact rendered string a model was sent on the failing run.
+ *
+ * These files are the Wave 4 evidence in its most durable form. `input_hash` is
+ * `sha256(`${id}@${version}\n${rendered}`)`, so a stored hash is only a receipt for as long
+ * as the preimage that produced it survives. Reconstructing the preimage from *today's*
+ * templates worked in Wave 5 and will stop working the moment any prompt is edited — at
+ * which point the obvious repair is to update the expected hash, which would silently
+ * destroy the evidence rather than preserve it.
+ *
+ * So the rendered strings are frozen on disk beside the rest of the corpus, and the receipt
+ * is asserted against them rather than against the live templates.
+ *
+ * ⚠ **Never regenerate these files to make a test pass.** A live template that no longer
+ * reproduces one of them means the template moved on, which is fine and expected — record a
+ * NEW receipt under the new version. Editing an old one falsifies history.
+ */
+export function loadPreimage(name: "topic-routing-v1" | "topic-merge-v1"): string {
+  return readFileSync(join(FIXTURE_DIR, `preimage-${name}.txt`), "utf8");
+}
+
 function readJson<T>(name: string): T {
   return JSON.parse(readFileSync(join(FIXTURE_DIR, name), "utf8")) as T;
 }

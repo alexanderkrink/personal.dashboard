@@ -95,12 +95,37 @@ export function renderRoutableSegments(segments: readonly RoutableSegment[]): st
     .join("\n\n---\n\n");
 }
 
-/** Renders routed segment text for the merge and critic calls. */
+/**
+ * Renders routed segment text for the merge and critic calls.
+ *
+ * The page range is stated in the header as well as inline. Each page already carries its own
+ * `[p.N]` marker inside `markdown` (`segment.ts`), so the range is redundant for a reader
+ * that tracks them — and that is exactly the assumption worth not making. A merger that
+ * summarises a seven-slide run into one block has to choose which pages to cite, and an
+ * explicit "covers pp. 22–28" is the difference between citing the run and citing whichever
+ * marker it happened to read last. `fromPage`/`toPage` are optional because the critic and
+ * the tests both pass bare `{key, title, markdown}` triples.
+ */
 export function renderMergeSegments(
-  segments: readonly { readonly key: string; readonly title: string; readonly markdown: string }[],
+  segments: readonly {
+    readonly key: string;
+    readonly title: string;
+    readonly markdown: string;
+    readonly fromPage?: number;
+    readonly toPage?: number;
+  }[],
 ): string {
   return segments
-    .map((segment) => `### ${segment.title}\n\n${segment.markdown}`)
+    .map((segment) => {
+      const { fromPage, toPage } = segment;
+      const range =
+        fromPage === undefined
+          ? ""
+          : toPage === undefined || toPage === fromPage
+            ? ` (covers p. ${fromPage})`
+            : ` (covers pp. ${fromPage}–${toPage})`;
+      return `### ${segment.title}${range}\n\n${segment.markdown}`;
+    })
     .join("\n\n---\n\n");
 }
 
@@ -168,6 +193,8 @@ export interface MergeTopicOptions {
     readonly key: string;
     readonly title: string;
     readonly markdown: string;
+    readonly fromPage?: number;
+    readonly toPage?: number;
   }[];
 }
 

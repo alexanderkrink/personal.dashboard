@@ -806,6 +806,41 @@ flowchart LR
 - Every call goes through `packages/ai` and stamps its artifacts with
   `prompt_id, prompt_version, provider, model, input_hash` (see [AI strategy §3](#ai-strategy)).
 
+  > ⚠ **CORRECTED 2026-07-20 (Wave 5 Agent 1) — the five-column stamp UNDER-DETERMINES the
+  > model contract. Two calls can be stamped byte-identically while sending materially
+  > different requests.**
+  >
+  > `runtime.ts` computes `input_hash = sha256(`${prompt.id}@${prompt.version}\n${rendered}`)`
+  > (plus file digests). **The Zod output schema is not an input to that hash.** But the
+  > schema is a first-class part of the request: it is compiled to a tool/response schema and
+  > sent to the provider, and by `packages/ai/src/schemas/index.ts`'s own stated rule the
+  > `.describe()` text on it *"steers more than the template does"*. So a change to a
+  > `.describe()` — say, adding *"If no source you were given states it, do not state it
+  > either"* to `topicFormulaSchema.sources` — changes what the model is asked to do, changes
+  > its output distribution, changes token cost, and leaves **every one of the five columns
+  > identical**.
+  >
+  > Found the hard way, in this wave. Wave 5 declined a set of `topic-merge` prompt-text
+  > improvements specifically to keep the Wave 4 `input_hash` receipts reproducing, and then
+  > added steering `.describe()` text to that same prompt's output schema — spending the
+  > receipt's substance through the one channel the receipt cannot observe. The trade was not
+  > self-consistent, and nothing in the type system, the runtime or CI could have said so.
+  >
+  > **Consequence:** a cost or quality regression traced through the stamp is *unattributable*
+  > whenever a schema moved without a version bump. `prompt_version` is the only thing
+  > standing between two contracts, and it is bumped by a human remembering a convention.
+  >
+  > **Fixed here only by hand:** `topicMergePrompt` and `topicMergeRepairPrompt` are bumped
+  > 1 → 2 alongside the schema change, so the 7 historical `topic-merge@1` rows all describe
+  > one contract. That is a correction to one instance, **not** a fix to the gap.
+  >
+  > **Recommended, deliberately NOT implemented here** — it is cross-cutting, touches every
+  > stamped artifact and every historical row's comparability, and belongs to its own wave:
+  > fold a digest of the compiled response schema into `input_hash`, or add a sixth
+  > `schema_hash` column. The sixth column is probably better: it keeps `input_hash` meaning
+  > "the same words" and makes "the same contract" separately queryable, and it can be
+  > backfilled as null rather than invalidating every existing hash.
+
 ---
 
 ## Core features
@@ -1646,6 +1681,17 @@ the complete new `TopicPage`, a `changeSummary`, and per-block `sources`. Prompt
   Existing content may only be *removed* if superseded, and the change summary must say so.
 - **Preserve source attribution:** untouched blocks keep their `sources`; edited/new blocks
   must cite this document's locators.
+  > ⚠ **CORRECTED 2026-07-20 (Wave 5 Agent 1) — this bullet is document-granular, and
+  > `TOPIC_MERGE_SYSTEM` rule 2 was transcribed from it that way ("A new block cites this
+  > document"). A locator is a PAGE.** The distinction is not pedantic: the Wave 4 page
+  > satisfied this bullet completely — all 20 citations named the right document — while
+  > pointing every one of them at a single slide that contains none of the material. Rule 2
+  > now says page by page, requires a block drawn from three slides to cite all three, and
+  > states the consequence a document-granular rule cannot: a citation a student clicks and
+  > finds nothing behind is worse than no citation, because it teaches them the citations are
+  > noise. `renderMergeSegments` also now states each segment's range explicitly ("covers
+  > pp. 22–28") rather than relying on the merger to track the inline `[p.N]` markers.
+  > `topicMergePrompt` and `topicMergeRepairPrompt` 1 → 2.
 - **Conflicts are surfaced, not resolved silently:** if the new material contradicts the
   page (different formula convention, corrected claim), the model keeps the better-supported
   version *and* records an `openQuestions` entry of `kind: 'conflict'` citing both sources.

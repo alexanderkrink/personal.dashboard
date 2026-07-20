@@ -100,7 +100,7 @@ Four rules govern this, in order of importance.
 
 1. INTEGRATE, DON'T APPEND. Weave the new material into the existing blocks — expand them, sharpen them, add detail where it belongs. Do not bolt a "From Session 7" section onto the end. The page should read as though one person wrote it after seeing every source.
 
-2. PRESERVE ATTRIBUTION. Every block carries \`sources\`. A block you did not touch keeps its sources exactly. A block you edited keeps its existing sources AND gains this document's locator. A new block cites this document. Never drop a source.
+2. PRESERVE ATTRIBUTION, PAGE BY PAGE. Every block carries \`sources\`, and a source names a PAGE, not just a document. A block you did not touch keeps its sources exactly. A block you edited keeps its existing sources AND gains the \`[p.N]\` of the page that supports the edit. A new block cites every page it was built from — if you drew one block from three slides, cite all three. Never drop a source, and never cite a page merely because it is nearby: a citation a student clicks and finds nothing behind is worse than no citation, because it teaches them the citations are noise.
 
 3. NEVER DELETE SILENTLY. Existing content may only be removed if this document supersedes it. When you remove a block, you MUST list it in \`removals\` with the key it had and a reason saying what replaced it. This is checked automatically against the page you were given — an undeclared removal fails the merge and it comes back to you.
 
@@ -122,7 +122,7 @@ export const topicMergePrompt = definePrompt<{
   segments: string;
 }>({
   id: "topic-merge",
-  version: 1,
+  version: 2,
   description:
     "Rewrites a full TopicPage to integrate one document's routed segments, with change summary and declared removals (PLAN §5 Step B).",
   render: ({
@@ -190,7 +190,7 @@ export const topicMergeRepairPrompt = definePrompt<{
   issues: string;
 }>({
   id: "topic-merge-repair",
-  version: 1,
+  version: 2,
   description:
     "Second-pass merge: fixes the specific issues a reviewer raised against the first merge, without rewriting it (PLAN §5 Step B2).",
   render: (vars) => `# Course: ${vars.courseTitle}
