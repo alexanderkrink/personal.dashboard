@@ -1,6 +1,6 @@
 "use client";
 
-import { Desktop, Moon, Sun } from "@phosphor-icons/react";
+import { CalendarPlus, Desktop, Moon, Sun } from "@phosphor-icons/react";
 import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import { useCallback } from "react";
@@ -18,17 +18,23 @@ import {
 /**
  * The global ⌘K palette (PLAN.md "Navigation").
  *
- * PLAN groups the palette as Actions / Search / Navigate. M1 ships **Navigate**
- * and **Appearance** only: semantic Search lands with the document pipeline
- * (Wave 3) and quick-add Actions with the deadline model — a group that returns
- * nothing is worse than a group that isn't there yet.
+ * PLAN groups the palette as Actions / Search / Navigate. **Actions** opened
+ * with CAL-3's natural-language quick-add — the palette is how "add to
+ * calendar" is reachable from anywhere, per §6's "⌘K from anywhere". Semantic
+ * Search still lands with the document pipeline.
+ *
+ * Actions come FIRST: someone who opens the palette to do something should not
+ * scan past five navigation rows to find the verb.
  */
 export function CommandPalette({
   open,
   onOpenChange,
+  onQuickAdd,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Opens the quick-add dialog. The palette closes itself first — one modal at a time. */
+  onQuickAdd: () => void;
 }) {
   const router = useRouter();
   const { setTheme } = useTheme();
@@ -49,18 +55,36 @@ export function CommandPalette({
     [onOpenChange, setTheme],
   );
 
+  const quickAdd = useCallback(() => {
+    onOpenChange(false);
+    onQuickAdd();
+  }, [onOpenChange, onQuickAdd]);
+
   return (
     <CommandDialog
       open={open}
       onOpenChange={onOpenChange}
       title="Command palette"
-      description="Jump to a section or change the appearance."
+      description="Add to your calendar, jump to a section or change the appearance."
     >
-      <CommandInput placeholder="Jump to…" />
+      <CommandInput placeholder="Type a command or jump to…" />
       <CommandList>
         <CommandEmpty className="text-muted-foreground text-ui-base">
           Nothing matches that yet. Search across your documents arrives with the pipeline.
         </CommandEmpty>
+        <CommandGroup heading="Actions">
+          <CommandItem
+            value="Add to calendar quick add deadline task natural language"
+            onSelect={quickAdd}
+          >
+            <CalendarPlus aria-hidden="true" />
+            <span>Add to calendar…</span>
+            <span className="ml-auto text-muted-foreground text-ui-xs">
+              “essay due friday 23:59”
+            </span>
+          </CommandItem>
+        </CommandGroup>
+        <CommandSeparator />
         <CommandGroup heading="Navigate">
           {NAV_ITEMS.map((item) => {
             const Icon = item.icon;

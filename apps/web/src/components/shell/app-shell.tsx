@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { QuickAddDialog } from "@/components/calendar/quick-add-dialog";
 import { AppSidebar } from "@/components/shell/app-sidebar";
 import { CommandPalette } from "@/components/shell/command-palette";
 import { FOCUS_RING } from "@/components/shell/focus-ring";
@@ -27,6 +28,9 @@ export function AppShell({ email, children }: { email: string | null; children: 
   const [collapsed, setCollapsed] = useState(false);
   const [ready, setReady] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // §6: quick-add is "⌘K from anywhere", so its dialog lives here in the shell —
+  // the one client component that exists on every signed-in route.
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
 
   useEffect(() => {
     setCollapsed(window.localStorage.getItem(COLLAPSE_STORAGE_KEY) === "true");
@@ -54,6 +58,7 @@ export function AppShell({ email, children }: { email: string | null; children: 
   }, []);
 
   const openPalette = useCallback(() => setPaletteOpen(true), []);
+  const openQuickAdd = useCallback(() => setQuickAddOpen(true), []);
 
   return (
     <TooltipProvider>
@@ -91,7 +96,12 @@ export function AppShell({ email, children }: { email: string | null; children: 
         </div>
 
         <MobileTabBar />
-        <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+        <CommandPalette
+          open={paletteOpen}
+          onOpenChange={setPaletteOpen}
+          onQuickAdd={openQuickAdd}
+        />
+        <QuickAddDialog open={quickAddOpen} onOpenChange={setQuickAddOpen} />
         <Toaster />
       </div>
     </TooltipProvider>

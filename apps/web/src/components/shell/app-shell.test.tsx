@@ -15,6 +15,18 @@ vi.mock("next/navigation", () => ({
 
 vi.mock("@/app/auth/actions", () => ({ signOut: vi.fn() }));
 
+// The quick-add dialog hangs off the shell (CAL-3: "⌘K from anywhere"), and its action
+// modules transitively import `@/env` — which throws in a test process, same reason
+// `@/app/auth/actions` is mocked above. The actions themselves are covered by
+// `quick-add-parse.test.ts`; here they only need to exist.
+vi.mock("@/app/(app)/calendar/quick-add-parse", () => ({
+  parseQuickAddUtterance: vi.fn(async () => ({ status: "idle" })),
+  listQuickAddCourses: vi.fn(async () => []),
+}));
+vi.mock("@/app/(app)/calendar/item-actions", () => ({
+  createQuickAddItem: vi.fn(async () => ({ status: "idle" })),
+}));
+
 describe("AppShell", () => {
   beforeEach(() => {
     usePathname.mockReturnValue("/");
@@ -45,13 +57,17 @@ describe("AppShell", () => {
     const user = userEvent.setup();
     renderShell();
 
-    expect(screen.queryByPlaceholderText("Jump to…")).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Type a command or jump to…")).not.toBeInTheDocument();
 
     await user.keyboard("{Meta>}k{/Meta}");
-    await waitFor(() => expect(screen.getByPlaceholderText("Jump to…")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByPlaceholderText("Type a command or jump to…")).toBeInTheDocument(),
+    );
 
     await user.keyboard("{Meta>}k{/Meta}");
-    await waitFor(() => expect(screen.queryByPlaceholderText("Jump to…")).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByPlaceholderText("Type a command or jump to…")).not.toBeInTheDocument(),
+    );
   });
 
   it("opens the palette from the top-bar trigger too", async () => {
@@ -59,7 +75,25 @@ describe("AppShell", () => {
     renderShell();
 
     await user.click(screen.getByRole("button", { name: /Open the command palette/ }));
-    await waitFor(() => expect(screen.getByPlaceholderText("Jump to…")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByPlaceholderText("Type a command or jump to…")).toBeInTheDocument(),
+    );
+  });
+
+  it("reaches natural-language quick-add from the palette — ⌘K from anywhere (§6)", async () => {
+    const user = userEvent.setup();
+    renderShell();
+
+    await user.keyboard("{Meta>}k{/Meta}");
+    await user.click(await screen.findByText("Add to calendar…"));
+
+    // The palette hands off to the quick-add dialog: NL input on top, the
+    // structured form — the §6 floor — beneath it, all before any navigation.
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "Add to calendar" })).toBeInTheDocument(),
+    );
+    expect(screen.getByLabelText("Say it in one line")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Add to calendar/ })).toBeInTheDocument();
   });
 
   it("persists the sidebar collapse state", async () => {

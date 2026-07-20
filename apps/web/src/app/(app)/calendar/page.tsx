@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import { createFeed, updateFeed } from "@/app/(app)/calendar/actions";
 import { FeedCreateForm } from "@/components/calendar/feed-form";
 import { FeedRow, type FeedView } from "@/components/calendar/feed-row";
-import { QuickAddForm } from "@/components/calendar/quick-add-form";
+import { NlQuickAdd } from "@/components/calendar/nl-quick-add";
 import { ThisWeek } from "@/components/calendar/this-week";
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/page-header";
@@ -101,9 +101,10 @@ export default async function CalendarPage() {
         <h2 className="mb-1 font-medium text-foreground text-ui-base">Add something yourself</h2>
         <p className="mb-4 text-muted-foreground text-ui-sm">
           For anything the university feed doesn’t carry — a reading, a group meeting, a
-          self-imposed deadline.
+          self-imposed deadline. Say it in one line and check the form it fills in, or fill the form
+          in yourself.
         </p>
-        <QuickAddForm courses={courses ?? []} />
+        <NlQuickAdd courses={courses ?? []} />
       </section>
 
       {feedViews.length > 0 ? (
