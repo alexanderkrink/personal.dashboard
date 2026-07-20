@@ -15,9 +15,11 @@ import { type AIGenerationRecord, createAIRuntime, sha256Hex } from "./runtime";
  */
 
 const generateObject = vi.hoisted(() => vi.fn());
+const streamText = vi.hoisted(() => vi.fn());
 vi.mock("ai", async (importOriginal) => ({
   ...(await importOriginal<typeof import("ai")>()),
   generateObject,
+  streamText,
 }));
 
 /** A complete `LanguageModelUsage`. The AI SDK requires the detail sub-objects. */
@@ -87,8 +89,17 @@ function refusal() {
   });
 }
 
+/** A prose prompt, for the streaming path. Its id is the job that runs it, per §3. */
+const chatPrompt = definePrompt<{ q: string }>({
+  id: "chat-rag",
+  version: 1,
+  description: "Test fixture for the streaming path.",
+  render: ({ q }) => `Answer: ${q}`,
+});
+
 beforeEach(() => {
   generateObject.mockReset();
+  streamText.mockReset();
 });
 
 describe("the five-column stamp is assembled by the wrapper", () => {
@@ -356,37 +367,203 @@ describe("the kill switch and the budget guard stop spend before it happens", ()
 
   /**
    * The DoD clause is "AI_KILL_SWITCH=true verifiably stops ALL spend" — not "stops
-   * structured calls". The unmetered escapes are the paths that spend without leaving an
-   * `ai_generations` row, so a kill switch that missed them would be false exactly where
-   * it is least observable. A Wave 4 chat route built on `unmeteredLanguageModel` must be
-   * killed by the same env var as everything else.
+   * structured calls". Streaming used to be the path that spent without leaving an
+   * `ai_generations` row; it is now `streamProse`, and it must be gated by the same env
+   * var as everything else, BEFORE the request is made.
+   *
+   * RED: asserting only "streamText was not called" is NOT enough — `decide()` also checks
+   * the switch and would refuse anyway, so that assertion passes even with the early check
+   * deleted (verified by mutation). What the early, synchronous check actually buys is that
+   * flipping one env var does not still cost a database round trip, and must not depend on
+   * that query succeeding. So the discriminating assertion is that the rollup was never
+   * read. Deleting the check makes this test fail.
    */
-  it("refuses to hand out a raw model or provider while the kill switch is set", () => {
-    const { runtime } = guardedRuntime({
+  it("makes no streaming call and no rollup read at all when AI_KILL_SWITCH is set", async () => {
+    const monthToDateSpend = vi.fn(() => ({ costUsd: 0, unpricedCalls: 0 }));
+    const { runtime, logged } = guardedRuntime({
       killSwitch: true,
       monthlyBudgetUsd: 75,
-      monthToDateSpend: () => ({ costUsd: 0, unpricedCalls: 0 }),
+      monthToDateSpend,
     });
 
-    expect(() =>
-      runtime.unmeteredLanguageModel("chat-rag", "i-will-meter-this-call-myself"),
-    ).toThrow(AIPausedError);
-    expect(() => runtime.unmeteredProviders("i-will-meter-this-call-myself")).toThrow(
+    await expect(runtime.streamProse({ prompt: chatPrompt, vars: { q: "hi" } })).rejects.toThrow(
       AIPausedError,
     );
+    expect(streamText).not.toHaveBeenCalled();
+    expect(monthToDateSpend).not.toHaveBeenCalled();
+    expect(logged).toHaveLength(0);
   });
 
-  it("still hands out the raw model when the switch is off — the escape is gated, not removed", () => {
+  /** The budget guard reaches streaming too, and also before the request. */
+  it("makes no streaming call when the budget guard defers the job", async () => {
     const { runtime } = guardedRuntime({
       killSwitch: false,
-      monthlyBudgetUsd: 75,
-      monthToDateSpend: () => ({ costUsd: 0, unpricedCalls: 0 }),
+      monthlyBudgetUsd: 10,
+      monthToDateSpend: () => ({ costUsd: 1000, unpricedCalls: 0 }),
     });
 
-    expect(
-      runtime.unmeteredLanguageModel("chat-rag", "i-will-meter-this-call-myself"),
-    ).toBeDefined();
-    expect(runtime.unmeteredProviders("i-will-meter-this-call-myself")).toBeDefined();
+    await expect(
+      runtime.streamProse({ prompt: chatPrompt, vars: { q: "hi" }, kind: "background" }),
+    ).rejects.toThrow(AIPausedError);
+    expect(streamText).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * §5/§6 for the streaming path.
+ *
+ * Before Wave 5 this path had no wrapper at all: chat/RAG and lesson prose were expected to
+ * reach `unmeteredLanguageModel()` and call `streamText` directly, which produced no row,
+ * no stamp and no cost — so the M1 DoD clause "every AI call appears in `ai_generations`
+ * with cost" was false as written. `streamProse` is that wrapper.
+ */
+describe("streamProse metering", () => {
+  /** Drives the mocked `streamText`, letting each test decide how the stream settles. */
+  function streamingRuntime() {
+    const logged: AIGenerationRecord[] = [];
+    const runtime = createAIRuntime({
+      anthropicApiKey: "a",
+      googleApiKey: "g",
+      guard: openGuard,
+      log: (record) => {
+        logged.push(record);
+      },
+    });
+    return { runtime, logged };
+  }
+
+  /** A stream that completes normally, reporting usage the way the provider would. */
+  function settlesWithFinish(inputTokens: number, outputTokens: number) {
+    streamText.mockImplementation(
+      (options: { onFinish?: (e: { usage: ReturnType<typeof usage> }) => Promise<void> }) => ({
+        settle: async () => {
+          await options.onFinish?.({ usage: usage(inputTokens, outputTokens) });
+        },
+      }),
+    );
+  }
+
+  /**
+   * 🔴 RED — the check must be able to fail.
+   *
+   * `onFinish` fires only when a stream is CONSUMED. A caller that creates a stream and
+   * abandons it un-read spends money and leaves no row, and no wrapper can close that: the
+   * usage numbers do not exist until the provider sends them. This test pins that gap
+   * rather than pretending it is shut, and it is what makes the green test below
+   * meaningful — if `onFinish` were not wired to `emit`, the green test would look exactly
+   * like this one.
+   */
+  it("🔴 logs NOTHING when the stream is never consumed", async () => {
+    const { runtime, logged } = streamingRuntime();
+    streamText.mockImplementation(() => ({ neverConsumed: true }));
+
+    await runtime.streamProse({ prompt: chatPrompt, vars: { q: "hi" } });
+
+    expect(streamText).toHaveBeenCalledOnce();
+    expect(logged).toHaveLength(0);
+  });
+
+  it("🟢 logs exactly one fully stamped row when the stream completes", async () => {
+    const { runtime, logged } = streamingRuntime();
+    settlesWithFinish(120, 480);
+
+    const stream = (await runtime.streamProse({
+      prompt: chatPrompt,
+      vars: { q: "hi" },
+    })) as unknown as { settle: () => Promise<void> };
+    expect(logged).toHaveLength(0); // nothing yet — the call has not settled
+    await stream.settle();
+
+    expect(logged).toHaveLength(1);
+    const row = logged[0];
+    expect(row).toMatchObject({
+      promptId: "chat-rag",
+      promptVersion: 1,
+      job: "chat-rag",
+      step: "initial",
+      attempt: 1,
+      outcome: "success",
+      usage: { input: 120, output: 480, cacheRead: 0, cacheWrite: 0 },
+    });
+    // The five-column stamp, complete. `provider`/`model` are the concrete pair that ran.
+    expect(row?.provider).toBeTruthy();
+    expect(row?.model).toBeTruthy();
+    expect(row?.inputHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("logs a transport-error row when the stream errors", async () => {
+    const { runtime, logged } = streamingRuntime();
+    streamText.mockImplementation(
+      (options: { onError?: (e: { error: unknown }) => Promise<void> }) => ({
+        settle: async () => {
+          await options.onError?.({ error: new Error("upstream reset") });
+        },
+      }),
+    );
+
+    const stream = (await runtime.streamProse({
+      prompt: chatPrompt,
+      vars: { q: "hi" },
+    })) as unknown as { settle: () => Promise<void> };
+    await stream.settle();
+
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toMatchObject({ outcome: "transport-error", errorMessage: "upstream reset" });
+    expect(logged[0]?.usage).toBeUndefined();
+  });
+
+  /**
+   * A stream that errors after partial output can fire BOTH callbacks. Two rows would
+   * double-count the spend the §6 rollup reads, so whichever settles first wins.
+   *
+   * RED: drop the `settled` latch in `emit` and this logs 2.
+   */
+  it("🔴 logs one row, not two, when the stream both errors and finishes", async () => {
+    const { runtime, logged } = streamingRuntime();
+    streamText.mockImplementation(
+      (options: {
+        onFinish?: (e: { usage: ReturnType<typeof usage> }) => Promise<void>;
+        onError?: (e: { error: unknown }) => Promise<void>;
+      }) => ({
+        settle: async () => {
+          await options.onError?.({ error: new Error("died mid-stream") });
+          await options.onFinish?.({ usage: usage(10, 5) });
+        },
+      }),
+    );
+
+    const stream = (await runtime.streamProse({
+      prompt: chatPrompt,
+      vars: { q: "hi" },
+    })) as unknown as { settle: () => Promise<void> };
+    await stream.settle();
+
+    expect(logged).toHaveLength(1);
+    expect(logged[0]?.outcome).toBe("transport-error");
+  });
+
+  /**
+   * Two different conversations render the same template identically. If `input_hash` did
+   * not cover the messages, §5's idempotency short-circuit could serve one user's answer to
+   * another user's question.
+   *
+   * RED: drop `messages` from the hash input and both hashes become equal.
+   */
+  it("🔴 folds the conversation into input_hash", async () => {
+    const { runtime, logged } = streamingRuntime();
+    settlesWithFinish(1, 1);
+
+    for (const text of ["what is a p-value", "what is a z-score"]) {
+      const stream = (await runtime.streamProse({
+        prompt: chatPrompt,
+        vars: { q: "same render" },
+        messages: [{ role: "user", content: text }],
+      })) as unknown as { settle: () => Promise<void> };
+      await stream.settle();
+    }
+
+    expect(logged).toHaveLength(2);
+    expect(logged[0]?.inputHash).not.toBe(logged[1]?.inputHash);
   });
 });
 

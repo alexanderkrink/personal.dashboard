@@ -156,10 +156,10 @@ export {
   createAIRuntime,
   type GenerateStructuredOptions,
   type GenerateStructuredResult,
+  type GenerationOutcome,
   type PromptFile,
+  type StreamProseOptions,
   sha256Hex,
   sha256HexBytes,
-  UNMETERED_ACKNOWLEDGEMENT,
-  type UnmeteredAcknowledgement,
 } from "./runtime";
 export * from "./schemas/index";

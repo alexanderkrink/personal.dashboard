@@ -18,25 +18,35 @@
  * from `emit()` below with an already-complete `AIGenerationRecord`, so a caller cannot
  * forget to stamp because a caller never gets the chance to write one.
  *
- * ⚠ TWO PATHS CAN STILL MAKE AN LLM CALL WITHOUT LANDING A ROW, and the M1 DoD ("every AI
- * call appears in `ai_generations` with cost") is not satisfied until both close:
- *  1. `unmeteredLanguageModel()` and `unmeteredProviders()` hand out a raw AI SDK model.
- *     Anything built on them — `streamText` for chat/RAG and lesson prose (§2) — bypasses
- *     `emit()` entirely. They are named for what they are and require an explicit
- *     acknowledgement argument, so reaching one is a decision rather than an accident, but
- *     the real fix is a metered streaming wrapper (stamp + `onFinish` usage) and it has to
- *     land *with* chat/RAG in Wave 4, not after it.
- *  2. An attempt that dies with a *transport* error is never a completed attempt, so it
- *     produces no record here. §6 wants that error persisted; that belongs in the Inngest
- *     step wrapper, which is where the `NonRetriableError` decision already lives — and
- *     `ai_generations.outcome` already accepts `'transport-error'` so closing it is a code
- *     change, not a migration. Earlier completed rungs ARE metered before it throws.
+ * ## What the M1 DoD clause costs, precisely (revised Wave 5, 2026-07-20)
+ *
+ * "Every AI call appears in `ai_generations` with cost" now has no unmetered *API*. The two
+ * escape hatches that used to sit here — `unmeteredLanguageModel()` and
+ * `unmeteredProviders()`, reachable only by typing `UNMETERED_ACKNOWLEDGEMENT` — are gone,
+ * along with the constant. They existed solely because `streamText` had no metered wrapper;
+ * {@link AIRuntime.streamProse} is that wrapper, and it landed before chat/RAG had a single
+ * call site, so nothing ever went through the hatches. There is now no way to obtain a raw
+ * AI SDK model from this package.
+ *
+ * ⚠ TWO NARROWER GAPS REMAIN, and neither is closable from inside this file:
+ *  1. **An abandoned stream.** `streamProse` writes its row from `onFinish`/`onError`, and
+ *     those fire only when the stream is consumed. A caller that starts a stream and drops
+ *     it un-read can spend without leaving a row. That is how streaming works — the usage
+ *     numbers do not exist until the provider sends them — so the obligation is on the
+ *     caller to return the stream rather than discard it.
+ *  2. **A transport error inside the structured ladder.** An attempt that dies in transit
+ *     never completes, so it never becomes an `AttemptRecord` and produces no row here.
+ *     §6 wants it persisted; that belongs in the Inngest step wrapper, where the
+ *     `NonRetriableError` decision already lives. `ai_generations.outcome` accepts
+ *     `'transport-error'`, so closing it is a code change, not a migration. Earlier
+ *     completed rungs ARE metered before it throws. `streamProse` already emits this
+ *     outcome, so the value now has a producer.
  *
  * This package never reads `process.env`. `apps/web/src/env.ts` injects both provider keys,
  * the clamp, the guard and the logger.
  */
 
-import { generateObject, NoObjectGeneratedError } from "ai";
+import { generateObject, type ModelMessage, NoObjectGeneratedError, streamText } from "ai";
 import type { z } from "zod";
 import {
   AIPausedError,
@@ -85,11 +95,23 @@ export interface AIGenerationStamp {
   readonly inputHash: string;
 }
 
+/**
+ * How a metered call ended.
+ *
+ * The ladder's three outcomes, plus `transport-error` — which the ladder cannot produce
+ * (an attempt that dies in transit never completes, so it never becomes an `AttemptRecord`)
+ * but a stream can: `streamText` reports a mid-stream failure through `onError` after the
+ * request was already made and possibly already billed. `ai_generations.outcome` has
+ * accepted this value since 20260719113023; until the streaming wrapper landed it had no
+ * producer on this path.
+ */
+export type GenerationOutcome = AttemptRecord["outcome"] | "transport-error";
+
 /** One `ai_generations` row: the stamp plus what the attempt cost and how it ended. */
 export interface AIGenerationRecord extends AIGenerationStamp {
   readonly step: AttemptRecord["step"];
   readonly attempt: number;
-  readonly outcome: AttemptRecord["outcome"];
+  readonly outcome: GenerationOutcome;
   readonly usage?: TokenUsage;
   readonly latencyMs: number;
   /** Raw model output on failure. The only debugging evidence a dead-letter leaves behind. */
@@ -183,17 +205,39 @@ export type GenerateStructuredResult<T> =
     };
 
 /**
- * The literal a caller must type to reach an unmetered model. It is not a password — it is
- * a speed bump in the type system.
+ * Prose streamed from the model, metered on completion. The chat/RAG and lesson-prose
+ * counterpart to {@link GenerateStructuredOptions}.
  *
- * The point is that no plausible refactor, autocomplete or copy-paste produces this string
- * by accident, and `grep -r UNMETERED_ACKNOWLEDGEMENT` enumerates every remaining hole in
- * the M1 DoD in one command. Wave 4 deletes both escape hatches when the metered streaming
- * wrapper lands; until then this is what keeps "it bypasses `ai_generations`" a stated
- * decision rather than an accident.
+ * There is no `schema` and no failure ladder, deliberately: the ladder's rungs are
+ * corrective retries against a schema, and prose has no schema to fail. A stream either
+ * completes or errors, and both land a row.
  */
-export const UNMETERED_ACKNOWLEDGEMENT = "i-will-meter-this-call-myself" as const;
-export type UnmeteredAcknowledgement = typeof UNMETERED_ACKNOWLEDGEMENT;
+export interface StreamProseOptions<TVars extends PromptVars> {
+  readonly prompt: PromptTemplate<TVars>;
+  readonly vars: TVars;
+  readonly system?: string;
+  /**
+   * Conversation history for chat. When present the rendered prompt becomes the leading
+   * system-side instruction and these carry the turns, instead of a bare `prompt` string.
+   *
+   * ⚠ Hashed into `input_hash` alongside the rendered template, for the same reason
+   * `files` are: two different conversations through one template render identically, and a
+   * stamp that could not tell them apart would make the §5 idempotency short-circuit serve
+   * one user's answer to another's question.
+   */
+  readonly messages?: readonly ModelMessage[];
+  /** Overrides the job derived from `prompt.id`. */
+  readonly job?: JobId;
+  /**
+   * Defaults to `"interactive"` — the opposite of {@link GenerateStructuredOptions.kind}.
+   *
+   * That default is stricter here, not laxer. A stream exists because a human is watching
+   * tokens arrive; calling it `background` would let the §6 budget guard defer it under
+   * pressure, and a deferred stream is a chat box that hangs. `interactive` is the honest
+   * declaration, and §6 already sheds interactive load last on purpose.
+   */
+  readonly kind?: CallKind;
+}
 
 export interface AIRuntime {
   /** Job → `(provider, model)`, with the `AI_MAX_TIER` clamp applied. Pure; spends nothing. */
@@ -203,26 +247,23 @@ export interface AIRuntime {
     options: GenerateStructuredOptions<TVars, TSchema>,
   ): Promise<GenerateStructuredResult<z.infer<TSchema>>>;
   /**
-   * ⚠ A raw AI SDK model. **Nothing built on this reaches `ai_generations`** — no stamp,
-   * no usage, no cost, invisible to the budget guard. It exists only because `streamText`
-   * (chat/RAG, lesson prose) has no metered wrapper yet.
+   * Job → streamed prose, fully stamped and metered. The chat/RAG and lesson-prose path.
    *
-   * **The kill switch IS applied**: this throws `AIPausedError("kill-switch")` when
-   * `AI_KILL_SWITCH` is set, so §6's "one env var stops all spend" holds through this
-   * escape too and not merely for `generateStructured`. It is checkable synchronously
-   * because it is plain injected config — no rollup read, nothing to await.
+   * Same gates as `generateStructured`, in the same order: kill switch first and
+   * synchronously, then the §6 budget decision, both **before** the request is made. One
+   * `ai_generations` row lands per call — `success` with usage from `onFinish`, or
+   * `transport-error` with the message from `onError`, whichever settles first.
    *
-   * The **budget guard is not** applied, and cannot be here: the posture depends on an
-   * async rollup read and this is a synchronous getter. A caller reaching for this still
-   * owes two things — `await guardCheck()` before streaming, and a row written from
-   * `onFinish` — because spend through this path is otherwise both uncapped and invisible.
+   * ⚠ **The row is written when the stream settles, not when this returns.** `onFinish`
+   * fires only if the stream is actually consumed, so a caller that creates a stream and
+   * abandons it un-read can still spend without leaving a row. Route handlers must return
+   * the stream to the client (which consumes it) rather than dropping it on an early
+   * return. This is the one remaining gap in "every AI call appears in `ai_generations`"
+   * and it is a property of how streaming works, not something the wrapper can close.
    */
-  unmeteredLanguageModel(
-    job: JobId,
-    acknowledgement: UnmeteredAcknowledgement,
-  ): ReturnType<typeof languageModelFor>;
-  /** ⚠ Both raw providers. Same warning, and the same kill-switch check, as above. */
-  unmeteredProviders(acknowledgement: UnmeteredAcknowledgement): AIProviders;
+  streamProse<TVars extends PromptVars>(
+    options: StreamProseOptions<TVars>,
+  ): Promise<ReturnType<typeof streamText>>;
   /**
    * The §6 guard decision on its own, without making a call.
    *
@@ -324,18 +365,91 @@ export function createAIRuntime(config: AIRuntimeConfig): AIRuntime {
   return {
     resolve,
     guardCheck: (job, kind) => decide(job, kind ?? "background"),
-    // The kill switch gates the escape hatches too. Handing back a live model while
-    // AI_KILL_SWITCH is set would make §6's headline promise ("flip one env var and all
-    // spend stops") true only of `generateStructured` — and the paths that go through
-    // here are exactly the ones that spend without leaving a row, so they are the worst
-    // ones to leave running. Synchronous because `killSwitch` is injected config.
-    unmeteredLanguageModel: (job, _acknowledgement) => {
-      if (config.guard.killSwitch) throw new AIPausedError("kill-switch", { job });
-      return languageModelFor(providers, resolve(job).model);
-    },
-    unmeteredProviders: (_acknowledgement) => {
+    async streamProse<TVars extends PromptVars>({
+      prompt,
+      vars,
+      system,
+      messages,
+      job: jobOverride,
+      kind,
+    }: StreamProseOptions<TVars>): Promise<ReturnType<typeof streamText>> {
+      // Same order as `generateStructured`, for the same reasons. Kill switch first and
+      // synchronously; budget decision before a single token is spent.
+      //
+      // ⚠ This line is REDUNDANT today and no test discriminates it: `decide()` below also
+      // checks `killSwitch` and returns before awaiting the rollup, so deleting this line
+      // changes no observable behaviour (verified by mutation, Wave 5). It is kept as
+      // defence in depth — the property "flip one env var and nothing even touches the
+      // database" currently rests on `decide()`'s internal ordering, which is an
+      // implementation detail of a different function. Deleting BOTH checks does fail
+      // `runtime.test.ts`, so the property is covered even though this line is not.
       if (config.guard.killSwitch) throw new AIPausedError("kill-switch");
-      return providers;
+
+      const job = jobOverride ?? jobForPromptId(prompt.id);
+      if (job === undefined) {
+        throw new Error(
+          `Prompt id "${prompt.id}" does not resolve to a job. Per §3 a prompt id must equal the key of the job that runs it.`,
+        );
+      }
+
+      const decision = await decide(job, kind ?? "interactive");
+      if (!decision.allowed) throw new AIPausedError(decision.reason, { job });
+
+      const rendered = prompt.render(vars);
+      const inputHash = await sha256Hex(
+        `${prompt.id}@${prompt.version}\n${rendered}${
+          messages === undefined ? "" : `\n\nmessages:\n${JSON.stringify(messages)}`
+        }`,
+      );
+      const resolved = resolve(job);
+      const startedAt = Date.now();
+
+      // `onFinish` and `onError` can both fire on a stream that errors after partial
+      // output. Exactly one row per call, so whichever settles first wins — a second row
+      // would double-count the spend the §6 rollup reads.
+      let settled = false;
+      const emit = async (
+        outcome: GenerationOutcome,
+        usage: TokenUsage | undefined,
+        errorMessage?: string,
+      ): Promise<void> => {
+        if (settled) return;
+        settled = true;
+        await config.log({
+          promptId: prompt.id,
+          promptVersion: prompt.version,
+          job,
+          model: resolved.model,
+          provider: MODELS[resolved.model].provider,
+          inputHash,
+          step: "initial",
+          // No ladder: prose has no schema to fail, so there is nothing to retry
+          // correctively and never more than one attempt.
+          attempt: 1,
+          outcome,
+          ...(usage === undefined ? {} : { usage }),
+          latencyMs: Date.now() - startedAt,
+          ...(errorMessage === undefined ? {} : { errorMessage }),
+        });
+      };
+
+      return streamText({
+        model: languageModelFor(providers, resolved.model),
+        ...(system === undefined ? {} : { system }),
+        ...(messages === undefined
+          ? { prompt: rendered }
+          : { messages: [...messages], system: system === undefined ? rendered : system }),
+        onFinish: async ({ usage }) => {
+          await emit("success", toTokenUsage(usage));
+        },
+        onError: async ({ error }) => {
+          await emit(
+            "transport-error",
+            undefined,
+            error instanceof Error ? error.message : String(error),
+          );
+        },
+      });
     },
 
     async generateStructured<TVars extends PromptVars, TSchema extends z.ZodType>({
