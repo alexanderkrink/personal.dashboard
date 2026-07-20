@@ -18,10 +18,12 @@ import {
 } from "@/components/courses/syllabus-proposal";
 import { WeightTotal } from "@/components/courses/weight-total";
 import { PageHeader } from "@/components/page-header";
+import { TopicList } from "@/components/topic-page/topic-list";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { GRADING_SCALES } from "@/lib/courses/schemas";
 import { createClient } from "@/lib/supabase/server";
+import { toTopicListItem } from "@/lib/topics/topic-list";
 
 /**
  * The tab title is the course, which means a second read of the same row.
@@ -72,6 +74,37 @@ export default async function CoursePage({ params }: { params: Promise<{ id: str
     .eq("course_id", course.id)
     .is("confirmed_at", null)
     .order("created_at", { ascending: false });
+
+  const { data: topicRows } = await supabase
+    .from("topics")
+    .select("id, slug, title, summary, exam_weight, exam_weight_override, page")
+    .eq("course_id", course.id)
+    .order("exam_weight", { ascending: false });
+
+  // `needs_review` lives on `topic_revisions`, not on `topics`, so the flag is read from
+  // the newest revision of each topic. A topic with NO revisions is not "clean" — it is a
+  // topic whose creation was never snapshotted (see `HistoryDrawer`) — but the list has no
+  // honest way to say more than "not flagged", so it does not try.
+  const { data: flaggedRows } =
+    (topicRows ?? []).length === 0
+      ? { data: [] }
+      : await supabase
+          .from("topic_revisions")
+          .select("topic_id, revision, needs_review")
+          .in(
+            "topic_id",
+            (topicRows ?? []).map((row) => row.id),
+          )
+          .order("revision", { ascending: false });
+
+  const newestRevision = new Map<string, boolean>();
+  for (const row of flaggedRows ?? []) {
+    if (!newestRevision.has(row.topic_id)) newestRevision.set(row.topic_id, row.needs_review);
+  }
+
+  const topics = (topicRows ?? []).map((row) =>
+    toTopicListItem(row, newestRevision.get(row.id) ?? false),
+  );
 
   const rows = assessments ?? [];
   const total = sumWeightPercent(rows.map((row) => row.weight_percent));
@@ -132,6 +165,17 @@ export default async function CoursePage({ params }: { params: Promise<{ id: str
           ))}
         </section>
       ) : null}
+
+      <section className="mb-6 space-y-3">
+        <div>
+          <h3 className="font-medium text-foreground text-ui-lg">Topics</h3>
+          <p className="max-w-prose text-muted-foreground text-ui-sm">
+            The course's knowledge base, built from every document you upload. A flagged row is one
+            whose sourcing did not hold up — open it to see why.
+          </p>
+        </div>
+        <TopicList courseId={course.id} topics={topics} />
+      </section>
 
       <section className="space-y-4">
         <div className="flex flex-wrap items-end justify-between gap-4">

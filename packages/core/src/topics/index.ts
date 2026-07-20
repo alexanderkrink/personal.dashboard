@@ -1,4 +1,11 @@
 export {
+  type DiffStatus,
+  diffCountLabel,
+  diffTopicPages,
+  type TopicPageDiff,
+  type TopicPageDiffEntry,
+} from "./diff";
+export {
   applyDuplicateGuard,
   type CoercionReason,
   cosineSimilarity,
@@ -51,6 +58,19 @@ export {
   type TopicPageLike,
   type WorkedExampleLike,
 } from "./page";
+export {
+  analyseProvenance,
+  type CitationCollapse,
+  type CitationStatus,
+  COLLAPSE_MIN_CITATIONS,
+  COLLAPSE_MIN_PAGES_AVAILABLE,
+  type ProvenanceBlock,
+  type ProvenanceCitation,
+  type ProvenanceDocumentLike,
+  type ProvenanceInput,
+  type ProvenanceReport,
+  type ProvenanceStrength,
+} from "./provenance";
 export {
   type MergePlan,
   type MergeTargetLike,

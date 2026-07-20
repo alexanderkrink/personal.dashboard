@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { z } from "zod";
+import { coverageSchema } from "@/lib/documents/coverage";
 import { createClient } from "@/lib/supabase/client";
 
 /**
@@ -71,38 +72,7 @@ import { createClient } from "@/lib/supabase/client";
  * this schema's job is to establish shape, not to duplicate the database's
  * constraints, which are already enforced where it counts.
  */
-/**
- * `documents.coverage`, as §8's terminal card reads it.
- *
- * Every field is defaulted and the whole object is nullable, because the column is null for
- * every document processed before the coverage step existed and for every document whose
- * coverage step failed. A card must render those as "no coverage line" rather than as zeros,
- * which would claim a measurement that was never taken.
- */
-const coverageSchema = z.object({
-  checked: z.boolean().default(false),
-  pagesTotal: z.number().default(0),
-  pagesMapped: z.number().default(0),
-  pagesSkipped: z.number().default(0),
-  pagesUndeclared: z.number().default(0),
-  pagesUnmapped: z.number().default(0),
-  topicCount: z.number().default(0),
-  trustworthy: z.boolean().default(false),
-  gaps: z
-    .array(
-      z.object({
-        fromPage: z.number(),
-        toPage: z.number(),
-        kind: z.string(),
-        reason: z.string(),
-      }),
-    )
-    .default([]),
-  warnings: z.array(z.string()).default([]),
-  missingObjectives: z.array(z.string()).default([]),
-});
-
-export type DocumentCoverage = z.infer<typeof coverageSchema>;
+export type { DocumentCoverage } from "@/lib/documents/coverage";
 
 const documentRowSchema = z.object({
   id: z.uuid(),
