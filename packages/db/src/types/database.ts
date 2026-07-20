@@ -1150,6 +1150,7 @@ export type Database = {
           p_query_embedding: string
           p_source?: string
           p_topic_id?: string
+          p_user_id: string
         }
         Returns: {
           content: string
