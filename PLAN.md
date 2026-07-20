@@ -830,6 +830,58 @@ Everything below respects the repo's package boundaries: LLM calls and prompts l
 `packages/core`, SQL migrations and clients in `packages/db`, and the job handlers + upload
 UI in `apps/web`.
 
+> 🔴 **DISPROVEN 2026-07-20 (Wave 5 Agent 0) — the Wave 4 grounding failure is NOT what it
+> was reported to be, and the difference changes what must be fixed.**
+>
+> The failure was briefed as *"six formulas that appear nowhere in the source material"* —
+> i.e. hallucination. The production artifact was captured before anything could overwrite
+> it (gitignored corpus in `apps/web/.local-fixtures/wave4-failure/`, loader and
+> characterisation suite at `apps/web/src/test/wave4-failure-fixture.ts`), and it shows
+> something else:
+>
+> - **The extraction is good.** 48 of 54 pages read, 6 deliberately skipped (title / agenda
+>   / transition / copyright), plus 11 formulas each carrying a correct page citation
+>   (pp. 17, 18, 22, 24, 37, 38, 38, 39, 44, 45, 46), 10 definitions, 48 headings, 4 worked
+>   examples. Nothing missing, nothing invented.
+> - **All six formulas on the topic page ARE supported by the deck** — `\mu_{\bar X}=\mu`
+>   (p. 23, 25), `\sigma/\sqrt n` (p. 18), the FPC (p. 22), `\mu_{\hat p}=p` (p. 38),
+>   `\sigma_{\hat p}` (p. 38), the chi-square statistic (p. 46).
+> - **The real defect is total citation collapse.** All **20 of 20** citations on the
+>   produced page — 7 notes, 6 formulas, 7 key terms — point at **page 2**, the "Topic
+>   Goals" objectives slide. `topic_sources.locators` is `[{"page": 2}]`. The model used
+>   the objectives slide as an outline, wrote correct textbook statistics from parametric
+>   knowledge, and attributed all of it to the one slide it was shown. Its own
+>   `change_summary` says so: *"built from the Chapter 6 topic goals slide."*
+>
+> Corroborated by metering: `topic-merge` received **4,396 input tokens** against an
+> ~8K-token extraction, and the router emitted a single segment `seg-1` whose locator was
+> page 2 alone. **The 47 pages that were read, chunked and embedded never reached the
+> merge.**
+>
+> ⚠ **Therefore the bug is upstream, in Step A routing — not in merge fidelity.** The merge
+> was faithful to its input; its input was one slide. A hallucination guard on the merge
+> would not have caught this. The check that must exist is: *do the citations on a produced
+> page span the pages the router claimed to cover?*
+>
+> Why nothing complained: `coverage.trustworthy` was **`true`** with `warnings: []` while
+> `pagesMapped: 1`, `pagesUnmapped: 47`, `pagesSkipped: 6` — 47 unmapped pages produced no
+> warning. `merge-critic` saw 3,863 input tokens, answered in 24, and approved; it is shown
+> the page and a summary, not the source pages, so miscitation is invisible to it. All 12
+> processing events are `level=info` and the last one says "Done."
+>
+> Related, same shape as the Wave 4 loss-detector finding: **`topic_revisions` has zero rows**
+> for this topic despite `topics.revision = 1`. The create path writes no revision row, so
+> any loss check that iterates `topic_revisions` iterates an empty set on a new topic and
+> cannot fail.
+>
+> **D13 settled:** there are **no `warn` events** for this document, and that is correct.
+> The dossier's inference fails twice — `emit()` in `packages/ai/src/embeddings.ts:277`
+> writes to `ai_generations`, **not** `document_processing_events`, so a transport-error
+> emit never produces a `warn` event; and the 0/0/NULL/7,312 ms `embed-topic-summary` row
+> is timestamped `2026-07-19 23:48:08Z` and belongs to an **earlier, since-deleted
+> document**. This run's `embed-topic-summary` succeeded (130 tokens, 120 ms) and
+> `topics.summary_embedding` is **not null** — there is no stale routing vector to repair.
+
 ---
 
 ### 1. Architecture overview
@@ -1871,6 +1923,30 @@ chat with citations, and context retrieval for the exam-review generator.
 > embeddings were inserted, and a real session call for the account that owns neither
 > returned **0 rows** for the other tenant's course while the service-role control call
 > returned that same row — RLS, not the query, did the filtering.
+>
+> 🔴 **DISPROVEN 2026-07-20 (Wave 5 Agent 0) — that control call was the bug, not the
+> control.** "The service-role call returned that same row" is a cross-tenant read, and it
+> was recorded as evidence of correctness because the test only asked whether the
+> *authenticated* path was safe. `createAdminSupabaseClient` bypasses RLS, and the whole
+> retrieval surface is designed to run in Inngest steps and background jobs — which is
+> where the admin client lives. So the safe caller was the exception and the dangerous one
+> was the design centre. A course id is not a secret and not self-authenticating: any
+> handler taking `courseId` from a request and passing it through the admin client read
+> whatever tenant owned that course. The function had no `user_id` argument, so **no caller
+> could have made that call safely even if it wanted to.**
+>
+> Reproduced live 2026-07-20 with the second tenant recreated: as `service_role`, asking
+> for hans's course while acting for Alexander returned hans's private chunk.
+>
+> Fixed in `20260720010830_match_chunks_tenant_scope`: `p_user_id` is now the **first and
+> required** parameter and a predicate. Required rather than defaulted so a caller that
+> forgets the tenant gets `PGRST202` instead of a quietly complete course; the old 5-arg
+> signature is **dropped**, not replaced, because `create or replace` cannot change a
+> parameter list and would have left the vulnerable overload resolvable. Verified after the
+> fix: tenant-less call shape → `PGRST202`; Alexander → hans's course → **0 rows**; hans →
+> hans's course → **1 row**, so the fix is not vacuous. `hnsw.iterative_scan =
+> 'strict_order'` is carried over — a second predicate the HNSW scan cannot see makes it
+> more load-bearing, not less.
 >
 > ⚠ **Also corrected: the SQL block above spells the type `vector(1024)`, which will not
 > compile in this project.** `20260719092113` installed pgvector into the `extensions`
@@ -5512,7 +5588,15 @@ feature's migration, never ahead of need.
 
 ✅ **SHIPPED 2026-07-19 (M1 item 2b).** The provider layer described below is live in `packages/ai`: both providers wired, the job registry replacing the 3-tier map, the widened `definePrompt`, `src/prompts/` + `src/schemas/`, per-provider price tables, and the §2 failure ladder (68 unit tests). `GOOGLE_GENERATIVE_AI_API_KEY` and `VOYAGE_API_KEY` are wired into all 4 checklist locations, and CLAUDE.md's rule was rewritten from "by tier" to "by job" in the same change. Real calls to **both** providers verified end-to-end through `createAIRuntime`. Present tense below is now literal — with the two exceptions marked 🔴/⚠ inline. **Still spec, and owned by later agents:** the `ai_generations` table, the cost rollup, the kill switch and budget guard (§6, item 2c), and every prompt/schema (`src/prompts/` and `src/schemas/` ship empty on purpose — see §3).
 
-⚠ **Metering covers `generateStructured` only.** (⚠ UPDATED 2026-07-19 by item 8: the two escapes are now named `AIRuntime.unmeteredLanguageModel()` / `unmeteredProviders()` and require an explicit `UNMETERED_ACKNOWLEDGEMENT` literal, so `grep -r UNMETERED_ACKNOWLEDGEMENT` enumerates every remaining hole and no accidental refactor reaches one. The hole itself is unchanged and still Wave 4's to close.) They hand out a raw AI SDK model, and anything built on them — `streamText` for chat/RAG and lesson prose (§2) — bypasses the logger entirely. The M1 DoD ("every AI call appears in `ai_generations` with cost") is therefore **not** satisfiable for streaming until a metered streaming wrapper exists; that has to land with chat/RAG in Wave 4, not after it. Likewise, an attempt that dies with a *transport* error produces no record in `packages/ai` (it never completes) — §6 wants that error persisted, and that belongs in the Inngest step wrapper where the `NonRetriableError` decision already lives.
+⚠ ~~**Metering covers `generateStructured` only.**~~ (⚠ UPDATED 2026-07-19 by item 8: the two escapes are now named `AIRuntime.unmeteredLanguageModel()` / `unmeteredProviders()` and require an explicit `UNMETERED_ACKNOWLEDGEMENT` literal, so `grep -r UNMETERED_ACKNOWLEDGEMENT` enumerates every remaining hole and no accidental refactor reaches one. The hole itself is unchanged and still Wave 4's to close.) They hand out a raw AI SDK model, and anything built on them — `streamText` for chat/RAG and lesson prose (§2) — bypasses the logger entirely.
+
+✅ **REVISED 2026-07-20 (Wave 5 Agent 0) — the streaming hole is closed and the escapes are deleted.** `AIRuntime.streamProse()` is the metered streaming wrapper: same gates in the same order as `generateStructured` (kill switch first and synchronously, then the §6 budget decision, both **before** the request), and exactly one `ai_generations` row per call — `success` with usage from `onFinish`, or `transport-error` with the message from `onError`, whichever settles first. Because it landed **before chat/RAG had a single call site**, nothing ever went through the escapes, so `unmeteredLanguageModel()`, `unmeteredProviders()` and the `UNMETERED_ACKNOWLEDGEMENT` constant are **removed** rather than deprecated. There is now no way to obtain a raw AI SDK model from `packages/ai`, and `grep -r UNMETERED_ACKNOWLEDGEMENT` returns only prose in two comments.
+
+**Two narrower gaps remain, and neither is closable from inside the wrapper — do not describe metering as complete:**
+1. **An abandoned stream.** `onFinish`/`onError` fire only when a stream is *consumed*. A caller that starts a stream and drops it un-read spends without leaving a row. The usage numbers do not exist until the provider sends them, so the obligation is on the caller to return the stream rather than discard it on an early return.
+2. **A transport error inside the structured ladder.** An attempt that dies in transit never completes, so it never becomes an `AttemptRecord` and produces no record — §6 wants it persisted, and that belongs in the Inngest step wrapper where the `NonRetriableError` decision already lives. `ai_generations.outcome` has accepted `'transport-error'` since `20260719113023`; `streamProse` is now its first producer on this path, so closing the ladder case remains a code change, not a migration.
+
+⚠ **Untested in production.** `streamProse` is unit-tested (including mutation-verified red tests for the one-row latch, the `input_hash` conversation fold, and the kill switch) but has **no call site yet** — it has never streamed a real token. Agent 2's chat/RAG work is its first exercise.
 
 All LLM interaction lives in `packages/ai` (providers, prompt templates, Zod output schemas, the model registry). It wires **two providers** through the Vercel AI SDK — `@ai-sdk/anthropic` and `@ai-sdk/google` — and no `@ai-sdk/*` import or model ID appears anywhere else in the repo; the package never reads `process.env` — `apps/web/src/env.ts` injects configuration (both provider keys included). That boundary is what makes the multi-provider network below enforceable: one place to swap models *or providers*, one place to version prompts, one place to meter and kill spend. (The boundary governs prompts, providers, schemas, and model calls — UI streaming hooks like `useChat` from `@ai-sdk/react` live in `apps/web`, pointed at endpoints backed by this package.)
 
@@ -6010,8 +6094,23 @@ uploads every lecture's materials (topic pages appear minutes later).
      > input Alexander can supply**; one file would move a course from the guarded fallback to
      > the primary oracle.
   4. ✅ ~~IE's pass mark~~ — **resolved 2026-07-18: 5/10.**
-  5. 🟡 **Inngest app sync** — only possible once `/api/inngest` is deployed; needs the
-     production hostname, which appears nowhere in the repo.
+  5. 🟡 **Inngest app sync** — ⚠ CORRECTED 2026-07-20 (Wave 5): ~~needs the production
+     hostname, which appears nowhere in the repo.~~ **The hostname is
+     `https://www.alexanderkrink.com` and it appears in this file twice — §Deployment
+     line ~5799 and the domain table line ~127.** The claim was false when written.
+
+     Executed 2026-07-20: `PUT https://www.alexanderkrink.com/api/inngest` returned
+     `200 {"message":"Successfully registered","modified":true}`, so the deployed app is
+     now registered. `pnpm inngest:sync` is the repo-side command; see
+     `scripts/inngest-sync.mjs`. Note `modified` reads `true` on back-to-back calls, so it
+     records a sync rather than reporting staleness — do not read it as a diff.
+
+     🔴 STILL OPEN, and it is the part that matters: the Inngest app shows
+     `Vercel project: -`, so **no deploy auto-resyncs**. Every future function change runs
+     against a stale registry until somebody remembers the command — which is exactly how
+     Wave 4 lost `processDocument` (`Events received: 1`, `Executions ran: 0`, no error).
+     **[ALEXANDER]** — installing the Vercel↔Inngest integration needs dashboard and OAuth
+     access and cannot be done by an agent.
   6. 🟢 **Favicon / PWA icons** — or approval to generate them from the wordmark and accent.
   8. ✅ ~~**Which auth account is the real one**~~ — **resolved 2026-07-18:
      `krinkk02@gmail.com` (`0092dd81-…`).** The second auth user is a test account and owns no
@@ -6057,7 +6156,7 @@ uploads every lecture's materials (topic pages appear minutes later).
 | 5 | Document pipeline: upload (TUS) → validate (rejects >50 MB with a specific, actionable message — no splitting, no re-compression) → extract (PDF via **Gemini** vision; PPTX routed by word density at a **40 words/slide** threshold — text decks via XML, **visual decks via CloudConvert render → PDF → Gemini vision, in scope for M1** per the 2026-07-18 decision, with `CLOUDCONVERT_API_KEY` through the full env checklist) → route (**Gemini Flash-Lite**) → merge (**Sonnet 5**) → **cross-family merge critic (block-diff loss-detect + Gemini verify, auto-retry)** → embed → **coverage map + syllabus checklist** → status UX w/ Realtime; **opt-in Deep-review toggle** (**Opus 4.8** 2nd-reader audit) | L (the big one) | Document & notes pipeline |
 | 6 | Topic pages UI: rendered page, provenance chips, revision history/revert | M | Document & notes pipeline §8 |
 | 7 | Exam review v1: weight computation + Opus generation + staleness banner | S–M | Document & notes pipeline §9 |
-| 8 | `ai_generations` log + cost rollup + kill-switch env vars — ✅ **shipped 2026-07-19** (live table + `ai_daily_cost` view, per-provider costing verified against the live DB, kill switch proven to make zero provider calls). ⚠ The DoD's "every AI call" clause is **not yet fully met**: `streamText` still has no metered wrapper (Wave 4, with chat/RAG) and a transport-killed attempt is still unlogged (Inngest step wrapper) | S | AI strategy §5–6 |
+| 8 | `ai_generations` log + cost rollup + kill-switch env vars — ✅ **shipped 2026-07-19** (live table + `ai_daily_cost` view, per-provider costing verified against the live DB, kill switch proven to make zero provider calls). ⚠ The DoD's "every AI call" clause is **not yet fully met**: ~~`streamText` still has no metered wrapper (Wave 4, with chat/RAG)~~ ✅ **closed 2026-07-20 (Wave 5): `AIRuntime.streamProse()` meters the streaming path and the unmetered escapes are deleted — but it has no call site yet, so it is built, not exercised** · a transport-killed attempt is still unlogged (Inngest step wrapper) · an abandoned (never-consumed) stream still leaves no row | S | AI strategy §5–6 |
 | 9 | Participation & Attendance Ledger (PWA manifest, 2-tap logging) | M | Additional #4 |
 | 10 | Case-brief slice (pipeline step for `case`-tagged docs) — 🟡 **descoped to opportunistic 2026-07-18**: real case studies are much rarer in this program than the plan assumed, so this must not gate M1. Build it if a case lands; otherwise slide to M2 | S–M | Additional #2 |
 | 11 | *Stretch:* NL quick-add (CAL-3), syllabus → `assessments` extraction — ✅ **syllabus half SHIPPED 2026-07-19 (Wave 3)**: `syllabus-components` v1 on `claude-sonnet-5`, validated 17/17 components against all 3 real syllabi, behind the §2b confirm gate. Takes document **text**; upload/conversion stays with item 5. NL quick-add still open. | S+S | Calendar §6, Additional #3 |

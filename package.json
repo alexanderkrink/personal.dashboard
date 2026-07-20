@@ -20,6 +20,7 @@
     "db:types:remote": "pnpm --filter @study/db db:types:remote",
     "db:push": "pnpm --filter @study/db db:push",
     "db:migration": "pnpm --filter @study/db db:migration",
+    "inngest:sync": "node scripts/inngest-sync.mjs",
     "prepare": "husky"
   },
   "devDependencies": {

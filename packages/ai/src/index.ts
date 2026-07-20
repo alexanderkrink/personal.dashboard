@@ -140,9 +140,12 @@ export {
  * Types only. `createAIProvider` and `languageModelFor` are deliberately NOT re-exported:
  * they hand back a raw SDK model with no stamp, no metering and no kill switch, and an
  * importable factory is a bypass that no amount of naming discipline inside
- * `generateStructured` can prevent. `createAIRuntime` is the only way in — and the two
- * acknowledged escapes on it (`unmeteredLanguageModel`, `unmeteredProviders`) at least
- * come from a runtime that has a logger and a guard attached.
+ * `generateStructured` can prevent. `createAIRuntime` is the only way in.
+ *
+ * As of Wave 5 there is no acknowledged escape either: `unmeteredLanguageModel`,
+ * `unmeteredProviders` and `UNMETERED_ACKNOWLEDGEMENT` are gone, replaced by the metered
+ * `AIRuntime.streamProse`. Every route out of this package now writes an `ai_generations`
+ * row.
  *
  * They stay exported from `./provider` for this package's own use and its tests.
  */

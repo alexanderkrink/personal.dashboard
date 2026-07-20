@@ -73,7 +73,7 @@ import {
 } from "./models";
 import type { TokenUsage } from "./pricing";
 import { jobForPromptId, type PromptTemplate, type PromptVars } from "./prompts/define";
-import { type AIProviders, createAIProvider, languageModelFor } from "./provider";
+import { createAIProvider, languageModelFor } from "./provider";
 
 /**
  * The §3 five-column stamp. Every persisted AI artifact carries these, and so does every
