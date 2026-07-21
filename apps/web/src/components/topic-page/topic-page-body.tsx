@@ -5,7 +5,7 @@ import {
   FidelityNotes,
   GroundingBanners,
 } from "@/components/topic-page/grounding-banner";
-import { Markdown } from "@/components/topic-page/markdown";
+import { Markdown, toDisplayMath } from "@/components/topic-page/markdown";
 import { BlockProvenance, ProvenanceBlockShell } from "@/components/topic-page/provenance";
 import type { TopicView } from "@/lib/topics/topic-view";
 
@@ -71,13 +71,17 @@ export function TopicPageBody({ view }: { view: TopicView }) {
               <p className="font-semibold text-read-body">{formula.name}</p>
               {/*
                * The formula is typeset through the same remark-math + KaTeX chain as the
-               * inline math in prose (see `markdown.tsx`): wrapping the LaTeX in `$$…$$`
-               * selects DISPLAY math. Empty/whitespace latex renders nothing rather than an
-               * empty `$$$$` — the stored schema permits an empty string.
+               * inline math in prose (see `markdown.tsx`). `toDisplayMath` fences the LaTeX on
+               * its own lines so it renders as centred DISPLAY math (a single-line `$$x$$`
+               * renders inline) and collapses blank lines so multi-line LaTeX cannot leak as
+               * raw source. Empty/whitespace latex renders nothing rather than an empty block —
+               * the stored schema permits an empty string. The `overflow-x-auto` wrapper keeps
+               * a wide equation scrolling inside the 68ch reading column, never widening the
+               * page.
                */}
               {latex === "" ? null : (
                 <div className="my-2 overflow-x-auto text-read-body">
-                  <Markdown>{`$$${latex}$$`}</Markdown>
+                  <Markdown>{toDisplayMath(latex)}</Markdown>
                 </div>
               )}
               <div className="text-read-body">

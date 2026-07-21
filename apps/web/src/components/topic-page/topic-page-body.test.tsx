@@ -557,6 +557,103 @@ describe("TopicPageBody — LaTeX renders as typeset math", () => {
 });
 
 /* ────────────────────────────────────────────────────────────────────────── */
+/* Wave 7 round 2 — the formula block is DISPLAY math and survives blank lines */
+/*                                                                            */
+/* Round 1 typeset the formula, but wrapped it as `$$${latex}$$` — fences glued */
+/* to the content on one line, which remark-math parses as INLINE math, so a    */
+/* standalone formula rendered in the flow of a `<p>` instead of as a centred    */
+/* block. And a formula carrying a blank line broke the math entirely, leaking   */
+/* raw LaTeX. Display math is `.katex-display`; inline math is a bare `.katex`.  */
+/* Reverting `toDisplayMath` to the round-1 wrap turns the first two red.        */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+function formulaView(latex: string): TopicView {
+  return buildTopicView({
+    topic: {
+      id: TOPIC,
+      course_id: COURSE,
+      title: "Sampling Distributions",
+      slug: "sampling-distributions",
+      summary: "",
+      page: {
+        summary: "",
+        notes: [],
+        keyTerms: [],
+        formulas: [
+          {
+            name: "A formula",
+            latex,
+            explanation: "Its meaning.",
+            sources: [{ documentId: GOOD_DOC, page: 21 }],
+          },
+        ],
+        workedExamples: [],
+        openQuestions: [],
+      },
+      exam_weight: 0.5,
+      exam_weight_override: null,
+      revision: 1,
+      updated_at: "2026-07-20T10:00:00Z",
+    },
+    documents: [
+      {
+        id: GOOD_DOC,
+        filename: "Sampling Distributions.pdf",
+        session_label: "Lecture 7",
+        kind: "slides",
+        status: "ready",
+        extraction_fidelity: "visual",
+        failure_reason: null,
+        coverage: null,
+        extraction: { extraction: { pages: pages(2, 30) } },
+        failed_topics: [],
+        created_at: "2026-07-20T09:00:00Z",
+      },
+    ],
+    revisions: [],
+  });
+}
+
+describe("TopicPageBody — the formula block is display math, not inline", () => {
+  it("renders a standalone formula as centred DISPLAY math", () => {
+    render(<TopicPageBody view={formulaView("\\sigma_{\\bar{X}} = \\sigma / \\sqrt{n}")} />);
+    const formulas = screen.getByTestId("formulas");
+    // RED against the round-1 `$$${latex}$$` wrap: it renders the formula inline, so there is
+    // a `.katex` but no `.katex-display`.
+    expect(formulas.querySelector(".katex")).not.toBeNull();
+    expect(formulas.querySelector(".katex-display")).not.toBeNull();
+  });
+
+  it("renders a formula that contains a blank line as ONE block, with no raw-LaTeX leak", () => {
+    render(<TopicPageBody view={formulaView("\\bar{X} = \\mu\n\n\\hat{p} = X/n")} />);
+    const formulas = screen.getByTestId("formulas");
+    // Round-1 renders no `.katex` at all for this input (the blank line breaks the block);
+    // fence-only, without the collapse, would split it into two. Exactly one is the fix.
+    expect(formulas.querySelectorAll(".katex-display")).toHaveLength(1);
+    // The two lines live in one annotation, not leaked as prose.
+    const annotation = formulas.querySelector('annotation[encoding="application/x-tex"]');
+    expect(annotation?.textContent).toBe("\\bar{X} = \\mu\n\\hat{p} = X/n");
+  });
+
+  it("still renders a wide equation inside its own horizontal-scroll container", () => {
+    render(<TopicPageBody view={formulaView("\\sigma_{\\bar{X}} = \\sigma / \\sqrt{n}")} />);
+    const display = screen.getByTestId("formulas").querySelector(".katex-display");
+    // Non-vacuous: the display block must exist, AND its nearest wrapper must be the scroll
+    // container, so a wide equation scrolls there rather than widening the 68ch reading column.
+    expect(display).not.toBeNull();
+    expect(display?.closest(".overflow-x-auto")).not.toBeNull();
+  });
+
+  it("keeps inline math in a note inline, so the two registers do not clash", () => {
+    render(<TopicPageBody view={wellGroundedView()} />);
+    const notes = screen.getByTestId("notes");
+    // The note carries `$n > 30$` — inline. It must render as inline math, never a block.
+    expect(notes.querySelector(".katex")).not.toBeNull();
+    expect(notes.querySelector(".katex-display")).toBeNull();
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────── */
 /* Wave 7 — the reading column is anchored, not centred                       */
 /*                                                                            */
 /* `page.tsx` is an async RSC and cannot mount in jsdom, so the column's       */
