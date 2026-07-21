@@ -1690,6 +1690,29 @@ it; they never own pages.**
    > 2026-07-21). Closing the last 1–2 topics is a
    > model-selection decision (re-pin the `topic-routing` job), reserved to Alexander —
    > not a prompt-wording one.
+   >
+   > ✅ **DECIDED 2026-07-21 (Wave 6 phase 2, Alexander) — the 14-vs-band gap closes with a
+   > deterministic singleton-coalesce step; not band widening, not a model re-pin.** The
+   > re-pin was measured first and refuted: `gemini-3.1-pro-preview` over the same frozen
+   > deck yields **15** targets at **17×** the flash-lite cost (receipts
+   > `wave6-overmerge/routing-replay-v5-PRO-PREVIEW.json` and
+   > `wave4-replay-v5-PRO-PREVIEW.json`) — paying more buys more granularity, not less.
+   > The overage is granularity, not drift: 8 of flash-lite's 14 targets carry exactly one
+   > segment ("Degrees of Freedom", one slide inside the chi-square section), while the
+   > wave-4 deck's 7 targets are all multi-segment and in-band on both models. The coalesce
+   > is code, not prompt semantics — `topic-routing` stays v5. Rule: a proposed NEW topic
+   > carrying exactly one segment folds into the nearest deck-adjacent ≥2-segment create
+   > (tie → the preceding one; the receiver's title wins; every segment and locator
+   > follows; lossless). Consecutive singletons never merge with each other, and an
+   > all-singleton routing folds NOTHING — the step is structurally unable to rebuild the
+   > 1-topic funnel, which stays `detectSingleTopicFunnel`'s case. **Canonical stage order:
+   > resolve → duplicate guard → singleton coalesce → planMerges**
+   > (`coalesceSingletonCreates`, `@study/core`). Measured over the frozen receipts, zero
+   > live calls: wave-6 flash-lite **14 → 6**, wave-6 pro-preview **15 → 7** (both inside
+   > the 4–12 band, 47/47 segments merged, page union unchanged), wave-4 **7 → 7
+   > byte-stable** on both models (`wave6-singleton-coalesce.test.ts`, which also keeps the
+   > pre-coalesce 14 pinned as a permanent red). Built and offline-verified only — the
+   > production re-run is Alexander's gate.
 4. **Deterministic duplicate guard (code, not LLM):** every `createNew` title is embedded
    and compared to existing topic-title embeddings. Cosine similarity ≥ 0.85 → coerced into
    an assignment to the nearest topic (logged as a `warn` processing event). This catches
