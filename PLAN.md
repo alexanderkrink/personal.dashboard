@@ -2609,6 +2609,17 @@ chat with citations, and context retrieval for the exam-review generator.
 > the call, because an Inngest step retry would re-run the whole `route-and-merge` step and
 > re-bill every Sonnet merge it had already completed.
 >
+> ⚠ **CORRECTED 2026-07-21 (Wave 7 §3) — the merge is no longer "the whole route-and-merge
+> step".** `process-document` now runs a `resolve-merge-plan` step (which freezes the routing
+> into `document_merge_plans`, keyed by a hash of the extraction) followed by ONE memoized
+> `merge-target` step per topic (`runRouteAndMergeSteps`). So an Inngest step retry no longer
+> re-bills the merges it already completed — it loads the frozen plan (zero routing) and
+> resumes at the target it died on. The in-call Voyage backoff above still earns its place:
+> routing's embeddings live inside the single `resolve-merge-plan` step, which a retry does
+> re-run. This corrects the earlier one-step design captured in `route-and-merge.ts`'s
+> `runRouteAndMerge` docstring; the per-topic-step shape here matches PLAN §5 Step B's own
+> "one step per topic" all along.
+>
 > Not yet measured, and therefore not corrected: glossary.
 > The `≈ $0.46–0.76` totals stand until those land, with extraction ~$0.13 rather than
 > ~$0.30 inside them.

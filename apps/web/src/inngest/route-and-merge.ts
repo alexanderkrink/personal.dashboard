@@ -1327,15 +1327,21 @@ async function mergeTopics(input: {
 /* ────────────────────────────────────────────────────────────────────────── */
 
 /**
- * The whole of §5 Steps A–C, as one Inngest step body.
+ * The whole of §5 Steps A–C, as one function body.
  *
- * One step rather than one per topic, and that is a trade worth naming. Per-topic steps
- * would give each topic its own retry budget and a nicer dashboard; they would also require
- * the routing result to be serialized into the run's state between steps, and a document's
- * segments are large enough that this is exactly the mistake `extract` avoided by putting
- * the extraction in Postgres instead of in the step's return value. Isolation — the property
- * §7 actually asks for — is provided by the per-topic `try` in {@link mergeTopics}, not by
- * the step boundary.
+ * ⚠ Wave 7 §3: production no longer runs this as one Inngest step — it runs
+ * {@link runRouteAndMergeSteps}, which freezes the routing into `document_merge_plans` and
+ * gives each merge target its own memoized step so a retry resumes rather than re-routes. This
+ * function survives as the single-invocation reference the merge-internals suite drives, and
+ * as the pre-fix behaviour the §3 resumability harness contrasts GREEN against.
+ *
+ * The original one-step trade, kept for the record: per-topic steps would require the routing
+ * result to be serialized into the run's state between steps, and a document's segments are
+ * large enough that this is the mistake `extract` avoided by putting the extraction in Postgres
+ * instead of in the step's return value. The §3 fix resolves that tension by storing the plan
+ * in Postgres too — the per-target steps carry only stable keys, never segment content.
+ * Isolation — the property §7 actually asks for — is still provided by the per-topic `try` in
+ * {@link mergeTopics}, not by the step boundary.
  */
 export async function runRouteAndMerge(input: RouteAndMergeInput): Promise<RouteAndMergeSummary> {
   const { admin, userId, documentId, courseId } = input;
