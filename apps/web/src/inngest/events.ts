@@ -175,3 +175,31 @@ export const courseTopicsChangedData = z.object({
 export const courseTopicsChanged = eventType("course/topics.changed", {
   schema: courseTopicsChangedData,
 });
+
+/**
+ * A student asked for this course's exam review to be (re)generated (PLAN §9's *Regenerate*
+ * button). The trigger for the one on-demand Opus call §9 describes.
+ *
+ * ## Why the payload is `{ courseId }` and nothing else
+ *
+ * Per the ⚠⚠ rule above, the owner is NOT in the payload: `generate-review` calls
+ * `deriveOwner()` on `courseId` and writes the `exam_reviews` row with the database's answer,
+ * exactly as `mark-reviews-stale` does with the same id. A `userId` here would buy no
+ * cross-check — the producer (the Regenerate Server Action) knows the owner only because it
+ * just read the course row under RLS, so comparing it back would be comparing the database
+ * against itself — so it is absent, and the event cannot be made to name a tenant it does not
+ * own.
+ *
+ * `courseId` doubles as the concurrency key: `generate-review` declares
+ * `concurrency: [{ key: "event.data.courseId", limit: 1 }]`, which is what makes a
+ * double-click or a click-while-in-flight serialize into one run behind another rather than
+ * two parallel Opus calls — and the second run then sees the fresh review the first produced
+ * and skips, so the ~$0.50–1.50 call is not billed twice.
+ */
+export const courseReviewRequestedData = z.object({
+  courseId: z.uuid(),
+});
+
+export const courseReviewRequested = eventType("course/review.requested", {
+  schema: courseReviewRequestedData,
+});
