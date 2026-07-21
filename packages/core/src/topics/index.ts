@@ -18,6 +18,11 @@ export {
   type UnguardedProposal,
 } from "./duplicate-guard";
 export {
+  detectSingleTopicFunnel,
+  FUNNEL_MIN_SEGMENTS,
+  type FunnelBackstopInput,
+} from "./funnel-guard";
+export {
   detectUngroundedContent,
   type ExpansionMeasurement,
   type GroundingFinding,
