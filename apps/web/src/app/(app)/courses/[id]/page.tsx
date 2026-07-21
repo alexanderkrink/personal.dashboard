@@ -1,4 +1,4 @@
-import { PencilSimple } from "@phosphor-icons/react/dist/ssr";
+import { PencilSimple, Sparkle } from "@phosphor-icons/react/dist/ssr";
 import { sumWeightPercent } from "@study/core";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
@@ -167,12 +167,19 @@ export default async function CoursePage({ params }: { params: Promise<{ id: str
       ) : null}
 
       <section className="mb-6 space-y-3">
-        <div>
-          <h3 className="font-medium text-foreground text-ui-lg">Topics</h3>
-          <p className="max-w-prose text-muted-foreground text-ui-sm">
-            The course's knowledge base, built from every document you upload. A flagged row is one
-            whose sourcing did not hold up — open it to see why.
-          </p>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="font-medium text-foreground text-ui-lg">Topics</h3>
+            <p className="max-w-prose text-muted-foreground text-ui-sm">
+              The course's knowledge base, built from every document you upload. A flagged row is
+              one whose sourcing did not hold up — open it to see why.
+            </p>
+          </div>
+          {/* §9's exam review, generated on demand from these topics and their exam weights. */}
+          <ButtonLink variant="outline" size="sm" href={`/courses/${course.id}/reviews`}>
+            <Sparkle aria-hidden="true" />
+            Exam review
+          </ButtonLink>
         </div>
         <TopicList courseId={course.id} topics={topics} />
       </section>
