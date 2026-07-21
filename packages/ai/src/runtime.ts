@@ -47,7 +47,7 @@
  */
 
 import { generateObject, type ModelMessage, NoObjectGeneratedError, streamText } from "ai";
-import type { z } from "zod";
+import { z } from "zod";
 import {
   AIPausedError,
   type AISpendGuardConfig,
@@ -117,6 +117,17 @@ export interface AIGenerationRecord extends AIGenerationStamp {
   /** Raw model output on failure. The only debugging evidence a dead-letter leaves behind. */
   readonly rawText?: string;
   readonly errorMessage?: string;
+  /**
+   * The SIXTH stamp column (PLAN §3, Wave 5 correction): {@link schemaHashHex} of the Zod
+   * output schema this attempt was held to. The five columns above record the exact words a
+   * model saw; they do NOT record the output *contract* — a schema whose `.describe()` text
+   * changed without a `promptVersion` bump leaves all five identical while asking for
+   * something different. This closes that gap.
+   *
+   * `undefined` (→ NULL) for the prose path ({@link AIRuntime.streamProse}), which has no
+   * schema to hash. Never `undefined` for {@link AIRuntime.generateStructured}.
+   */
+  readonly schemaHash?: string;
 }
 
 /**
@@ -294,6 +305,43 @@ async function digestHex(bytes: Uint8Array): Promise<string> {
     .join("");
 }
 
+/**
+ * Deterministic JSON: object keys sorted recursively, arrays left in order.
+ *
+ * The point of the hash is to detect a change in what the model is *asked for*, so the
+ * string it hashes must depend only on the schema's content, never on the order Zod happened
+ * to emit its keys in. `JSON.stringify` alone preserves insertion order — stable today, but
+ * an implementation detail of one Zod version. Sorting keys makes the digest invariant to it
+ * while staying sensitive to every real contract change (a field, a type, a `.describe()`).
+ */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(",")}]`;
+  }
+  if (value !== null && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([key, val]) => `${JSON.stringify(key)}:${canonicalJson(val)}`);
+    return `{${entries.join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/**
+ * SHA-256 hex of a Zod output schema's canonical JSON Schema — the sixth stamp column.
+ *
+ * Mirrors {@link sha256Hex}: one canonical string → one SHA-256, reusing the same digest
+ * helper rather than a second hashing scheme. The string is the JSON Schema `generateObject`
+ * compiles the schema to (`z.toJSONSchema`, which carries every `.describe()` through as a
+ * `description`), run through {@link canonicalJson}. `unrepresentable: "any"` keeps a schema
+ * that JSON Schema cannot express from throwing here — a hash that can't be computed must not
+ * be able to fail a metered call.
+ */
+export async function schemaHashHex(schema: z.ZodType): Promise<string> {
+  const jsonSchema = z.toJSONSchema(schema, { unrepresentable: "any" });
+  return sha256Hex(canonicalJson(jsonSchema));
+}
+
 /** AI SDK usage → the shape the price tables expect. `input` excludes cached tokens. */
 function toTokenUsage(usage: {
   inputTokens?: number | undefined;
@@ -422,9 +470,10 @@ export function createAIRuntime(config: AIRuntimeConfig): AIRuntime {
           model: resolved.model,
           provider: MODELS[resolved.model].provider,
           inputHash,
+          // No `schemaHash` (→ NULL): prose has no schema. That is also why there is no
+          // ladder — no schema to fail means nothing to retry correctively and never more
+          // than one attempt.
           step: "initial",
-          // No ladder: prose has no schema to fail, so there is nothing to retry
-          // correctively and never more than one attempt.
           attempt: 1,
           outcome,
           ...(usage === undefined ? {} : { usage }),
@@ -494,6 +543,10 @@ export function createAIRuntime(config: AIRuntimeConfig): AIRuntime {
           fileDigests.length === 0 ? "" : `\n\nfiles:\n${fileDigests.join("\n")}`
         }`,
       );
+      // The §3 sixth column. Computed once, from the schema every rung of this ladder is
+      // held to — an escalation changes the model, never the output contract — so every
+      // attempt row carries the same schema_hash alongside the same input_hash.
+      const schemaHash = await schemaHashHex(schema);
       const start = resolve(job);
 
       const emit = async (record: AttemptRecord): Promise<void> => {
@@ -506,6 +559,7 @@ export function createAIRuntime(config: AIRuntimeConfig): AIRuntime {
           model: record.model,
           provider: MODELS[record.model].provider,
           inputHash,
+          schemaHash,
           step: record.step,
           attempt: record.attempt,
           outcome: record.outcome,

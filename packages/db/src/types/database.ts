@@ -29,6 +29,7 @@ export type Database = {
           prompt_version: number
           provider: string
           raw_text: string | null
+          schema_hash: string | null
           step: string
           user_id: string
         }
@@ -51,6 +52,7 @@ export type Database = {
           prompt_version: number
           provider: string
           raw_text?: string | null
+          schema_hash?: string | null
           step: string
           user_id: string
         }
@@ -73,6 +75,7 @@ export type Database = {
           prompt_version?: number
           provider?: string
           raw_text?: string | null
+          schema_hash?: string | null
           step?: string
           user_id?: string
         }

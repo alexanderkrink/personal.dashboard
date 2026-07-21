@@ -41,6 +41,10 @@ export function toGenerationRow(
     provider: record.provider,
     model: record.model,
     input_hash: record.inputHash,
+    // ── The §3 sixth column ────────────────────────────────────────────────────
+    // What input_hash cannot see: the output contract. NULL for prose (no schema) and for
+    // any record that predates the column being threaded through the runtime.
+    schema_hash: record.schemaHash ?? null,
     // ── Where in the ladder ────────────────────────────────────────────────────
     job: record.job,
     step: record.step,

@@ -34,6 +34,24 @@ describe("the five-column stamp reaches the row intact", () => {
   });
 });
 
+describe("the sixth stamp column: schema_hash", () => {
+  /**
+   * 🔴 RED by mutation: change the mapping to `schema_hash: null` (dropping `record.schemaHash`)
+   * and this fails. The column is what makes an output-contract change queryable when all five
+   * of the other columns are identical.
+   */
+  it("carries the schema hash through to the row", () => {
+    expect(toGenerationRow(USER, record({ schemaHash: "b".repeat(64) })).schema_hash).toBe(
+      "b".repeat(64),
+    );
+  });
+
+  it("writes NULL for a prose attempt that had no schema", () => {
+    // `record()` has no `schemaHash`; the prose path (streamProse) never sets one.
+    expect(toGenerationRow(USER, record()).schema_hash).toBeNull();
+  });
+});
+
 describe("cost is priced against the model's OWN provider table", () => {
   it("prices a Sonnet call at the durable $3/$15 sticker, not the intro rate", () => {
     // 1000 × $3/MTok + 200 × $15/MTok = $0.003 + $0.003 = $0.006.
