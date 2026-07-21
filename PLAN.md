@@ -2493,6 +2493,31 @@ chat with citations, and context retrieval for the exam-review generator.
   > so the reasons are stored but not yet displayed anywhere. The chip currently says "this
   > was flagged" when it could say what for.
 
+  > ⚠ **CORRECTED 2026-07-21 (first live production run) — two topic-page RENDERING bugs, both
+  > presentation, neither in the AI or the merge chain. The content underneath was grounded
+  > and correct** (the Sampling Distributions run mapped pp. 2, 11–14, 17–22 and cited the
+  > finite-population-correction formula to a real p. 22 — the very formula Wave 4 fabricated).
+  > Both are owned by the finalize-M1 wave (Wave 7); decided with Alexander.
+  >
+  > 1. **Formulas render as raw LaTeX.** This bullet says topic pages render via
+  >    `react-markdown` + `remark-gfm`, and *"formulas via KaTeX"* is promised in the design
+  >    per-surface note — but item 6 shipped the plugin chain as `REMARK_PLUGINS = [remarkGfm]`
+  >    with **no `katex` / `remark-math` / `rehype-katex` installed**, and
+  >    `topic-page-body.tsx` prints `{formula.latex}` verbatim. So `$\bar{X}$` in prose and the
+  >    formula blocks both show source, not typeset math — useless for a data/stats degree.
+  >    **Fix: wire KaTeX once in the shared `markdown.tsx`** (remark-math + rehype-katex,
+  >    `trust:false`/`throwOnError:false` since the LaTeX is model-produced; SSR-safe, ships its
+  >    own woff2 so CSP-clean; inherits `currentColor` for both reading themes) and typeset
+  >    `formula.latex` in display mode. **This renderer is shared with exam review (§9 / item 7),
+  >    so the one fix grounds both surfaces** — which is why it lands with, and before, item 7.
+  > 2. **The reading column strands dead-centre on wide monitors.**
+  >    `topics/[slug]/page.tsx` wraps content in `mx-auto max-w-[68ch]`. The 68ch measure is
+  >    correct and STAYS (full-width 18px serif is an unreadable ~200ch line — do not "fix" it
+  >    to full-bleed); only the wide-screen behaviour is wrong. **Decision: capped + anchored** —
+  >    cap the reading area's outer width and anchor it near the content start rather than
+  >    centring it in a ~3000px void; chips stay inline. (A marginalia rail was considered and
+  >    deferred as a post-M1 enhancement.)
+
 ### 9. Exam review (auto-generated, weighted by exam relevance)
 
 - **Weight computation (pure function in `packages/core`), 0–1 per topic:** blend of
