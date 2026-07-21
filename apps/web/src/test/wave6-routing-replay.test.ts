@@ -38,9 +38,11 @@ import {
 } from "@study/ai";
 import {
   applyDuplicateGuard,
+  coalesceSingletonCreates,
   type RoutingProposal,
   resolveRoutingDecisions,
   type Segment,
+  type SingletonFold,
   segmentExtraction,
 } from "@study/core";
 import { createAdminSupabaseClient } from "@study/db";
@@ -101,11 +103,14 @@ interface ReplayMeasurement {
   readonly targets: ReadonlyMap<string, readonly string[]>;
   readonly targetTitles: readonly string[];
   readonly segmentsMerged: number;
+  /** One-slide topics the singleton coalesce folded into their deck-adjacent section. */
+  readonly folds: readonly SingletonFold[];
 }
 
 /**
  * One live routing call over a frozen extraction, then the REAL downstream pipeline:
- * `resolveRoutingDecisions` → `applyDuplicateGuard` → `planMerges`-shaped grouping.
+ * `resolveRoutingDecisions` → `applyDuplicateGuard` → `coalesceSingletonCreates` →
+ * `planMerges`-shaped grouping.
  *
  * Title embeddings are deliberately null. On an EMPTY course the cross-upload guard has
  * nothing to compare against, and since Wave 6 the same-batch guard folds on normalised
@@ -185,11 +190,20 @@ async function replayRouting(input: {
   );
   const guarded = applyDuplicateGuard({ proposals, existingTopics: [] });
 
+  // The canonical stage order since Wave 6 phase 2: resolve → duplicate guard → singleton
+  // coalesce → planMerges. The harness measures the pipeline as shipped, so a live run's
+  // receipt now records the COALESCED target count — the pre-coalesce shape stays readable
+  // in the frozen v5 receipts and in `wave6-singleton-coalesce.test.ts`'s pinned red.
+  const coalesced = coalesceSingletonCreates({
+    routed: guarded.routed,
+    segmentOrder: segments.map((segment) => segment.key),
+  });
+
   // Group into merge targets exactly as `planMerges` does for a course with no topics.
   const byKey = new Map(segments.map((segment) => [segment.key, segment]));
   const targets = new Map<string, string[]>();
   const titles = new Map<string, string>();
-  for (const entry of guarded.routed) {
+  for (const entry of coalesced.routed) {
     if (entry.kind !== "create") continue;
     if (!byKey.has(entry.segmentKey)) continue;
     titles.set(entry.proposalKey, entry.title);
@@ -209,6 +223,7 @@ async function replayRouting(input: {
     targets,
     targetTitles: [...targets.keys()].map((key) => titles.get(key) ?? key),
     segmentsMerged: new Set([...targets.values()].flat()).size,
+    folds: coalesced.folds,
   };
 }
 
@@ -224,6 +239,13 @@ function writeReceipt(name: string, measurement: ReplayMeasurement): void {
         targetCount: measurement.targets.size,
         targetTitles: measurement.targetTitles,
         segmentsPerTarget: [...measurement.targets.values()].map((keys) => keys.length),
+        // Since Wave 6 phase 2 the receipt measures the coalesced pipeline, and the folds
+        // record what the coalesce did — an empty list means the router's own split was
+        // already all multi-segment.
+        singletonFolds: measurement.folds.map((fold) => ({
+          foldedTitle: fold.foldedTitle,
+          intoTitle: fold.intoTitle,
+        })),
         decisions: measurement.decisions,
       },
       null,

@@ -43,6 +43,7 @@ import {
 } from "@study/ai";
 import {
   applyDuplicateGuard,
+  coalesceSingletonCreates,
   computeDocumentOutcome,
   cosineSimilarity,
   type DocumentOutcome,
@@ -61,6 +62,7 @@ import {
   type RoutingResolution,
   resolveRoutingDecisions,
   type Segment,
+  type SingletonFold,
   type SkippedTarget,
   segmentExtraction,
   type TopicMergeOutcome,
@@ -107,6 +109,8 @@ export interface RouteAndMergeSummary {
   readonly topicsTouched: number;
   readonly topicsCreated: number;
   readonly coercions: number;
+  /** One-slide topics folded into their deck-adjacent section by the singleton coalesce. */
+  readonly singletonFolds: number;
   readonly unaccountedPages: number;
   readonly costUsd: number | null;
   readonly elapsedMs: number;
@@ -296,6 +300,8 @@ interface RoutingOutcome {
   readonly segments: readonly Segment[];
   readonly routed: readonly RoutedSegment[];
   readonly coercions: readonly DuplicateCoercion[];
+  /** One-slide topics folded into their deck-adjacent section (Step A.4½). */
+  readonly folds: readonly SingletonFold[];
   readonly unaccountedPages: readonly number[];
   readonly coverageChecked: boolean;
 }
@@ -359,6 +365,7 @@ export async function runRouting(input: {
       segments: [],
       routed: [],
       coercions: [],
+      folds: [],
       unaccountedPages: segmentation.unaccountedPages,
       coverageChecked: segmentation.coverageChecked,
     };
@@ -523,10 +530,37 @@ export async function runRouting(input: {
     });
   }
 
+  // ── A.4½: the singleton coalesce (Wave 6 phase 2) ─────────────────────────
+  //
+  // Deterministic, downstream of the guard, upstream of `planMerges` — the canonical order
+  // is resolve → duplicate guard → singleton coalesce → planMerges. A proposed NEW topic
+  // carrying exactly one segment folds into the nearest deck-adjacent multi-segment
+  // create; an all-singleton routing folds nothing, which is what keeps this step
+  // structurally unable to rebuild the 1-topic funnel (that shape stays the funnel
+  // backstop's case). Logged at `info`, one line per fold: this is the step working as
+  // designed, not a fault, and the fold is the reader's answer to "where did the
+  // one-slide topic the router named go?".
+  const coalesced = coalesceSingletonCreates({
+    routed: guarded.routed,
+    segmentOrder: segmentation.segments.map((segment) => segment.key),
+  });
+
+  for (const fold of coalesced.folds) {
+    await logProcessingEvent(admin, {
+      userId,
+      documentId,
+      courseId,
+      step: "route",
+      level: "info",
+      detail: `Folded one-slide topic “${fold.foldedTitle}” into its neighbouring section “${fold.intoTitle}” — one slide does not make its own topic.`,
+    });
+  }
+
   return {
     segments: segmentation.segments,
-    routed: guarded.routed,
+    routed: coalesced.routed,
     coercions: guarded.coercions,
+    folds: coalesced.folds,
     unaccountedPages: segmentation.unaccountedPages,
     coverageChecked: segmentation.coverageChecked,
   };
@@ -1434,6 +1468,7 @@ export async function runRouteAndMerge(input: RouteAndMergeInput): Promise<Route
     topicsTouched: targets.length,
     topicsCreated: created,
     coercions: routing.coercions.length,
+    singletonFolds: routing.folds.length,
     unaccountedPages: routing.unaccountedPages.length,
     costUsd: await mergeCost(admin, userId, documentId),
     elapsedMs: Date.now() - startedAt,
