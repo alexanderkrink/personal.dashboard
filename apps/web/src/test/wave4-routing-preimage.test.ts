@@ -116,11 +116,15 @@ describeWithWave4Failure("wave4 receipts — the frozen preimages", () => {
  * a NEW preimage under its NEW version, leaving the old one exactly as it is.
  */
 describeWithWave4Failure("wave4 receipts — live template drift", () => {
-  it("topic-routing@1 is unchanged and still renders the frozen preimage exactly", () => {
-    // Wave 5 deliberately held F6 (the routing prompt's empty-index carve-out): the router
-    // did not misbehave, so there was nothing for a prompt edit to fix. This asserts that
-    // decision is still true in the code.
-    expect(topicRoutingPrompt.version).toBe(1);
+  it("topic-routing has moved past the receipt, and moved its version with it", () => {
+    // Wave 5 deliberately held F6 (the routing prompt's empty-index carve-out): the Wave 4
+    // router did not misbehave, so there was nothing for a prompt edit to fix — and this
+    // test asserted `version === 1` to pin that decision. On 2026-07-21 the carve-out's
+    // absence WAS the failure, live: v1's unconditional assign-bias met an empty index and
+    // funnelled 47 segments into one create (the wave6-overmerge corpus). Wave 6 shipped
+    // the empty-index mode as v2. The v1 receipt above stands on the frozen preimage,
+    // exactly as this suite's header says it must.
+    expect(topicRoutingPrompt.version).toBeGreaterThan(1);
 
     const segments = replaySegmentation();
     const rendered = topicRoutingPrompt.render({
@@ -138,7 +142,10 @@ describeWithWave4Failure("wave4 receipts — live template drift", () => {
       ),
     });
 
-    expect(rendered).toBe(loadPreimage("topic-routing-v1"));
+    expect(rendered).not.toBe(loadPreimage("topic-routing-v1"));
+    expect(inputHash("topic-routing", topicRoutingPrompt.version, rendered)).not.toBe(
+      RECORDED_ROUTING_HASH,
+    );
   });
 
   it("topic-merge has moved past the receipt, and moved its version with it", () => {

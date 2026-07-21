@@ -71,7 +71,14 @@ function localEnv(): Record<string, string> {
 
 const enabled = process.env.WAVE5_LIVE_REPLAY === "1" && hasWave4Failure();
 
-describe.skipIf(!enabled)("wave5 routing replay (live, metered)", () => {
+// This instrument belongs to `topic-routing@1`: its hash gate proves the reconstruction is
+// the prompt the FAILING run sent, which stopped being renderable the moment the template
+// moved to v2 (Wave 6's empty-index mode). The successor instrument is
+// `wave6-routing-replay.test.ts`, which replays both frozen extractions under the current
+// version. The recorded v1 measurements stay frozen in `wave5-routing-replay.json`.
+const rendersV1 = topicRoutingPrompt.version === 1;
+
+describe.skipIf(!enabled || !rendersV1)("wave5 routing replay (live, metered)", () => {
   it("replays the routing call and reports the decision shape", { timeout: 300_000 }, async () => {
     const fixture = loadWave4Failure();
     const sourceUnits = fixture.extractionEnvelope.sourceUnits;
@@ -319,8 +326,18 @@ describe.skipIf(!enabled)("wave5 — the fixed pipeline over the frozen corpus",
       ],
     };
 
+    // NOT `wave5-pipeline-measurement.json`: that file is the FROZEN Wave 5 measurement —
+    // the 7→2 cosine fold, whose recorded similarities are what the Wave 6 guard tests
+    // assert against — and a re-run under the current pipeline must never overwrite it.
     writeFileSync(
-      join(HERE, "..", "..", ".local-fixtures", "wave4-failure", "wave5-pipeline-measurement.json"),
+      join(
+        HERE,
+        "..",
+        "..",
+        ".local-fixtures",
+        "wave4-failure",
+        "wave5-pipeline-measurement-current.json",
+      ),
       JSON.stringify(report, null, 2),
     );
 
