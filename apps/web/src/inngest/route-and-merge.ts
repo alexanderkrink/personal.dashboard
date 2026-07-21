@@ -48,6 +48,7 @@ import {
   type DocumentOutcome,
   type DuplicateCoercion,
   detectMergeLoss,
+  detectSingleTopicFunnel,
   detectUngroundedContent,
   type ExistingTopicTitle,
   flattenTopicPage,
@@ -493,16 +494,21 @@ export async function runRouting(input: {
   const guarded = applyDuplicateGuard({ proposals, existingTopics: existingTitles });
 
   for (const coercion of guarded.coercions) {
+    // Levels encode normal vs fault. `coerced-to-existing` is the guard overriding the
+    // router — a person should see that. `merged-into-proposal` is identical titles
+    // grouping onto one create, the ordinary batch shape since Wave 6's guard folds on
+    // title identity only — the 2026-07-21 run emitted 46 of these as warns, which is a
+    // channel-destroying amount of crying wolf.
     await logProcessingEvent(admin, {
       userId,
       documentId,
       courseId,
       step: "route",
-      level: "warn",
+      level: coercion.reason === "coerced-to-existing" ? "warn" : "info",
       detail:
         coercion.reason === "coerced-to-existing"
           ? `Proposed new topic “${coercion.proposedTitle}” is ${(coercion.similarity * 100).toFixed(0)}% similar to the existing “${coercion.matchedTitle}” — merged into it instead of creating a duplicate.`
-          : `Proposed new topic “${coercion.proposedTitle}” duplicates “${coercion.matchedTitle}” from earlier in this same document — both were merged into one new topic.`,
+          : `Section named new topic “${coercion.proposedTitle}” again — grouped with the earlier “${coercion.matchedTitle}” as one new topic.`,
     });
   }
 
@@ -1073,6 +1079,12 @@ async function mergeTopics(input: {
   readonly targets: readonly MergeTarget[];
   readonly unaccountedPages: readonly number[];
   readonly coverageChecked: boolean;
+  /**
+   * Document-level findings that must ride every persisted revision this run writes —
+   * today, the single-topic funnel backstop. Computed upstream because they judge the
+   * routing SHAPE, which no per-topic verifier can see from inside one topic.
+   */
+  readonly backstopFindings: readonly string[];
   readonly takenSlugs: Set<string>;
   readonly embeddings: EmbeddingClient;
   readonly runtime: ReturnType<typeof createStudyAIRuntime>;
@@ -1111,7 +1123,7 @@ async function mergeTopics(input: {
 
       // ── Step B2 ───────────────────────────────────────────────────────────
       const routedPages = [...new Set(target.segments.flatMap((segment) => segment.pages))];
-      const verified = await verifyMerge({
+      const perTopic = await verifyMerge({
         admin: input.admin,
         userId: input.userId,
         documentId: input.documentId,
@@ -1126,6 +1138,19 @@ async function mergeTopics(input: {
         coverageChecked: input.coverageChecked,
         runtime: input.runtime,
       });
+
+      // Document-level backstop findings ride the same durable channel as the per-topic
+      // ones: `needs_review` and `review_notes` on the revision row this persist writes.
+      // Applied here rather than inside `verifyMerge` because they are not the merge's
+      // fault and a re-merge cannot fix them — they must flag, and never spend a call.
+      const verified: VerifiedMerge =
+        input.backstopFindings.length === 0
+          ? perTopic
+          : {
+              ...perTopic,
+              needsReview: true,
+              findings: [...perTopic.findings, ...input.backstopFindings],
+            };
 
       // ── Step C: re-embed the new summary, then persist ────────────────────
       //
@@ -1293,6 +1318,30 @@ export async function runRouteAndMerge(input: RouteAndMergeInput): Promise<Route
     });
   }
 
+  // ── The single-topic funnel backstop (Wave 6) ──────────────────────────────
+  //
+  // Deterministic, and deliberately downstream of the prompt, the resolver and the guard:
+  // the 2026-07-21 over-merge shipped `topicCount: 1` with perfect grounding and not one
+  // durable flag, because every check measured whether content reached the notes and none
+  // measured whether it reached them in a navigable shape. The v2 empty-index prompt is the
+  // primary fix and is probabilistic; this predicate cannot be argued out of firing. It
+  // flags the created topic's first revision — never blocks the merge.
+  const funnelFinding = detectSingleTopicFunnel({
+    existingTopicCount: existingTopics.length,
+    routedSegmentCount: segmentsMerged,
+    mergeTargetCount: targets.length,
+  });
+  if (funnelFinding !== null) {
+    await logProcessingEvent(admin, {
+      userId,
+      documentId,
+      courseId,
+      step: "route",
+      level: "warn",
+      detail: `All ${segmentsMerged} sections of this file were funnelled into a single topic on a course with no topics yet — the page was saved, but flagged for review as likely under-split.`,
+    });
+  }
+
   // ── Convergence gate (PLAN §5's "Idempotency & re-processing") ─────────────
   //
   // Everything above this line is cheap and deterministic enough to repeat. Everything below
@@ -1368,6 +1417,7 @@ export async function runRouteAndMerge(input: RouteAndMergeInput): Promise<Route
     targets: plan.toMerge,
     unaccountedPages: routing.unaccountedPages,
     coverageChecked: routing.coverageChecked,
+    backstopFindings: funnelFinding === null ? [] : [funnelFinding],
     takenSlugs,
     embeddings,
     runtime,

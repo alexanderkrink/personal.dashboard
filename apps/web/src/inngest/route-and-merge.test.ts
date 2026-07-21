@@ -6,6 +6,7 @@
 import type { StoredTopicPage } from "@study/ai";
 import type { SupabaseAdminClient } from "@study/db";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { logProcessingEvent } from "@/inngest/documents";
 import { createAuditTopic } from "./topic-edits";
 
 /**
@@ -351,6 +352,14 @@ function embedText(text: string): number[] {
 const llmCalls: string[] = [];
 /** Topic keys the fake model should fail the merge for, simulating a mid-loop timeout. */
 let failMergeFor = new Set<string>();
+/**
+ * When set, the routing fake reproduces the empty-index batch shape the real router
+ * returns: segments are dealt round-robin into this many topics, the first segment of each
+ * topic CREATES it and every later one assigns to it BY TITLE (the batch-local reference —
+ * the schema gives the model no id for a topic that does not exist yet). `1` is exactly the
+ * production over-merge of 2026-07-21: one create, every other segment funnelled into it.
+ */
+let emptyIndexTargets: number | null = null;
 /** Topics whose merge fake emits a note block carrying NO citation of this document. */
 let uncitedMergeFor = new Set<string>();
 /** Topics whose merge fake returns a page far larger than the segments it was given. */
@@ -407,6 +416,22 @@ vi.mock("@/lib/ai/runtime", () => ({
         // Segment keys and headings are read back out of the rendered prompt, so the test
         // never has to guess what `segmentExtraction` produced.
         const rendered = String(vars.segments);
+        if (emptyIndexTargets !== null) {
+          const spread = emptyIndexTargets;
+          const decisions = [...rendered.matchAll(/### segmentKey: (\S+)\nHeading: (.+)/g)].map(
+            (match, index) => {
+              const title = `Concept ${(index % spread) + 1}`;
+              const creates = index < spread;
+              return {
+                segmentKey: match[1] ?? "",
+                assignToTopicId: creates ? null : title,
+                createNewTitle: creates ? title : null,
+                rationale: `funnelled into ${title}`,
+              };
+            },
+          );
+          return { status: "success", value: { decisions }, stamp };
+        }
         const decisions = [...rendered.matchAll(/### segmentKey: (\S+)\nHeading: (.+)/g)].map(
           (match) => {
             const heading = (match[2] ?? "").trim();
@@ -465,6 +490,15 @@ vi.mock("@/lib/ai/runtime", () => ({
           stamp,
         };
       }
+      // A faithful merge cites the pages it was actually given: every `[p.N]` marker in the
+      // rendered segments becomes a source on the produced note. Without this, any create
+      // fed a dozen segments trips the Wave 5 `uncited-routed-pages` red, and every test on
+      // this fake would be measuring the citation check instead of the path under test.
+      const givenPages = [
+        ...new Set(
+          [...String(vars.segments).matchAll(/\[p\.(\d+)\]/g)].map((match) => Number(match[1])),
+        ),
+      ];
       return {
         status: "success",
         value: {
@@ -478,7 +512,19 @@ vi.mock("@/lib/ai/runtime", () => ({
               : `${title} merged from ${String(vars.documentLabel)}`,
             notes: uncitedMergeFor.has(title)
               ? [{ id: "orphan", heading: "Orphan", markdown: "content", sources: [] }]
-              : [],
+              : givenPages.length === 0
+                ? []
+                : [
+                    {
+                      id: "cited",
+                      heading: title,
+                      markdown: `What ${title} covers.`,
+                      sources: givenPages.map((page) => ({
+                        documentId: String(vars.documentId),
+                        page,
+                      })),
+                    },
+                  ],
           },
           changeSummary: `added ${title}`,
           removals: [],
@@ -501,6 +547,8 @@ beforeEach(() => {
   failMergeFor = new Set();
   uncitedMergeFor = new Set();
   bloatedMergeFor = new Set();
+  emptyIndexTargets = null;
+  vi.mocked(logProcessingEvent).mockClear();
   db = new FakeDb();
   db.rows("documents").push({ id: DOCUMENT, user_id: USER, extraction: EXTRACTION });
   for (const [id, title] of [
@@ -643,6 +691,146 @@ describe("runRouteAndMerge — a created topic carries its review flag", () => {
     expect(first?.revision).toBe(0);
     expect(first?.needs_review).toBe(false);
     expect(first?.review_notes).toEqual([]);
+  });
+});
+
+describe("runRouteAndMerge — the single-topic funnel backstop (wave 6)", () => {
+  /**
+   * The production over-merge of 2026-07-21, restated as code: an EMPTY course, a
+   * many-segment document, and a router that funnels every segment into ONE create. Routing
+   * succeeded, grounding was perfect, coverage said `trustworthy: true` — and `topicCount:
+   * 1` shipped without one durable flag anywhere. The backstop is deterministic and lives
+   * downstream of every probabilistic component, so no prompt regression can argue it out
+   * of firing: empty index + ≥ 12 routed segments + exactly 1 merge target ⇒ the created
+   * topic is `needs_review`, with a note saying why. It flags; it never blocks.
+   */
+  const pagesFor = (count: number) =>
+    Array.from({ length: count }, (_, index) => ({
+      page: index + 1,
+      title: `Heading ${index + 1}`,
+      markdown: `Content ${index + 1} about a distinct idea.`,
+    }));
+
+  /** A deck with one headed segment per page, in an EMPTY course. */
+  function funnelFixture(pageCount: number): void {
+    db.tables.topics = [];
+    db.tables.documents = [
+      {
+        id: DOCUMENT,
+        user_id: USER,
+        extraction: {
+          ...EXTRACTION,
+          sourceUnits: pageCount,
+          extraction: {
+            ...EXTRACTION.extraction,
+            pages: pagesFor(pageCount),
+            headings: pagesFor(pageCount).map((page) => ({
+              text: page.title,
+              level: 1,
+              page: page.page,
+            })),
+          },
+        },
+      },
+    ];
+  }
+
+  const funnelNotes = () =>
+    db
+      .rows("topic_revisions")
+      .flatMap((row) => (row.review_notes ?? []) as string[])
+      .filter((note) => note.includes("funnelled into a single topic"));
+
+  it("flags the one created topic when an empty-index document funnels 14 segments into it", async () => {
+    funnelFixture(14);
+    emptyIndexTargets = 1;
+
+    const summary = await pass();
+
+    expect(summary.topicsTouched).toBe(1);
+    expect(summary.topicsCreated).toBe(1);
+    expect(summary.segmentsMerged).toBe(14);
+
+    const created = db.rows("topics")[0];
+    const first = db.rows("topic_revisions").find((row) => row.topic_id === created?.id);
+    expect(first).toBeDefined();
+    expect(first?.needs_review).toBe(true);
+    expect(funnelNotes()).toHaveLength(1);
+    expect(funnelNotes()[0]).toContain("likely under-split");
+
+    // The flag is a topic-page fact AND a feed fact: the progress feed says why, at warn.
+    const warned = vi
+      .mocked(logProcessingEvent)
+      .mock.calls.some(
+        ([, event]) =>
+          event.level === "warn" && String(event.detail).includes("funnelled into a single topic"),
+      );
+    expect(warned).toBe(true);
+
+    // A created topic's outcome is keyed by its proposal key, so assert on the whole set:
+    // one target, merged, and carrying the flag.
+    expect(summary.topicOutcomes).toHaveLength(1);
+    expect(summary.topicOutcomes[0]).toMatchObject({ status: "merged", needsReview: true });
+  });
+
+  it("does not fire on a healthy split — five targets from the same empty index", async () => {
+    funnelFixture(15);
+    emptyIndexTargets = 5;
+
+    const summary = await pass();
+
+    expect(summary.topicsTouched).toBe(5);
+    expect(summary.topicsCreated).toBe(5);
+    expect(funnelNotes()).toEqual([]);
+    for (const row of db.rows("topic_revisions")) {
+      expect(row.needs_review).toBe(false);
+    }
+  });
+
+  it("does not fire below twelve segments — a short document can legitimately be one topic", async () => {
+    funnelFixture(11);
+    emptyIndexTargets = 1;
+
+    const summary = await pass();
+
+    expect(summary.topicsTouched).toBe(1);
+    expect(funnelNotes()).toEqual([]);
+    const first = db.rows("topic_revisions")[0];
+    expect(first?.needs_review).toBe(false);
+  });
+
+  it("does not fire when the course already has topics — the assign-bias is then correct", async () => {
+    // Fourteen segments, every one routed into the ONE existing topic Alpha. On a grown
+    // index, one document expanding one topic is the product invariant working, not a
+    // funnel.
+    db.tables.documents = [];
+    funnelFixture(14);
+    const alpha = {
+      id: TOPIC_ALPHA,
+      user_id: USER,
+      course_id: COURSE,
+      title: "Alpha",
+      slug: "alpha",
+      summary: "Alpha so far",
+      page: EMPTY_PAGE,
+      revision: 1,
+      title_embedding: embedText("Alpha"),
+      summary_embedding: embedText("Alpha so far"),
+    };
+    db.tables.topics = [alpha];
+    for (let n = 1; n <= 14; n += 1) ROUTING[`Heading ${n}`] = TOPIC_ALPHA;
+
+    try {
+      const summary = await pass();
+
+      expect(summary.topicsTouched).toBe(1);
+      expect(summary.topicsCreated).toBe(0);
+      expect(funnelNotes()).toEqual([]);
+      const snapshot = db.rows("topic_revisions").find((row) => row.topic_id === TOPIC_ALPHA);
+      expect(snapshot?.needs_review).toBe(false);
+    } finally {
+      for (let n = 1; n <= 14; n += 1) delete ROUTING[`Heading ${n}`];
+    }
   });
 });
 
