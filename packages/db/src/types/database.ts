@@ -1169,6 +1169,7 @@ export type Database = {
       topics: {
         Row: {
           course_id: string
+          create_plan_key: string | null
           created_at: string
           exam_weight: number
           exam_weight_override: number | null
@@ -1185,6 +1186,7 @@ export type Database = {
         }
         Insert: {
           course_id: string
+          create_plan_key?: string | null
           created_at?: string
           exam_weight?: number
           exam_weight_override?: number | null
@@ -1201,6 +1203,7 @@ export type Database = {
         }
         Update: {
           course_id?: string
+          create_plan_key?: string | null
           created_at?: string
           exam_weight?: number
           exam_weight_override?: number | null
@@ -1297,6 +1300,7 @@ export type Database = {
         Args: {
           p_change_summary: string
           p_course_id: string
+          p_create_plan_key?: string
           p_document_id: string
           p_input_hash: string
           p_model: string
