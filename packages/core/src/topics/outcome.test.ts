@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { computeDocumentOutcome, outcomeMessage, type TopicMergeOutcome } from "./outcome";
+import {
+  computeDocumentOutcome,
+  countNewestFlagged,
+  outcomeMessage,
+  type TopicMergeOutcome,
+} from "./outcome";
 
 const merged = (topicKey: string, needsReview = false): TopicMergeOutcome => ({
   topicKey,
@@ -105,6 +110,53 @@ describe("computeDocumentOutcome", () => {
     });
 
     expect(outcome.status).toBe("failed");
+  });
+});
+
+describe("countNewestFlagged", () => {
+  /**
+   * §3 fix (4): the finalize "N flagged" note must count PERSISTED revisions, not the
+   * in-process merge outcomes. This is the case the old count got wrong — two revisions
+   * flagged AFTER the merge (a coverage gap, a deep-review conflict) while the merge outcomes
+   * carried `needsReview: false`.
+   */
+  it("RED: counts topics flagged by revisions written after the merge (old count: 0)", () => {
+    const rows = [
+      // Topic a: merged clean at rev 0, then a coverage gap flagged it at rev 1.
+      { topic_id: "a", revision: 0, needs_review: false },
+      { topic_id: "a", revision: 1, needs_review: true },
+      // Topic b: a deep-review conflict flagged it.
+      { topic_id: "b", revision: 1, needs_review: true },
+      // Topic c: merged clean, never flagged.
+      { topic_id: "c", revision: 0, needs_review: false },
+    ];
+
+    // The old code read `needsReviewCount` off merge outcomes that were all `needsReview:false`.
+    const oldCount = computeDocumentOutcome({
+      topicOutcomes: [
+        { topicKey: "a", status: "merged", needsReview: false },
+        { topicKey: "b", status: "merged", needsReview: false },
+        { topicKey: "c", status: "merged", needsReview: false },
+      ],
+    }).needsReviewCount;
+    expect(oldCount).toBe(0);
+
+    // The persisted-revision count is the honest 2.
+    expect(countNewestFlagged(rows)).toBe(2);
+    expect(` ${countNewestFlagged(rows)} flagged for review.`).toContain("2 flagged");
+  });
+
+  it("uses the NEWEST revision per topic — a resolved flag stops counting", () => {
+    // Flagged at rev 1, then a later revision cleared it. The topic is no longer flagged.
+    const rows = [
+      { topic_id: "a", revision: 1, needs_review: true },
+      { topic_id: "a", revision: 2, needs_review: false },
+    ];
+    expect(countNewestFlagged(rows)).toBe(0);
+  });
+
+  it("is zero on no revisions", () => {
+    expect(countNewestFlagged([])).toBe(0);
   });
 });
 

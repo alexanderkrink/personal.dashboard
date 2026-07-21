@@ -100,6 +100,34 @@ export function computeDocumentOutcome(input: DocumentOutcomeInput): DocumentOut
   };
 }
 
+/** One persisted revision row, as the flag count reads it. */
+export interface ReviewFlagRow {
+  readonly topic_id: string;
+  readonly revision: number;
+  readonly needs_review: boolean;
+}
+
+/**
+ * How many topics carry a review flag on their NEWEST revision.
+ *
+ * The finalize "N flagged for review" note used to read `DocumentOutcome.needsReviewCount`,
+ * which counts only the in-process merge outcomes — so it structurally missed the
+ * coverage-gap and deep-review `needs_review` revisions written AFTER the merge step, and the
+ * idempotency skip path zeroed it. Counting from the PERSISTED revisions instead (newest per
+ * topic, mirroring the course page) is the honest number.
+ *
+ * Pure — max-revision-per-topic, order-independent — so "N flagged" is testable without the
+ * pipeline. The caller supplies this document's revision rows.
+ */
+export function countNewestFlagged(rows: readonly ReviewFlagRow[]): number {
+  const newest = new Map<string, ReviewFlagRow>();
+  for (const row of rows) {
+    const current = newest.get(row.topic_id);
+    if (current === undefined || row.revision > current.revision) newest.set(row.topic_id, row);
+  }
+  return [...newest.values()].filter((row) => row.needs_review).length;
+}
+
 /**
  * The user-facing sentence for a non-`ready` outcome.
  *

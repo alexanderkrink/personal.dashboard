@@ -41,11 +41,13 @@ export {
 } from "./loss-detector";
 export {
   computeDocumentOutcome,
+  countNewestFlagged,
   type DocumentOutcome,
   type DocumentOutcomeInput,
   type DocumentOutcomeStatus,
   type FailedTopic,
   outcomeMessage,
+  type ReviewFlagRow,
   type TopicMergeOutcome,
 } from "./outcome";
 export {
