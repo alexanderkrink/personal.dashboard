@@ -4,13 +4,24 @@
 // `@/inngest/functions/mark-reviews-stale`, whose import graph reaches `@/env` through the
 // Inngest client, and t3-env refuses to hand a server variable to anything with a `window`.
 
-import { EMPTY_TOPIC_PAGE, type StoredTopicPage } from "@study/ai";
+import {
+  AIPausedError,
+  EMPTY_TOPIC_PAGE,
+  type ExamReview,
+  type GenerateStructuredResult,
+  type GuardDecision,
+  type StoredTopicPage,
+} from "@study/ai";
+import { NonRetriableError } from "inngest";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   buildReviewSnapshot,
+  type ExamReviewRuntime,
+  generateExamReviewContent,
   type ReviewTopic,
   renderExamFormat,
   renderTopicIndex,
+  reviewGate,
 } from "@/inngest/exam-review";
 
 /**
@@ -148,5 +159,161 @@ describe("renderExamFormat", () => {
     expect(renderExamFormat({ duration: "3 hours", style: "open book" })).toContain(
       "duration: 3 hours",
     );
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/* The money guards: reviewGate + generateExamReviewContent                   */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+const A_TOPIC: ReviewTopic = {
+  id: "t1",
+  title: "A Topic",
+  summary: "A summary.",
+  effectiveWeight: 0.5,
+  page: EMPTY_TOPIC_PAGE,
+};
+
+const VALID_REVIEW: ExamReview = {
+  overview: "o",
+  sections: [],
+  formulaSheet: [],
+  questionBank: [],
+  weakSpots: [],
+};
+
+const SUCCESS: GenerateStructuredResult<ExamReview> = {
+  status: "success",
+  value: VALID_REVIEW,
+  stamp: {
+    promptId: "exam-review",
+    promptVersion: 1,
+    job: "exam-review",
+    provider: "anthropic",
+    model: "claude-opus-4-8",
+    inputHash: "hash",
+  },
+};
+
+/** A configurable fake runtime that counts how many times the billed call is made. */
+function fakeRuntime(opts: {
+  rank?: "fast" | "balanced" | "deep";
+  guard?: GuardDecision;
+  generate?: () => Promise<GenerateStructuredResult<ExamReview>>;
+}): { runtime: ExamReviewRuntime; calls: { generate: number } } {
+  const calls = { generate: 0 };
+  const runtime = {
+    resolve: () => ({ rank: opts.rank ?? "deep" }),
+    guardCheck: async () => opts.guard ?? ({ allowed: true } as GuardDecision),
+    generateStructured: async () => {
+      calls.generate += 1;
+      return (opts.generate ?? (async () => SUCCESS))();
+    },
+  } as unknown as ExamReviewRuntime;
+  return { runtime, calls };
+}
+
+describe("reviewGate", () => {
+  it("defers with cause 'clamp' when exam-review resolves below the deep tier", async () => {
+    const { runtime } = fakeRuntime({ rank: "fast" });
+    const gate = await reviewGate(runtime);
+    expect(gate).toEqual({ allowed: false, cause: "clamp", detail: expect.any(String) });
+  });
+
+  it("defers with cause 'budget' when the §6 guard denies", async () => {
+    const { runtime } = fakeRuntime({
+      rank: "deep",
+      guard: { allowed: false, reason: "budget-defer-deep" },
+    });
+    const gate = await reviewGate(runtime);
+    expect(gate).toEqual({ allowed: false, cause: "budget", detail: "budget-defer-deep" });
+  });
+
+  it("allows a deep-rank job under budget", async () => {
+    const { runtime } = fakeRuntime({ rank: "deep", guard: { allowed: true } });
+    expect(await reviewGate(runtime)).toEqual({ allowed: true });
+  });
+});
+
+describe("generateExamReviewContent — the money guards", () => {
+  const deps = (runtime: ExamReviewRuntime) => ({
+    runtime,
+    courseTitle: "Stats",
+    examFormat: "written final",
+    topics: [A_TOPIC],
+  });
+
+  it("generates on success and carries the five-column stamp", async () => {
+    const { runtime, calls } = fakeRuntime({ rank: "deep", guard: { allowed: true } });
+    const result = await generateExamReviewContent(deps(runtime));
+    expect(result.kind).toBe("generated");
+    if (result.kind !== "generated") throw new Error("unreachable");
+    expect(result.content).toEqual(VALID_REVIEW);
+    expect(result.stamp.model).toBe("claude-opus-4-8");
+    expect(calls.generate).toBe(1);
+  });
+
+  // RED against removing the clamp check in reviewGate: a clamped runtime would fall through and
+  // BILL an Opus call on a lesser tier. Asserts it defers AND never calls the paid path.
+  it("a clamp DEFERS and never bills — no non-Opus review is silently produced", async () => {
+    const { runtime, calls } = fakeRuntime({ rank: "balanced", guard: { allowed: true } });
+    const result = await generateExamReviewContent(deps(runtime));
+    expect(result).toMatchObject({ kind: "deferred", cause: "clamp" });
+    expect(calls.generate).toBe(0);
+  });
+
+  // RED against removing the budget guard: a denied budget would fall through and bill.
+  it("a budget denial DEFERS and never bills", async () => {
+    const { runtime, calls } = fakeRuntime({
+      rank: "deep",
+      guard: { allowed: false, reason: "budget-defer-deep" },
+    });
+    const result = await generateExamReviewContent(deps(runtime));
+    expect(result).toMatchObject({ kind: "deferred", cause: "budget" });
+    expect(calls.generate).toBe(0);
+  });
+
+  it("an AIPausedError mid-call DEFERS (no spend happened) rather than failing", async () => {
+    const { runtime } = fakeRuntime({
+      rank: "deep",
+      guard: { allowed: true },
+      generate: () => Promise.reject(new AIPausedError("budget-defer-deep")),
+    });
+    const result = await generateExamReviewContent(deps(runtime));
+    expect(result).toMatchObject({ kind: "deferred", cause: "paused" });
+  });
+
+  // 🔴 THE double-bill guard: a transport/429/auth error reaches the caller AFTER the paid Opus
+  // call. It MUST surface as NonRetriableError so Inngest does not retry the step and re-bill.
+  // RED when the catch rethrows the original (retriable) error instead of wrapping it.
+  it("a transport error after the paid call throws NonRetriableError (no retry re-bill)", async () => {
+    const { runtime, calls } = fakeRuntime({
+      rank: "deep",
+      guard: { allowed: true },
+      generate: () => Promise.reject(new Error("429 rate limited")),
+    });
+    let thrown: unknown;
+    try {
+      await generateExamReviewContent(deps(runtime));
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(NonRetriableError);
+    expect(calls.generate).toBe(1);
+  });
+
+  it("a dead-letter is reported, not thrown", async () => {
+    const { runtime } = fakeRuntime({
+      rank: "deep",
+      guard: { allowed: true },
+      generate: async () => ({
+        status: "dead-letter",
+        reason: "schema",
+        message: "bad output",
+        stamp: SUCCESS.stamp,
+      }),
+    });
+    const result = await generateExamReviewContent(deps(runtime));
+    expect(result).toMatchObject({ kind: "dead-letter" });
   });
 });

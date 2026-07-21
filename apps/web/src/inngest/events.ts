@@ -191,13 +191,18 @@ export const courseTopicsChanged = eventType("course/topics.changed", {
  * own.
  *
  * `courseId` doubles as the concurrency key: `generate-review` declares
- * `concurrency: [{ key: "event.data.courseId", limit: 1 }]`, which is what makes a
- * double-click or a click-while-in-flight serialize into one run behind another rather than
- * two parallel Opus calls — and the second run then sees the fresh review the first produced
- * and skips, so the ~$0.50–1.50 call is not billed twice.
+ * `concurrency: [{ key: "event.data.courseId", limit: 1 }]`, which serializes runs for a
+ * course rather than letting two Opus calls run in parallel.
+ *
+ * `requestId` is the **idempotency token**, and it is a client concern, not a tenant one — a
+ * uuid the Regenerate button mints once per intent and reuses across a double-click. The
+ * function declares `idempotency: "event.data.requestId"`, so two sends of the *same* request
+ * collapse to one run (no double bill), while a genuinely new Regenerate carries a fresh id and
+ * runs. It names no owner and cannot: the handler still derives the tenant from `courseId`.
  */
 export const courseReviewRequestedData = z.object({
   courseId: z.uuid(),
+  requestId: z.uuid(),
 });
 
 export const courseReviewRequested = eventType("course/review.requested", {

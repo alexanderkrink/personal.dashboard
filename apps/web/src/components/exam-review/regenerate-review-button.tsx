@@ -50,10 +50,15 @@ export function RegenerateReviewButton({
   const [open, setOpen] = useState(false);
   const [requested, setRequested] = useState(false);
   const [pending, startTransition] = useTransition();
+  // A stable idempotency token for this button instance: a double-click that races the
+  // in-flight disable reuses it, so `generate-review`'s `idempotency: event.data.requestId`
+  // collapses the two sends to one Opus run. A legit later regeneration is a fresh mount → a
+  // fresh token (and `requested` disables this instance after its first accepted request).
+  const [requestId] = useState(() => crypto.randomUUID());
 
   function confirm() {
     startTransition(async () => {
-      const result = await requestExamReview({ courseId });
+      const result = await requestExamReview({ courseId, requestId });
       if (result.ok) {
         setRequested(true);
         setOpen(false);

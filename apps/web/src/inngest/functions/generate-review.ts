@@ -7,35 +7,32 @@
  * automatic** — reviews cost ~$0.50–1.50 on Opus and a student regenerates near an exam — so
  * nothing enqueues this except the Regenerate button's Server Action.
  *
- * ## The three things this function must not do
+ * ## An explicit Regenerate ALWAYS generates
  *
- *  1. **Double-bill.** A double-click, or a click while a run is in flight, must not produce
- *     two Opus calls. `concurrency: [{ key: courseId, limit: 1 }]` serializes runs for a
- *     course, and the freshness check then makes the second run a no-op: run 1 inserts a
- *     review whose snapshot matches the current topics, run 2 sees a non-stale review and
- *     skips. The two together are the dedupe.
- *  2. **Silently produce a non-Opus review.** `exam-review` is a deep-rank job pinned to Opus.
- *     If `AI_MAX_TIER` has clamped it down a rank, generating anyway would hand the student a
- *     quietly worse review with no signal that it happened — so the clamp is detected (the
- *     resolved rank is no longer `deep`) and the run defers instead.
- *  3. **Hang under budget pressure.** Past 100% of budget the §6 guard defers deep-rank
- *     background jobs. Rather than call `generateStructured` and let it throw a retryable
- *     `AIPausedError` that burns the retry budget, the guard is consulted first and the run
- *     returns a `deferred` status. The Regenerate Server Action surfaces the same state to the
- *     student synchronously, so they see "paused", not a spinner.
+ * There is deliberately no content-freshness skip here. Staleness (`isReviewStale`) is a
+ * revision-only "growth is not decay" predicate — right for the *badge* (a newly-added topic
+ * must not flip every review stale forever) but wrong as a generation gate: a student who
+ * uploads a new lecture and hits Regenerate wants exactly that new material folded in, and no
+ * covered topic's revision moved, so a freshness gate would silently skip the one run they
+ * asked for. The user already confirmed the cost; the function's job is to run it.
+ *
+ * ## The two money guards
+ *
+ *  1. **No double bill on a double-click.** Per-course `concurrency: 1` serializes runs, and
+ *     `idempotency` on the client-supplied `requestId` makes two sends of the *same* request
+ *     collapse to one run at the platform level — so a double-click (or a click that races the
+ *     button's own in-flight disable) cannot enqueue a second Opus run, while a genuinely new
+ *     request (fresh `requestId`) still runs.
+ *  2. **No double bill on an Inngest retry.** The billed call lives in its own memoized step,
+ *     and `generateExamReviewContent` converts any post-spend failure into a
+ *     `NonRetriableError` — see the invariant documented there. A retry replays the memoized
+ *     result rather than re-calling Opus.
  *
  * Rule 8 (`events.ts`): the owner is derived from the `courses` row, never from the payload —
- * the event carries only `courseId`.
+ * the event carries only `courseId` (+ the idempotency `requestId`).
  */
 
-import {
-  AIPausedError,
-  EXAM_REVIEW_SYSTEM,
-  type ExamReview,
-  examReviewPrompt,
-  examReviewSchema,
-  storedTopicPageSchema,
-} from "@study/ai";
+import { type ExamReview, storedTopicPageSchema } from "@study/ai";
 import type { Json } from "@study/db";
 import { NonRetriableError } from "inngest";
 import { inngest } from "@/inngest/client";
@@ -43,11 +40,9 @@ import { adminClient } from "@/inngest/documents";
 import { courseReviewRequested, courseReviewRequestedData } from "@/inngest/events";
 import {
   buildReviewSnapshot,
-  type ReviewTopic,
+  generateExamReviewContent,
   renderExamFormat,
-  renderTopicIndex,
 } from "@/inngest/exam-review";
-import { isReviewStale, readSnapshot } from "@/inngest/functions/mark-reviews-stale";
 import { deriveOwner } from "@/inngest/owner";
 import { AINotConfiguredError, createStudyAIRuntime } from "@/lib/ai/runtime";
 
@@ -61,9 +56,6 @@ interface LoadedTopic {
   readonly page: ReturnType<typeof storedTopicPageSchema.parse>;
 }
 
-/** The `exam-review` job runs on a deep-rank model (Opus); anything lower is a clamp. */
-const REQUIRED_RANK = "deep";
-
 export const generateReview = inngest.createFunction(
   {
     id: "generate-review",
@@ -71,8 +63,12 @@ export const generateReview = inngest.createFunction(
     triggers: [courseReviewRequested],
     // A user-initiated regeneration: a transient DB blip should retry, but not forever.
     retries: 2,
-    // Serialized per course — this is half of the double-bill guard (see the header).
+    // Serialized per course — half of the double-bill guard.
     concurrency: [{ key: "event.data.courseId", limit: 1 }],
+    // The other half: two sends of the SAME request (a double-click, or a click that races the
+    // button's in-flight disable) dedupe to one run at the platform level. A genuinely new
+    // Regenerate carries a fresh requestId and still runs.
+    idempotency: "event.data.requestId",
   },
   async ({ event, step }) => {
     const parsed = courseReviewRequestedData.safeParse(event.data);
@@ -137,107 +133,39 @@ export const generateReview = inngest.createFunction(
       return { courseId, status: "empty" as const };
     }
 
-    // ── Freshness guard (dedupe half 2) ────────────────────────────────────────
+    // ── Generate (the one Opus call), guarded and memoized ─────────────────────
     //
-    // If the newest review is still fresh against the current topic revisions, nothing has
-    // changed since it was built, so regenerating would spend Opus to produce the same review.
-    // Serialized behind `concurrency: 1`, this is what makes a double-click cost one call: the
-    // second run sees the first run's fresh review here and stops.
-    const freshness = await step.run("check-freshness", async () => {
-      const admin = adminClient();
-      const { data: newest, error } = await admin
-        .from("exam_reviews")
-        .select("id, topic_snapshot")
-        .eq("user_id", userId)
-        .eq("course_id", courseId)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (error !== null) {
-        // A read failure is not proof of freshness; generate rather than skip.
-        return { skip: false as const };
-      }
-      if (newest === null) return { skip: false as const };
-
-      const current = new Map(loaded.topics.map((topic) => [topic.id, topic.revision]));
-      const stale = isReviewStale(readSnapshot(newest.topic_snapshot), current);
-      return { skip: !stale };
-    });
-
-    if (freshness.skip) {
-      return { courseId, status: "skipped" as const, reason: "already-fresh" };
-    }
-
-    // ── Generate (the one Opus call), guarded ──────────────────────────────────
-    const generated = await step.run("generate-review", async () => {
+    // Its own step so an Inngest retry of a LATER step (the insert) replays this from memo
+    // rather than re-billing Opus. `generateExamReviewContent` owns the clamp/budget gate and
+    // the retry double-bill guard; a post-spend failure surfaces as NonRetriableError and stops
+    // the run here rather than re-running the paid call.
+    const generated = await step.run("generate", async () => {
       let runtime: ReturnType<typeof createStudyAIRuntime>;
       try {
         runtime = createStudyAIRuntime({ userId });
       } catch (error) {
         if (error instanceof AINotConfiguredError) {
-          return { kind: "deferred" as const, reason: "AI is not configured." };
+          return {
+            kind: "deferred" as const,
+            cause: "unconfigured" as const,
+            detail: error.message,
+          };
         }
         throw error;
       }
-
-      // Clamp check: exam-review is pinned to a deep-rank model. If AI_MAX_TIER has forced it
-      // lower, do NOT silently generate a weaker review — defer, exactly as under budget.
-      if (runtime.resolve("exam-review").rank !== REQUIRED_RANK) {
-        return {
-          kind: "deferred" as const,
-          reason: "AI_MAX_TIER has clamped exam-review off its Opus tier.",
-        };
-      }
-
-      // Budget check before spending: a deferred deep-rank job returns cleanly instead of
-      // throwing a retryable AIPausedError that would burn the retry budget waiting for money.
-      const decision = await runtime.guardCheck("exam-review", "background");
-      if (!decision.allowed) {
-        return { kind: "deferred" as const, reason: decision.reason };
-      }
-
-      try {
-        const result = await runtime.generateStructured({
-          job: "exam-review",
-          prompt: examReviewPrompt,
-          system: EXAM_REVIEW_SYSTEM,
-          schema: examReviewSchema,
-          kind: "background",
-          vars: {
-            courseTitle: loaded.courseTitle,
-            examFormat: loaded.examFormat,
-            topicIndex: renderTopicIndex(loaded.topics as readonly ReviewTopic[]),
-          },
-        });
-
-        if (result.status === "dead-letter") {
-          return { kind: "dead-letter" as const, message: result.message };
-        }
-
-        return {
-          kind: "generated" as const,
-          content: result.value,
-          stamp: {
-            promptId: result.stamp.promptId,
-            promptVersion: result.stamp.promptVersion,
-            provider: result.stamp.provider,
-            model: result.stamp.model,
-            inputHash: result.stamp.inputHash,
-          },
-        };
-      } catch (error) {
-        // TOCTOU: budget can cross between the guard check and the call. A pause is not a
-        // failure — the work never ran — so surface it as deferred rather than retrying.
-        if (error instanceof AIPausedError) {
-          return { kind: "deferred" as const, reason: error.reason };
-        }
-        throw error;
-      }
+      return generateExamReviewContent({
+        runtime,
+        courseTitle: loaded.courseTitle,
+        examFormat: loaded.examFormat,
+        topics: loaded.topics,
+      });
     });
 
     if (generated.kind === "deferred") {
-      console.warn(`[generate-review] deferred for course ${courseId}: ${generated.reason}`);
-      return { courseId, status: "deferred" as const, reason: generated.reason };
+      console.warn(
+        `[generate-review] deferred for course ${courseId} (${generated.cause}): ${generated.detail}`,
+      );
+      return { courseId, status: "deferred" as const, cause: generated.cause };
     }
     if (generated.kind === "dead-letter") {
       console.error(`[generate-review] dead-letter for course ${courseId}: ${generated.message}`);
@@ -245,9 +173,6 @@ export const generateReview = inngest.createFunction(
     }
 
     // ── Persist ────────────────────────────────────────────────────────────────
-    //
-    // Its own step so a transport failure inserting the row does not re-run (and re-bill) the
-    // Opus call above — the generate step is memoized, this one just writes.
     const inserted = await step.run("insert-review", async () => {
       const admin = adminClient();
       const snapshot = buildReviewSnapshot(loaded.topics);
