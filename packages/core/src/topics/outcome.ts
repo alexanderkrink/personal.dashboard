@@ -50,6 +50,15 @@ export interface DocumentOutcomeInput {
    * synthetic failed-topic entry because it is not a topic and must not enter the retry set.
    */
   readonly degraded?: boolean;
+  /**
+   * True when the coverage map came back `trustworthy: false` — content the student uploaded
+   * did not demonstrably reach a topic page. On the wave7-section3 run this was the ONLY
+   * honest signal that 4 of 8 planned topics had evaporated, yet the document still finalized
+   * `ready` because this function never read coverage. Folded into the downgrade exactly like
+   * {@link degraded}: it forces `partial`, it is not a topic, and it never enters the retry
+   * set. The verdict lives in `documents.coverage.trustworthy` — there is no top-level column.
+   */
+  readonly coverageUntrustworthy?: boolean;
 }
 
 export function computeDocumentOutcome(input: DocumentOutcomeInput): DocumentOutcome {
@@ -66,15 +75,20 @@ export function computeDocumentOutcome(input: DocumentOutcomeInput): DocumentOut
     (outcome) => outcome.status === "merged" && outcome.needsReview,
   ).length;
 
+  // The soft downgrades: non-topic reasons a clean run is still not a clean `ready`. Both
+  // force `partial` and neither is a topic, so neither enters `failedTopics`. All-failed is
+  // decided before this is consulted, so an untrustworthy map never upgrades `failed`.
+  const softDowngrade = input.degraded === true || input.coverageUntrustworthy === true;
+
   const status: DocumentOutcomeStatus =
     // Nothing to merge is a successful no-op, not a failure. See the module note.
     outcomes.length === 0
-      ? input.degraded === true
+      ? softDowngrade
         ? "partial"
         : "ready"
       : failedTopics.length === outcomes.length
         ? "failed"
-        : failedTopics.length > 0 || input.degraded === true
+        : failedTopics.length > 0 || softDowngrade
           ? "partial"
           : "ready";
 

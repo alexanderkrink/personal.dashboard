@@ -70,6 +70,42 @@ describe("computeDocumentOutcome", () => {
     expect(outcome.status).toBe("ready");
     expect(outcome.needsReviewCount).toBe(2);
   });
+
+  /**
+   * §3 fix (2): an untrustworthy coverage map must downgrade the document, exactly like an
+   * embedding degradation. On the wave7-section3 run, 4 of 8 planned topics evaporated and
+   * the ONLY honest signal left was `coverage.trustworthy = false` — yet the document still
+   * finalized `ready`, because this function never read coverage. It reads it now.
+   */
+  it("RED: downgrades to partial when coverage is untrustworthy, even with every merge clean", () => {
+    const outcome = computeDocumentOutcome({
+      topicOutcomes: [merged("a"), merged("b")],
+      coverageUntrustworthy: true,
+    });
+
+    // Fails on the old signature: `coverageUntrustworthy` is ignored → 'ready'.
+    expect(outcome.status).toBe("partial");
+    // The verdict is NOT a topic, so it must not enter the retry set — same rule as degraded.
+    expect(outcome.failedTopics).toEqual([]);
+  });
+
+  it("stays ready when coverage is trustworthy", () => {
+    const outcome = computeDocumentOutcome({
+      topicOutcomes: [merged("a"), merged("b")],
+      coverageUntrustworthy: false,
+    });
+
+    expect(outcome.status).toBe("ready");
+  });
+
+  it("does not upgrade an all-failed document to partial on an untrustworthy map", () => {
+    const outcome = computeDocumentOutcome({
+      topicOutcomes: [failed("a"), failed("b")],
+      coverageUntrustworthy: true,
+    });
+
+    expect(outcome.status).toBe("failed");
+  });
 });
 
 describe("outcomeMessage", () => {
