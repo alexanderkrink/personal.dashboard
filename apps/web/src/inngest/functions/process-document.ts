@@ -21,6 +21,7 @@ import {
   setDocumentStatus,
 } from "@/inngest/documents";
 import { documentUploaded, documentUploadedData } from "@/inngest/events";
+import { recomputeExamWeights } from "@/inngest/exam-weights";
 import { runExtract } from "@/inngest/extract";
 import { deriveOwner } from "@/inngest/owner";
 import { runRouteAndMergeSteps } from "@/inngest/route-and-merge";
@@ -336,6 +337,33 @@ export const processDocument = inngest.createFunction(
         throw new Error(`Could not read topic sources for ${documentId}: ${error.message}`);
       }
       return [...new Set((data ?? []).map((row) => row.topic_id))];
+    });
+
+    // ── recompute exam weights (§9) ──────────────────────────────────────────
+    //
+    // "Weights recompute after every merge; stored on `topics.exam_weight`." The blend lives
+    // in `@study/core`; this step gathers the course's topics, their `topic_sources`
+    // page-ranges, the instructor `examSignals` in each `documents.extraction`, and the topic
+    // pages' artifact counts, and writes back the computed column — NEVER the override (§9d).
+    //
+    // ⚠ Unconditional, never a branch: a conditional `step.run` changes the run's step list
+    // between attempts and Inngest memoizes by step id (same rule as deep-review above). Its
+    // own `try` so a weight recompute — advisory, and re-derivable on the next merge — can
+    // never fail a document whose pages are already written. It recomputes the WHOLE course,
+    // not just the touched topics, because a new upload shifts recency and can map a new
+    // slide's signal onto an old topic. It writes `exam_weight` (bumps `updated_at`, not
+    // `revision`), so it does not mark any exam review stale.
+    await step.run("recompute-exam-weights", async () => {
+      try {
+        return await recomputeExamWeights({
+          admin: adminClient(),
+          userId,
+          courseId: document.course_id,
+        });
+      } catch (error) {
+        console.error(`[process-document] exam-weight recompute failed for ${documentId}:`, error);
+        return null;
+      }
     });
 
     // ── chunk & embed ────────────────────────────────────────────────────────
