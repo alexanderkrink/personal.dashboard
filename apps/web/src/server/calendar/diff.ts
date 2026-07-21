@@ -290,6 +290,27 @@ export interface TombstoneCandidate {
    * put the entire term's worth of a recurring class on the delete timer.
    */
   latestOccurrenceStartsAt: string | null;
+  /**
+   * Whether **any** occurrence of this item carries graded history — an
+   * `attendance_records` or `participation_logs` row (§6.3).
+   *
+   * This is the fix for the mid-term wholesale-removal wedge. `latestOccurrenceStartsAt`
+   * answers "is this item entirely past?", which retains a class only once its
+   * FINAL session has happened. But a recurring class pulled from the feed
+   * mid-term still has future sessions, so its latest occurrence is in the
+   * future — and the roll-off guard waves it through to the delete timer even
+   * though an EARLIER session already carries a logged attendance record. The
+   * delete then cascades into that `ON DELETE NO ACTION` ledger FK, aborts with
+   * 23503, and the throw wedges the feed forever (cursor never advances, the next
+   * sync re-plans the identical delete).
+   *
+   * So the graded-history test is moved from latest-occurrence granularity to
+   * ANY-occurrence granularity: if a single occurrence bears attendance or
+   * participation, the item is retained. `talking_points` do NOT count — they
+   * cascade with the occurrence by design (a prep note for a cancelled class dies
+   * with it), so graded history is attendance ∪ participation only.
+   */
+  hasGradedHistory: boolean;
 }
 
 export type TombstoneAction =
@@ -309,16 +330,30 @@ export type TombstoneAction =
    * be". They differ in the only way that matters — whether this row can ever be
    * deleted — and a reader who cannot see that difference cannot review it.
    *
-   * `clearMissingSince` is true when the row was tombstoned under the old rule and
-   * that mark is now known to have been wrong. Leaving it set would keep the item
-   * hidden at 24 h (`isTombstoneVisible`), so a row that is safe from deletion
-   * would still have silently vanished from the UI.
+   * There are two reasons a row is retained, and they are handled OPPOSITELY, so
+   * `reason` discriminates them:
    *
-   * ⚠ It is NOT true for every past item that carries a mark — see
-   * `markPredatesOccurrence`. A mark made while the event was still in the future
-   * is a real cancellation and must survive the event's own date passing.
+   * - **`feed-window-rolloff`** — the item is entirely in the past; the feed's
+   *   rolling window slid past it. A session that happened is history, not a
+   *   cancellation, so the item stays in VIEW. The only write is `clearMissingSince`:
+   *   true when the row was tombstoned under the old rule and that mark is now
+   *   known to have been wrong (leaving it set would keep the item hidden at 24 h
+   *   via `isTombstoneVisible`). It is NOT true for every past item that carries a
+   *   mark — see `markPredatesOccurrence`: a mark made while the event was still in
+   *   the future is a real cancellation and must survive the event's date passing.
+   *
+   * - **`graded-history`** — the item carries attendance/participation on some
+   *   occurrence but was pulled from the feed while it still had FUTURE sessions (a
+   *   mid-term wholesale removal, §6.3). The graded past MUST survive — that is the
+   *   whole reason this is retain and not delete — while the class itself is hidden
+   *   via the ordinary tombstone path (`markMissingSince`) and its future sessions,
+   *   which will now never happen, are cancelled by the engine. `markMissingSince`
+   *   is `nowIso` on the first sync that hides it and `null` on every sync after,
+   *   so the 24-hour hide is dated ONCE and not reset — the same discipline `keep`
+   *   uses for the delete clock.
    */
-  | { action: "retain"; id: string; clearMissingSince: boolean };
+  | { action: "retain"; reason: "feed-window-rolloff"; id: string; clearMissingSince: boolean }
+  | { action: "retain"; reason: "graded-history"; id: string; markMissingSince: string | null };
 
 /**
  * Whether a vanished item is one the feed simply stopped covering.
@@ -470,11 +505,30 @@ export function planTombstones(
     if (isFeedWindowRolloff(item, nowMs)) {
       actions.push({
         action: "retain",
+        reason: "feed-window-rolloff",
         id: item.id,
         // A mark made while the event was still upcoming is a cancellation and
         // survives the event's date passing; only a mark made after it had already
         // happened is the old rule's roll-off mistake. See `markPredatesOccurrence`.
         clearMissingSince: item.missing_since !== null && !markPredatesOccurrence(item),
+      });
+      continue;
+    }
+
+    // Rule 2b (§6.3): graded history is retained at ANY-occurrence granularity.
+    // Checked AFTER the roll-off branch so a fully-past graded class still heals
+    // and stays visible; this branch is only reached by a MIXED item whose latest
+    // occurrence is future — a class removed mid-term. It is retained (never
+    // deleted, so the NO ACTION ledger FK is never touched) and hidden via the
+    // ordinary missing_since path; the engine cancels its future occurrences.
+    if (item.hasGradedHistory) {
+      actions.push({
+        action: "retain",
+        reason: "graded-history",
+        id: item.id,
+        // Set the hide-mark once, then keep it — re-writing it every sync would
+        // re-date the 24-hour hide forever. Same discipline as `keep`.
+        markMissingSince: item.missing_since === null ? nowIso : null,
       });
       continue;
     }

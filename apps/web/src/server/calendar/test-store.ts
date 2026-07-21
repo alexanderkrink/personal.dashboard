@@ -42,6 +42,23 @@ export interface MemoryStoreState {
   context: SyncContext;
   items: MemoryItem[];
   occurrences: MemoryOccurrence[];
+  /**
+   * Occurrence ids that carry GRADED HISTORY — an `attendance_records` or a
+   * `participation_logs` row. This is the ledger the real schema hangs off
+   * `calendar_occurrences` with `ON DELETE NO ACTION` (migration 20260720222423);
+   * modelling it as a set of occurrence ids is all the sweep needs to see.
+   *
+   * Its two jobs mirror the two things the database does: `deleteItems` consults
+   * it to refuse a delete that would orphan graded history (the NO ACTION FK,
+   * SQLSTATE 23503), and `listLedgerBearingOccurrences` reports it so the sweep
+   * can retain BEFORE it ever attempts that delete. Without the first, a
+   * wholesale delete would silently succeed here and the §6.3 wedge could not be
+   * reproduced in a test; without the second, the fix could not be proven.
+   *
+   * `talking_points` are pointedly absent — they cascade with the occurrence, so
+   * they never wedge a delete and are not graded history.
+   */
+  ledgerOccurrenceIds: Set<string>;
   nextId: number;
 }
 
@@ -69,6 +86,7 @@ export function createMemoryStore(overrides: Partial<MemoryStoreState> = {}): {
     },
     items: [],
     occurrences: [],
+    ledgerOccurrenceIds: new Set(),
     nextId: 1,
     ...overrides,
   };
@@ -108,6 +126,15 @@ export function createMemoryStore(overrides: Partial<MemoryStoreState> = {}): {
       return state.occurrences
         .filter((occurrence) => wanted.has(occurrence.item_id))
         .map((occurrence) => ({ ...occurrence }));
+    },
+
+    async listLedgerBearingOccurrences(occurrenceIds) {
+      const asked = new Set(occurrenceIds);
+      const bearing = new Set<string>();
+      for (const id of state.ledgerOccurrenceIds) {
+        if (asked.has(id)) bearing.add(id);
+      }
+      return bearing;
     },
 
     async upsertItems(rows: readonly ItemUpsert[]) {
@@ -158,6 +185,29 @@ export function createMemoryStore(overrides: Partial<MemoryStoreState> = {}): {
 
     async deleteItems(ids) {
       const doomed = new Set(ids);
+      const doomedOccurrences = state.occurrences.filter((occurrence) =>
+        doomed.has(occurrence.item_id),
+      );
+
+      // The NO ACTION backstop, modelled faithfully. A calendar_items delete
+      // cascades to its calendar_occurrences (calendar_occurrences_item_id_fkey,
+      // ON DELETE CASCADE) — but those occurrences may be POINTED AT by
+      // attendance_records / participation_logs whose FK is ON DELETE NO ACTION,
+      // checked at end of statement. If any doomed occurrence carries graded
+      // history the whole statement aborts with 23503 and NOTHING is removed;
+      // that rollback is the §6.3 wedge, and reproducing it is why this throws
+      // BEFORE mutating any state.
+      const blocking = doomedOccurrences.find((occurrence) =>
+        state.ledgerOccurrenceIds.has(occurrence.id),
+      );
+      if (blocking) {
+        throw new Error(
+          `update or delete on table "calendar_occurrences" violates foreign key ` +
+            `constraint "attendance_records_occurrence_id_fkey" on table ` +
+            `"attendance_records" (SQLSTATE 23503)`,
+        );
+      }
+
       state.items = state.items.filter((item) => !doomed.has(item.id));
       // The real schema cascades via calendar_occurrences_item_id_fkey.
       state.occurrences = state.occurrences.filter((occurrence) => !doomed.has(occurrence.item_id));

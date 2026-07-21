@@ -91,6 +91,7 @@ describe("planTombstones", () => {
     feed_id: "feed-1",
     missing_since: null,
     latestOccurrenceStartsAt: "2026-12-01T09:00:00.000Z",
+    hasGradedHistory: false,
     ...over,
   });
 
@@ -142,7 +143,9 @@ describe("planTombstones", () => {
         new Set(),
         NOW,
       ),
-    ).toEqual([{ action: "retain", id: "item-1", clearMissingSince: false }]);
+    ).toEqual([
+      { action: "retain", reason: "feed-window-rolloff", id: "item-1", clearMissingSince: false },
+    ]);
   });
 
   it("never deletes a past item, however long it has been absent", () => {
@@ -161,7 +164,9 @@ describe("planTombstones", () => {
       new Set(),
       NOW,
     );
-    expect(result).toEqual([{ action: "retain", id: "item-1", clearMissingSince: true }]);
+    expect(result).toEqual([
+      { action: "retain", reason: "feed-window-rolloff", id: "item-1", clearMissingSince: true },
+    ]);
   });
 
   /* -- 🔴 a cancellation must survive its own date passing ----------------- */
@@ -182,7 +187,9 @@ describe("planTombstones", () => {
         new Set(),
         NOW,
       ),
-    ).toEqual([{ action: "retain", id: "item-1", clearMissingSince: false }]);
+    ).toEqual([
+      { action: "retain", reason: "feed-window-rolloff", id: "item-1", clearMissingSince: false },
+    ]);
   });
 
   it("still clears a mark made AFTER the session had already happened", () => {
@@ -198,7 +205,9 @@ describe("planTombstones", () => {
         new Set(),
         NOW,
       ),
-    ).toEqual([{ action: "retain", id: "item-1", clearMissingSince: true }]);
+    ).toEqual([
+      { action: "retain", reason: "feed-window-rolloff", id: "item-1", clearMissingSince: true },
+    ]);
   });
 
   it("retains an item with no occurrences rather than deleting it", () => {
@@ -210,7 +219,9 @@ describe("planTombstones", () => {
         new Set(),
         NOW,
       ),
-    ).toEqual([{ action: "retain", id: "item-1", clearMissingSince: true }]);
+    ).toEqual([
+      { action: "retain", reason: "feed-window-rolloff", id: "item-1", clearMissingSince: true },
+    ]);
   });
 
   it("dates a recurring item by its LAST occurrence, not its first", () => {
@@ -233,6 +244,64 @@ describe("planTombstones", () => {
       missing_since: ago(7 * DAY),
     });
     expect(planTombstones([future], new Set(), NOW)).toEqual([{ action: "delete", id: "item-1" }]);
+  });
+
+  /* -- 🔴 §6.3: graded history is retained at ANY-occurrence granularity ---- */
+
+  it("retains a mixed past+future item that carries graded history, instead of marking it", () => {
+    // The LATEST occurrence is in the future, so isFeedWindowRolloff does NOT
+    // fire — this is the mid-term wholesale-removal case the latest-occurrence
+    // guard misses. Any attendance/participation on any occurrence must still
+    // retain it, or the sweep deletes it and 23503s on the NO ACTION ledger FK.
+    // It is hidden via the ordinary missing_since path, so the mark is set here.
+    expect(planTombstones([item({ hasGradedHistory: true })], new Set(), NOW)).toEqual([
+      { action: "retain", reason: "graded-history", id: "item-1", markMissingSince: NOW },
+    ]);
+  });
+
+  it("marks the SAME future item when it has no graded history — the signal is what flips it", () => {
+    // The mirror of the case above with only `hasGradedHistory` changed, proving
+    // the retain is driven by the ledger signal and not by anything else.
+    expect(planTombstones([item({ hasGradedHistory: false })], new Set(), NOW)).toEqual([
+      { action: "mark", id: "item-1", missingSince: NOW },
+    ]);
+  });
+
+  it("keeps an existing mark on a graded item rather than resetting the 24-hour hide", () => {
+    // markMissingSince is null when a mark already exists: the item is already
+    // hidden, and rewriting missing_since every sync would re-date the 24-hour
+    // hide forever — the same discipline `keep` uses for the delete clock.
+    expect(
+      planTombstones(
+        [item({ hasGradedHistory: true, missing_since: ago(3 * DAY) })],
+        new Set(),
+        NOW,
+      ),
+    ).toEqual([
+      { action: "retain", reason: "graded-history", id: "item-1", markMissingSince: null },
+    ]);
+  });
+
+  it("routes a PAST graded item through the roll-off branch, which keeps it visible", () => {
+    // Past + graded is a window roll-off of history, retained EITHER way — but via
+    // feed-window-rolloff, which clears the wrong mark and keeps it in VIEW, not
+    // graded-history, which hides it. Only a mid-term removal (future sessions
+    // still pending) hides. The rolloff branch is checked first, so it wins here.
+    expect(
+      planTombstones(
+        [
+          item({
+            hasGradedHistory: true,
+            latestOccurrenceStartsAt: "2026-01-19T08:30:00.000Z",
+            missing_since: "2026-07-19T00:00:40.410Z",
+          }),
+        ],
+        new Set(),
+        NOW,
+      ),
+    ).toEqual([
+      { action: "retain", reason: "feed-window-rolloff", id: "item-1", clearMissingSince: true },
+    ]);
   });
 
   /**
@@ -260,6 +329,7 @@ describe("planTombstones", () => {
       // PostgREST's spelling, on purpose: the planner must not depend on the
       // parser's `.000Z` form to recognise a date as past.
       latestOccurrenceStartsAt: `2026-01-19T${row.at}:00+00:00`,
+      hasGradedHistory: false,
     }));
 
     // Eight days after the mark — one day past the old 7-day deadline.
@@ -270,7 +340,12 @@ describe("planTombstones", () => {
     // Every one also has its wrongly-set tombstone cleared, so they come back into
     // view instead of staying hidden by the 24-hour rule.
     expect(actions).toEqual(
-      rows.map((row) => ({ action: "retain", id: row.id, clearMissingSince: true })),
+      rows.map((row) => ({
+        action: "retain",
+        reason: "feed-window-rolloff",
+        id: row.id,
+        clearMissingSince: true,
+      })),
     );
   });
 });

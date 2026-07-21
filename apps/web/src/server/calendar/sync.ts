@@ -65,6 +65,16 @@ export type SyncOutcome =
        * exists to make visible.
        */
       retained: number;
+      /**
+       * Vanished from the feed, still has FUTURE sessions, but carries graded
+       * history — kept permanently and hidden, its future sessions cancelled (§6.3).
+       *
+       * Distinct from `retained`: that one is a fully-past roll-off that stays in
+       * VIEW; this one is a class removed mid-term that is HIDDEN (its graded past
+       * preserved, its never-happening future struck through). Separate so the
+       * sync-status strip can explain why a removed class still occupies the ledger.
+       */
+      retainedGraded: number;
       deleted: number;
       cancelled: number;
     }
@@ -249,6 +259,20 @@ async function runSync(
   const itemIds = [...new Set([...itemIdByUid.values(), ...feedItems.map((item) => item.id)])];
   const storedOccurrences = await store.listOccurrences(itemIds);
 
+  // §6.3: which of these occurrences carry graded history (attendance ∪
+  // participation). Loaded alongside the occurrences and folded up to items, so
+  // the tombstone sweep can decide BEFORE it deletes — a mid-term class whose
+  // latest occurrence is future but whose earlier sessions are graded must be
+  // retained, or the delete cascades into the NO ACTION ledger FK and wedges the
+  // feed. One extra read; the ids are the occurrence rows just loaded above.
+  const ledgerBearingOccurrenceIds = await store.listLedgerBearingOccurrences(
+    storedOccurrences.map((occurrence) => occurrence.id),
+  );
+  const gradedItemIds = new Set<string>();
+  for (const occurrence of storedOccurrences) {
+    if (ledgerBearingOccurrenceIds.has(occurrence.id)) gradedItemIds.add(occurrence.item_id);
+  }
+
   // Latest, not earliest — an item is only safely "past" once its LAST occurrence
   // is past. See `TombstoneCandidate.latestOccurrenceStartsAt`.
   const latestOccurrenceByItem = new Map<string, string>();
@@ -335,15 +359,22 @@ async function runSync(
     feedItems.map((item) => ({
       ...item,
       latestOccurrenceStartsAt: latestOccurrenceByItem.get(item.id) ?? null,
+      hasGradedHistory: gradedItemIds.has(item.id),
     })),
     presentUids,
     nowIso,
   );
 
+  const nowMs = now.getTime();
   let tombstoned = 0;
   let resurrected = 0;
   let retained = 0;
+  let retainedGraded = 0;
   const toDelete: string[] = [];
+  // §6.3: future sessions of a mid-term-removed graded class. Cancelled (§3.6
+  // struck-through), never deleted — the class is not happening, but the row it
+  // hangs graded history off must survive.
+  const toCancelFuture: string[] = [];
 
   for (const action of actions) {
     if (action.action === "mark") {
@@ -355,22 +386,43 @@ async function runSync(
     } else if (action.action === "delete") {
       toDelete.push(action.id);
     } else if (action.action === "retain") {
-      // Gone from the feed, but in the past — a window roll-off, not a
-      // cancellation. Nothing is scheduled for deletion. The only write is
-      // undoing a mark the OLD rule made, which is how the 5 rows already
-      // tombstoned on the live database heal themselves on the next sync.
-      if (action.clearMissingSince) await store.patchItem(action.id, { missing_since: null });
-      retained += 1;
+      if (action.reason === "feed-window-rolloff") {
+        // Gone from the feed, but in the past — a window roll-off, not a
+        // cancellation. Nothing is scheduled for deletion. The only write is
+        // undoing a mark the OLD rule made, which is how the 5 rows already
+        // tombstoned on the live database heal themselves on the next sync.
+        if (action.clearMissingSince) await store.patchItem(action.id, { missing_since: null });
+        retained += 1;
+      } else {
+        // graded-history: removed mid-term, kept for its ledger rows. Hide it via
+        // the ordinary missing_since path (set once, then kept), and cancel the
+        // future sessions that will never happen. The delete is NEVER attempted,
+        // so the NO ACTION FK never fires — that is what breaks the retry loop.
+        if (action.markMissingSince !== null) {
+          await store.patchItem(action.id, { missing_since: action.markMissingSince });
+        }
+        for (const occurrence of storedOccurrences) {
+          if (
+            occurrence.item_id === action.id &&
+            occurrence.status !== "cancelled" &&
+            Date.parse(occurrence.starts_at) > nowMs
+          ) {
+            toCancelFuture.push(occurrence.id);
+          }
+        }
+        retainedGraded += 1;
+      }
     }
     // "keep" is genuinely nothing: the row stays exactly as it is, ORIGINAL
     // missing_since intact, so the 7-day clock keeps running instead of being
     // reset by every sync.
   }
   if (toDelete.length > 0) await store.deleteItems(toDelete);
+  if (toCancelFuture.length > 0) await store.cancelOccurrences(toCancelFuture);
 
   /* ---- §5.1b exam candidacy ------------------------------------------- */
 
-  const cancelled = orphanIds.length;
+  const cancelled = orphanIds.length + toCancelFuture.length;
   await markExamCandidates(store, context, events, itemIdByUid, allUserItems, feed.config);
 
   await store.finishFeed(feed.id, {
@@ -389,6 +441,7 @@ async function runSync(
     tombstoned,
     resurrected,
     retained,
+    retainedGraded,
     deleted: toDelete.length,
     cancelled,
   };

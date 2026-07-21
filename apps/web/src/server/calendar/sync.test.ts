@@ -65,6 +65,41 @@ const DAY = 24 * 60 * 60 * 1000;
 const T0 = new Date("2026-09-01T08:00:00.000Z");
 const at = (days: number) => new Date(T0.getTime() + days * DAY);
 
+/**
+ * A recurring class with one occurrence per day-offset, each a distinct
+ * `recurrence_id`. Used for the §6.3 mixed past+future case: a class whose term
+ * straddles `now`, so some sessions have already happened (and may carry graded
+ * history) while others are still to come.
+ */
+function recurringClass(
+  uid: string,
+  dayOffsets: readonly number[],
+  title = "STRATEGY & COMPETITION",
+): NormalizedEvent {
+  return {
+    uid,
+    sequence: 0,
+    kind: "class",
+    title,
+    rawSummary: `${title}   (Ses. 4) T-03.01`,
+    courseHint: title,
+    sessionFrom: 4,
+    sessionTo: 4,
+    descriptor: "regular",
+    occurrences: dayOffsets.map((offset) => {
+      const startsAtUtc = at(offset).toISOString();
+      return {
+        recurrenceId: startsAtUtc,
+        startsAtUtc,
+        endsAtUtc: new Date(at(offset).getTime() + 90 * 60_000).toISOString(),
+        allDay: false,
+        status: "confirmed" as const,
+        overridden: false,
+      };
+    }),
+  };
+}
+
 beforeEach(() => {
   events.current = [];
   changed.current = true;
@@ -246,6 +281,119 @@ describe("tombstones — the drop-and-restore round trip (§3.3)", () => {
     await syncFeed(store, "feed-1", at(8));
     await syncFeed(store, "feed-1", at(13));
     expect(state.items).toHaveLength(1);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* §6.3 — a mid-term class removed wholesale keeps its graded history          */
+/* -------------------------------------------------------------------------- */
+
+describe("§6.3 tombstone wedge — RETAIN a class that carries graded history", () => {
+  /**
+   * 🔴 The wedge this closes, end to end through the store.
+   *
+   * A recurring class is pulled from the feed MID-TERM: two sessions have already
+   * happened (one with a logged attendance record), three are still to come. Its
+   * LATEST occurrence is in the future, so `isFeedWindowRolloff` does not fire and
+   * the old rule treated the whole item as an ordinary cancellation — mark, then
+   * delete after seven days. That delete cascades to the occurrences, hits the
+   * `attendance_records` ON DELETE NO ACTION FK, aborts with 23503 and rolls back;
+   * the throw escapes into `syncFeed`'s catch, `last_sync_error` is written, the
+   * cursor is NOT advanced, and the very next sync re-plans the identical delete —
+   * forever. RETAIN prevents the delete from ever being attempted.
+   */
+  it("retains it across the delete deadline instead of wedging on the NO ACTION FK", async () => {
+    const { store, state } = createMemoryStore();
+
+    events.current = [recurringClass("uid-mid", [-14, -7, 30, 37, 44])];
+    await syncFeed(store, "feed-1", at(0));
+
+    const item = state.items.find((entry) => entry.ics_uid === "uid-mid");
+    expect(item).toBeDefined();
+    if (!item) throw new Error("unreachable");
+    expect(state.occurrences).toHaveLength(5);
+
+    // Attendance logged on a PAST session — graded history, ON DELETE NO ACTION.
+    const graded = state.occurrences.find((entry) => entry.starts_at === at(-7).toISOString());
+    expect(graded).toBeDefined();
+    if (!graded) throw new Error("unreachable");
+    state.ledgerOccurrenceIds.add(graded.id);
+    const gradedOccurrenceId = graded.id;
+
+    // The class vanishes from the agenda wholesale (the IE feed has no CANCELLED).
+    events.current = [];
+
+    // Day 1 — first sync without it. Retained, its future sessions struck through.
+    const marked = await syncFeed(store, "feed-1", at(1));
+    expect(marked).toMatchObject({ status: "ok", deleted: 0, retainedGraded: 1, cancelled: 3 });
+
+    // Day 9 — one day past the old 7-day delete deadline. This is exactly where
+    // the old code fired the delete, hit 23503 and wedged. Now: still ok, deleted 0.
+    const swept = await syncFeed(store, "feed-1", at(9));
+    expect(swept).toMatchObject({ status: "ok", deleted: 0, retainedGraded: 1 });
+    expect(state.completions.at(-1)).toMatchObject({ status: "ok", error: null });
+
+    // Day 11 — and again, proving the loop is BROKEN rather than merely deferred.
+    const again = await syncFeed(store, "feed-1", at(11));
+    expect(again).toMatchObject({ status: "ok", deleted: 0 });
+
+    // The row, all five occurrences and — the whole point — the attendance survive.
+    expect(state.items.find((entry) => entry.id === item.id)).toBeDefined();
+    expect(state.occurrences).toHaveLength(5);
+    expect(state.ledgerOccurrenceIds.has(gradedOccurrenceId)).toBe(true);
+    expect(state.occurrences.find((entry) => entry.id === gradedOccurrenceId)).toBeDefined();
+
+    // Past sessions stay confirmed; the future ones that will never happen are
+    // cancelled (§3.6 struck-through).
+    const past = state.occurrences.filter((entry) => Date.parse(entry.starts_at) < at(0).getTime());
+    const future = state.occurrences.filter(
+      (entry) => Date.parse(entry.starts_at) > at(11).getTime(),
+    );
+    expect(past.map((entry) => entry.status)).toEqual(["confirmed", "confirmed"]);
+    expect(future).toHaveLength(3);
+    expect(future.every((entry) => entry.status === "cancelled")).toBe(true);
+
+    // Hidden via the EXISTING missing_since path — set once, on day 1, not reset.
+    expect(state.items.find((entry) => entry.id === item.id)?.missing_since).toBe(
+      at(1).toISOString(),
+    );
+  });
+
+  /**
+   * The routine case must stay boringly correct: a class STILL in the feed keeps
+   * its attendance, and its occurrences are upserted in place — never
+   * delete-and-reinserted, which would both orphan the ledger row and, in
+   * Postgres, fail the NO ACTION FK on the delete leg.
+   */
+  it("keeps attendance across a routine refresh, upserting rather than delete-reinserting", async () => {
+    const { store, state } = createMemoryStore();
+
+    events.current = [recurringClass("uid-live", [-7, 7, 14])];
+    await syncFeed(store, "feed-1", at(0));
+
+    const graded = state.occurrences.find((entry) => entry.starts_at === at(-7).toISOString());
+    expect(graded).toBeDefined();
+    if (!graded) throw new Error("unreachable");
+    state.ledgerOccurrenceIds.add(graded.id);
+    const gradedOccurrenceId = graded.id;
+
+    // Same class, same payload, one day later.
+    events.current = [recurringClass("uid-live", [-7, 7, 14])];
+    const refreshed = await syncFeed(store, "feed-1", at(1));
+    expect(refreshed).toMatchObject({
+      status: "ok",
+      deleted: 0,
+      occurrencesWritten: 0,
+      occurrencesUnchanged: 3,
+    });
+
+    // Same occurrence id — proof it was upserted in place, not recreated.
+    expect(state.occurrences).toHaveLength(3);
+    expect(state.occurrences.find((entry) => entry.id === gradedOccurrenceId)).toBeDefined();
+    expect(state.ledgerOccurrenceIds.has(gradedOccurrenceId)).toBe(true);
+    // Live sessions stay confirmed — retaining graded history must not cancel the
+    // future of a class that is still running.
+    expect(state.occurrences.every((entry) => entry.status === "confirmed")).toBe(true);
   });
 });
 

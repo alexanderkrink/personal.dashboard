@@ -145,6 +145,28 @@ export function createSupabaseCalendarStore(supabase: SupabaseAdminClient): Cale
       return results;
     },
 
+    async listLedgerBearingOccurrences(occurrenceIds): Promise<ReadonlySet<string>> {
+      if (occurrenceIds.length === 0) return new Set();
+      const bearing = new Set<string>();
+      // Attendance and participation only — the two GRADED, ON DELETE NO ACTION
+      // ledgers. talking_points cascade with the occurrence by design, so a prep
+      // note is not evidence a class must be kept. Both are read under the admin
+      // client (RLS bypassed), so each query carries the occurrence-id filter as
+      // its own scope; the ids themselves came from rows already scoped to this
+      // feed's user_id in listUserItems → listOccurrences.
+      for (const table of ["attendance_records", "participation_logs"] as const) {
+        for (const batch of chunk(occurrenceIds, IN_CHUNK)) {
+          const { data, error } = await supabase
+            .from(table)
+            .select("occurrence_id")
+            .in("occurrence_id", batch);
+          if (error) throw new Error(`Could not load ${table}: ${error.message}`);
+          for (const row of data ?? []) bearing.add(row.occurrence_id);
+        }
+      }
+      return bearing;
+    },
+
     async upsertItems(rows: readonly ItemUpsert[]): Promise<Map<string, string>> {
       const ids = new Map<string, string>();
       for (const batch of chunk(rows, IN_CHUNK)) {

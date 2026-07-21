@@ -154,6 +154,23 @@ export interface CalendarStore {
   listOccurrences(itemIds: readonly string[]): Promise<StoredOccurrence[]>;
 
   /**
+   * Which of these occurrences carry GRADED HISTORY — an `attendance_records`
+   * or `participation_logs` row (§6.3). Returns the subset of ids that do.
+   *
+   * The tombstone sweep runs this alongside `listOccurrences` so it can decide
+   * before it deletes: an item with any graded occurrence is retained, never
+   * swept, because those two ledger FKs are `ON DELETE NO ACTION` and a delete
+   * that reached them would abort with 23503 and wedge the feed forever (the
+   * §6.3 defect). `talking_points` are deliberately NOT counted — they cascade
+   * by design, so a throwaway prep note must not be able to pin a class in place.
+   *
+   * Occurrence-level rather than item-level because the sweep already holds the
+   * occurrence rows from `listOccurrences`, and the two ledger tables are keyed
+   * on `occurrence_id`; the caller folds the answer up to items itself.
+   */
+  listLedgerBearingOccurrences(occurrenceIds: readonly string[]): Promise<ReadonlySet<string>>;
+
+  /**
    * Upserts on the `(feed_id, ics_uid)` identity, returning each row's id keyed
    * by its UID.
    *
