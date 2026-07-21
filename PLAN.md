@@ -1682,7 +1682,12 @@ it; they never own pages.**
    > **Residual, named:** 13–14 sits just above the ≤ 12 line on this deck, and the two
    > permitted wording escalations made it worse, not better (soft calibration → 14; a hard
    > ten-topic ceiling → 28 — flash-lite ignores numeric ceilings). Receipts:
-   > `wave6-overmerge/routing-replay-v{1..5}.json`. Closing the last 1–2 topics is a
+   > `wave6-overmerge/routing-replay-v{1..5}.json`. Reading the v1 receipt: it was minted
+   > minutes before the guard rescope landed, so its own `targetCount` field records 47 —
+   > null-vector singleton creates the OLD same-batch guard could not group. The funnel is
+   > its decision list (1 create + 46 title-assigns into it, hash-matched to production),
+   > and the landed pipeline folds those decisions to 1 target (gate-verified offline,
+   > 2026-07-21). Closing the last 1–2 topics is a
    > model-selection decision (re-pin the `topic-routing` job), reserved to Alexander —
    > not a prompt-wording one.
 4. **Deterministic duplicate guard (code, not LLM):** every `createNew` title is embedded
