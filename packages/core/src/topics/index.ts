@@ -105,6 +105,12 @@ export {
   segmentExtraction,
 } from "./segment";
 export {
+  coalesceSingletonCreates,
+  type SingletonCoalesceResult,
+  type SingletonFold,
+  type UnfoldedSingleton,
+} from "./singleton-coalesce";
+export {
   type DocumentStripPlan,
   type PageStripResult,
   planDocumentStrip,
