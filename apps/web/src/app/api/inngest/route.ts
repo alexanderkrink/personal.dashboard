@@ -39,6 +39,21 @@ export const runtime = "nodejs";
 /** Never cached — a cached response here would silently stop running jobs. */
 export const dynamic = "force-dynamic";
 
+/**
+ * ## ⚠ Wave 7 §3 stopgap: an explicit ceiling on how long one step may run.
+ *
+ * The §3 data loss began with a merge step that ran past ~300s and was killed with no
+ * `maxDuration` configured anywhere, so the platform's default cut it off mid-write. This
+ * raises the ceiling to the Vercel Pro / Fluid maximum (800s) for every Inngest step
+ * invocation served here — a belt, not the fix. The real fix is that the merge is now
+ * resumable (`runRouteAndMergeSteps`): each target is its own memoized step, so even a step
+ * that does hit this ceiling resumes at the target it died on instead of re-routing.
+ *
+ * This is a Next.js route-segment config, the correct Next 16 mechanism for a route handler;
+ * Vercel reads it to size the function's execution limit.
+ */
+export const maxDuration = 800;
+
 export const { GET, POST, PUT } = serve({
   client: inngest,
   // ⚠ A function not in this array is a function that does not run, however

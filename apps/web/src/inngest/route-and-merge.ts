@@ -40,6 +40,7 @@ import {
   routeSegments,
   storedExtractionSchema,
   storedTopicPageSchema,
+  topicRoutingPrompt,
 } from "@study/ai";
 import {
   applyDuplicateGuard,
@@ -68,9 +69,11 @@ import {
   type TopicMergeOutcome,
 } from "@study/core";
 import type { SupabaseAdminClient } from "@study/db";
+import { z } from "zod";
 import { logProcessingEvent, setDocumentStatus } from "@/inngest/documents";
 import { createStudyEmbeddingClient, parseStoredVector, toStoredVector } from "@/lib/ai/embeddings";
 import { createStudyAIRuntime } from "@/lib/ai/runtime";
+import { extractionHash } from "@/lib/documents/extraction-hash";
 
 /** How many existing topics the routing call sees as candidates per segment (§5 Step A.2). */
 const CANDIDATES_PER_SEGMENT = 5;
@@ -734,6 +737,34 @@ function describeFinding(finding: LossFinding): string {
   return `[${finding.severity}] ${finding.detail}`;
 }
 
+/** Cap for a persisted review note: a full "what's wrong" sentence, not a reasoning dump. */
+const REVIEW_NOTE_MAX = 280;
+
+/**
+ * Flatten and bound one review note before it is persisted.
+ *
+ * The only place critic-authored text reaches `review_notes` is `[critic:<kind>] <detail>`,
+ * where `<detail>` is raw gemini-3.1-flash-lite output that {@link mergeCriticSchema} does
+ * not constrain. A model that leaks its chain-of-thought returns a multi-line, arbitrarily
+ * long `detail`; persisted verbatim it folds a topic page's review drawer into a wall of
+ * reasoning. So control characters (newlines included, which is what folds multi-line CoT)
+ * become spaces, whitespace runs collapse, and the result is hard-capped with an ellipsis.
+ */
+export function sanitizeReviewNote(text: string): string {
+  // Control characters (newlines included — that is what folds multi-line CoT into one note)
+  // become spaces. Built from a codepoint scan rather than a control-character regex literal,
+  // which Biome forbids in source.
+  let flattened = "";
+  for (const char of text) {
+    const code = char.codePointAt(0) ?? 0;
+    flattened += code < 0x20 || code === 0x7f ? " " : char;
+  }
+  flattened = flattened.replace(/\s+/g, " ").trim();
+  return flattened.length <= REVIEW_NOTE_MAX
+    ? flattened
+    : `${flattened.slice(0, REVIEW_NOTE_MAX - 1).trimEnd()}…`;
+}
+
 interface VerifiedMerge {
   readonly merge: TopicMerge;
   readonly needsReview: boolean;
@@ -836,7 +867,13 @@ async function verifyMerge(input: {
       ];
     }
     if (verdict.value.ok && verdict.value.severity !== "major") return [];
-    return verdict.value.issues.map((issue) => `[critic:${issue.kind}] ${issue.detail}`);
+    // Sanitize at the ONE choke point where critic-authored text enters findings: `detail`
+    // is raw gemini-3.1-flash-lite output, unconstrained by `mergeCriticSchema`. Both persist
+    // branches (create RPC `p_review_notes`, update `review_notes`) read this same list, so
+    // one sanitize here covers both.
+    return verdict.value.issues.map((issue) =>
+      sanitizeReviewNote(`[critic:${issue.kind}] ${issue.detail}`),
+    );
   };
 
   // ── The thinness gate ─────────────────────────────────────────────────────
@@ -1122,8 +1159,16 @@ async function mergeTopics(input: {
   readonly takenSlugs: Set<string>;
   readonly embeddings: EmbeddingClient;
   readonly runtime: ReturnType<typeof createStudyAIRuntime>;
-}): Promise<{ readonly outcomes: readonly TopicMergeOutcome[]; readonly created: number }> {
+}): Promise<{
+  readonly outcomes: readonly TopicMergeOutcome[];
+  readonly created: number;
+  /** topicKey → the id of the topic a create produced. Empty for pure updates. Used by the
+   *  resumable path to write a create's id back into the frozen plan so a later run resolves
+   *  it to a skip rather than a duplicate. */
+  readonly createdTopicIds: ReadonlyMap<string, string>;
+}> {
   const outcomes: TopicMergeOutcome[] = [];
+  const createdTopicIds = new Map<string, string>();
   let created = 0;
 
   for (const target of input.targets) {
@@ -1211,7 +1256,7 @@ async function mergeTopics(input: {
         console.error(`[route-and-merge] summary embedding failed for ${target.topicKey}:`, error);
       }
 
-      const { slug } = await persistTopicMerge({
+      const { topicId, slug } = await persistTopicMerge({
         admin: input.admin,
         userId: input.userId,
         documentId: input.documentId,
@@ -1231,6 +1276,7 @@ async function mergeTopics(input: {
 
       if (slug !== null) {
         input.takenSlugs.add(slug);
+        createdTopicIds.set(target.topicKey, topicId);
         created += 1;
       }
 
@@ -1273,7 +1319,7 @@ async function mergeTopics(input: {
     }
   }
 
-  return { outcomes, created };
+  return { outcomes, created, createdTopicIds };
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */
@@ -1340,41 +1386,22 @@ export async function runRouteAndMerge(input: RouteAndMergeInput): Promise<Route
     targets.flatMap((target) => target.segments.map((segment) => segment.key)),
   ).size;
 
-  if (segmentsMerged !== routing.segments.length) {
-    const lost = routing.segments.length - segmentsMerged;
-    await logProcessingEvent(admin, {
-      userId,
-      documentId,
-      courseId,
-      step: "route",
-      level: "warn",
-      detail: `${segmentsMerged} of ${routing.segments.length} sections of this file reached a topic. ${lost} ${lost === 1 ? "section" : "sections"} did not, and ${lost === 1 ? "its" : "their"} content is not in your notes.`,
-    });
-  }
+  await warnSegmentsNotReached(
+    admin,
+    { userId, documentId, courseId },
+    segmentsMerged,
+    routing.segments.length,
+  );
 
-  // ── The single-topic funnel backstop (Wave 6) ──────────────────────────────
-  //
-  // Deterministic, and deliberately downstream of the prompt, the resolver and the guard:
-  // the 2026-07-21 over-merge shipped `topicCount: 1` with perfect grounding and not one
-  // durable flag, because every check measured whether content reached the notes and none
-  // measured whether it reached them in a navigable shape. The v2 empty-index prompt is the
-  // primary fix and is probabilistic; this predicate cannot be argued out of firing. It
-  // flags the created topic's first revision — never blocks the merge.
-  const funnelFinding = detectSingleTopicFunnel({
-    existingTopicCount: existingTopics.length,
-    routedSegmentCount: segmentsMerged,
-    mergeTargetCount: targets.length,
-  });
-  if (funnelFinding !== null) {
-    await logProcessingEvent(admin, {
-      userId,
-      documentId,
-      courseId,
-      step: "route",
-      level: "warn",
-      detail: `All ${segmentsMerged} sections of this file were funnelled into a single topic on a course with no topics yet — the page was saved, but flagged for review as likely under-split.`,
-    });
-  }
+  const funnelFinding = await applyFunnelBackstop(
+    admin,
+    { userId, documentId, courseId },
+    {
+      existingTopicCount: existingTopics.length,
+      segmentsMerged,
+      mergeTargetCount: targets.length,
+    },
+  );
 
   // ── Convergence gate (PLAN §5's "Idempotency & re-processing") ─────────────
   //
@@ -1470,6 +1497,599 @@ export async function runRouteAndMerge(input: RouteAndMergeInput): Promise<Route
     coercions: routing.coercions.length,
     singletonFolds: routing.folds.length,
     unaccountedPages: routing.unaccountedPages.length,
+    costUsd: await mergeCost(admin, userId, documentId),
+    elapsedMs: Date.now() - startedAt,
+  };
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/* Shared feed warnings (single-step AND resumable paths use these)           */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+interface FeedContext {
+  readonly userId: string;
+  readonly documentId: string;
+  readonly courseId: string;
+}
+
+/**
+ * The hard invariant's voice: content the student uploaded that reached no topic.
+ *
+ * Extracted into one function so {@link runRouteAndMerge} (single-step) and
+ * {@link resolveMergePlan} (resumable) emit byte-identical text — a warn with two spellings
+ * would be a channel-destroying drift, and this one is pinned by a test.
+ */
+async function warnSegmentsNotReached(
+  admin: SupabaseAdminClient,
+  ctx: FeedContext,
+  segmentsMerged: number,
+  totalSegments: number,
+): Promise<void> {
+  if (segmentsMerged === totalSegments) return;
+  const lost = totalSegments - segmentsMerged;
+  await logProcessingEvent(admin, {
+    userId: ctx.userId,
+    documentId: ctx.documentId,
+    courseId: ctx.courseId,
+    step: "route",
+    level: "warn",
+    detail: `${segmentsMerged} of ${totalSegments} sections of this file reached a topic. ${lost} ${lost === 1 ? "section" : "sections"} did not, and ${lost === 1 ? "its" : "their"} content is not in your notes.`,
+  });
+}
+
+/**
+ * The single-topic funnel backstop (Wave 6): detect, warn if it fires, return the finding so
+ * it can ride every persisted revision. Deterministic and downstream of the prompt, the
+ * resolver and the guard — it flags the created topic's first revision, never blocks a merge.
+ */
+async function applyFunnelBackstop(
+  admin: SupabaseAdminClient,
+  ctx: FeedContext,
+  counts: {
+    readonly existingTopicCount: number;
+    readonly segmentsMerged: number;
+    readonly mergeTargetCount: number;
+  },
+): Promise<string | null> {
+  const finding = detectSingleTopicFunnel({
+    existingTopicCount: counts.existingTopicCount,
+    routedSegmentCount: counts.segmentsMerged,
+    mergeTargetCount: counts.mergeTargetCount,
+  });
+  if (finding !== null) {
+    await logProcessingEvent(admin, {
+      userId: ctx.userId,
+      documentId: ctx.documentId,
+      courseId: ctx.courseId,
+      step: "route",
+      level: "warn",
+      detail: `All ${counts.segmentsMerged} sections of this file were funnelled into a single topic on a course with no topics yet — the page was saved, but flagged for review as likely under-split.`,
+    });
+  }
+  return finding;
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/* §3 resumable path: frozen plan + one memoized step per merge target        */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * A minimal Inngest `step.run`. Structural, so the real Inngest step, an inline runner, and
+ * the test's memoizing fake all satisfy it. The contract that matters: a completed `id` is
+ * memoized within a run, so a retry does not re-execute it.
+ */
+export interface StepRunner {
+  run<T>(id: string, fn: () => Promise<T>): Promise<T>;
+}
+
+/** The topic-routing prompt version the plan key is scoped by (5 today). Read from the
+ *  registry so a router bump takes a fresh plan rather than reusing an older one's. */
+const ROUTING_PROMPT_VERSION = topicRoutingPrompt.version;
+
+/** One resolved merge target in the frozen plan. Segment CONTENT is NOT stored — it is
+ *  re-derived deterministically from the (extraction-hash-pinned) extraction by segment key. */
+const plannedTargetSchema = z.object({
+  /** Stable id for the per-target step, so a retry memoizes a completed target. */
+  topicKey: z.string(),
+  /** The existing topic this assigns to; null for a create. */
+  topicId: z.string().nullable(),
+  title: z.string(),
+  /** Which segments feed this target — the join keys back into `segmentExtraction`. */
+  segmentKeys: z.array(z.string()),
+  /** Written back after a create persists, so a later run resolves it to a skip. */
+  resolvedTopicId: z.string().optional(),
+});
+
+/** The frozen plan, `safeParse`d on the way out of `document_merge_plans.plan` (boundary
+ *  rule): a plan written by an older shape of this schema is an external input like any
+ *  other, and one that no longer parses is treated as absent so routing recomputes it. */
+const storedMergePlanSchema = z.object({
+  version: z.literal(1),
+  targets: z.array(plannedTargetSchema),
+  unaccountedPages: z.array(z.number()),
+  coverageChecked: z.boolean(),
+  backstopFindings: z.array(z.string()),
+  segments: z.number(),
+  segmentsMerged: z.number(),
+  topicsTouched: z.number(),
+  coercions: z.number(),
+  singletonFolds: z.number(),
+});
+
+type PlannedTarget = z.infer<typeof plannedTargetSchema>;
+type StoredMergePlan = z.infer<typeof storedMergePlanSchema>;
+
+/** Reads and validates `documents.extraction` through the schema, never a cast. */
+async function readStoredExtraction(
+  admin: SupabaseAdminClient,
+  userId: string,
+  documentId: string,
+): Promise<z.infer<typeof storedExtractionSchema>> {
+  const { data, error } = await admin
+    .from("documents")
+    .select("extraction")
+    .eq("id", documentId)
+    .eq("user_id", userId)
+    .single();
+  if (error) throw new Error(`Could not read the extraction for ${documentId}: ${error.message}`);
+  const parsed = storedExtractionSchema.safeParse(data.extraction);
+  if (!parsed.success) {
+    throw new Error(
+      `documents.extraction for ${documentId} did not match storedExtractionSchema: ${parsed.error.message}`,
+    );
+  }
+  return parsed.data;
+}
+
+/** The document's routable segments — deterministic in the extraction, so re-deriving them
+ *  on a retry reproduces the exact segment keys the frozen plan refers to. */
+function segmentsOf(stored: z.infer<typeof storedExtractionSchema>): readonly Segment[] {
+  return segmentExtraction({
+    pages: stored.extraction.pages,
+    headings: stored.extraction.headings,
+    skipped: stored.extraction.skipped,
+    sourceUnits: stored.sourceUnits,
+  }).segments;
+}
+
+/** Loads one topic's page + revision, fresh, for a per-target step. Null when it is gone. */
+async function loadOneTopic(
+  admin: SupabaseAdminClient,
+  userId: string,
+  topicId: string,
+): Promise<{ id: string; title: string; page: StoredTopicPage; revision: number } | null> {
+  const { data, error } = await admin
+    .from("topics")
+    .select("id, title, page, revision")
+    .eq("id", topicId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error) throw new Error(`Could not load topic ${topicId}: ${error.message}`);
+  if (data === null) return null;
+  const parsedPage = storedTopicPageSchema.safeParse(data.page);
+  return {
+    id: data.id,
+    title: data.title,
+    page: parsedPage.success ? parsedPage.data : EMPTY_TOPIC_PAGE,
+    revision: data.revision,
+  };
+}
+
+/** The current `document_merge_plans.plan` for a document, or null when there is none. */
+async function loadFrozenPlan(
+  admin: SupabaseAdminClient,
+  userId: string,
+  documentId: string,
+  hash: string,
+): Promise<StoredMergePlan | null> {
+  const { data, error } = await admin
+    .from("document_merge_plans")
+    .select("plan")
+    .eq("user_id", userId)
+    .eq("document_id", documentId)
+    .eq("extraction_hash", hash)
+    .eq("prompt_version", ROUTING_PROMPT_VERSION)
+    .maybeSingle();
+  if (error) throw new Error(`Could not read the merge plan for ${documentId}: ${error.message}`);
+  if (data?.plan == null) return null;
+  const parsed = storedMergePlanSchema.safeParse(data.plan);
+  if (!parsed.success) {
+    // A plan written by an older shape of the schema is treated as absent — recompute rather
+    // than resume from something this code can no longer read.
+    console.error(`[route-and-merge] frozen plan for ${documentId} did not parse; recomputing`);
+    return null;
+  }
+  return parsed.data;
+}
+
+/**
+ * Records the topic id a create produced back into the frozen plan.
+ *
+ * This is the cross-run create-idempotency link. A create target carries no `topicId` in the
+ * plan, so `planMergeWork` can never skip it — on a *new* run (the "Retry the rest" button, a
+ * fresh Inngest run where step memoization does not carry over) a create would run again and
+ * duplicate the topic. Stamping the resulting id here turns that create into an assign the
+ * next run resolves to a skip. Safe as a read-modify-write because `process-document` is
+ * serialized per course.
+ */
+async function recordResolvedCreate(
+  admin: SupabaseAdminClient,
+  userId: string,
+  documentId: string,
+  hash: string,
+  topicKey: string,
+  topicId: string,
+): Promise<void> {
+  const plan = await loadFrozenPlan(admin, userId, documentId, hash);
+  if (plan === null) return;
+  const patched: StoredMergePlan = {
+    ...plan,
+    targets: plan.targets.map((target) =>
+      target.topicKey === topicKey ? { ...target, resolvedTopicId: topicId } : target,
+    ),
+  };
+  const { error } = await admin
+    .from("document_merge_plans")
+    .update({ plan: patched })
+    .eq("user_id", userId)
+    .eq("document_id", documentId)
+    .eq("extraction_hash", hash)
+    .eq("prompt_version", ROUTING_PROMPT_VERSION);
+  if (error) {
+    // The write-back is a convergence optimisation, not a correctness invariant (the DB
+    // trigger is), so a failure here is logged rather than allowed to fail the topic.
+    console.error(`[route-and-merge] could not record resolved create for ${topicKey}:`, error);
+  }
+}
+
+/**
+ * The `resolve-merge-plan` step: LOAD the frozen plan if one exists (zero routing), else
+ * route + guard + coalesce and UPSERT the resolved plan.
+ *
+ * This is the durable frozen receipt that stops the §3 data loss: a re-entering run reads the
+ * SAME plan the first pass resolved on an empty index, instead of re-routing 48 segments into
+ * a half-built 4-topic index and abandoning the 4 targets that never got created. The plan is
+ * keyed on {@link extractionHash} — index-INDEPENDENT — not the routing `input_hash`, which
+ * changes between passes precisely because the index changed.
+ */
+async function resolveMergePlan(input: {
+  readonly admin: SupabaseAdminClient;
+  readonly userId: string;
+  readonly documentId: string;
+  readonly courseId: string;
+  readonly courseTitle: string;
+  readonly filename: string;
+  readonly sessionLabel: string | null;
+  readonly embeddings: EmbeddingClient;
+  readonly runtime: ReturnType<typeof createStudyAIRuntime>;
+}): Promise<{ readonly plan: StoredMergePlan; readonly extractionHash: string }> {
+  const { admin, userId, documentId, courseId } = input;
+
+  await setDocumentStatus(admin, documentId, userId, { status: "merging" });
+
+  // The index-INDEPENDENT identity of this document's extraction.
+  const { data: docRow, error: docError } = await admin
+    .from("documents")
+    .select("extraction")
+    .eq("id", documentId)
+    .eq("user_id", userId)
+    .single();
+  if (docError) throw new Error(`Could not read ${documentId} for hashing: ${docError.message}`);
+  const hash = await extractionHash(docRow.extraction);
+
+  // ── Frozen receipt: LOAD and route zero times ─────────────────────────────
+  const existingPlan = await loadFrozenPlan(admin, userId, documentId, hash);
+  if (existingPlan !== null) {
+    await logProcessingEvent(admin, {
+      userId,
+      documentId,
+      courseId,
+      step: "route",
+      detail: "Re-using the plan worked out on an earlier attempt — picking up where it stopped.",
+    });
+    return { plan: existingPlan, extractionHash: hash };
+  }
+
+  // ── Compute: route + guard + coalesce, then freeze ────────────────────────
+  const existingTopics = await loadCourseTopics(admin, userId, courseId);
+  await logProcessingEvent(admin, {
+    userId,
+    documentId,
+    courseId,
+    step: "route",
+    detail:
+      existingTopics.length === 0
+        ? "Working out what this covers. This course has no topics yet."
+        : `Working out how this fits the ${existingTopics.length} topic${existingTopics.length === 1 ? "" : "s"} already in this course.`,
+  });
+
+  const routing = await runRouting({
+    admin,
+    userId,
+    documentId,
+    courseId,
+    courseTitle: input.courseTitle,
+    filename: input.filename,
+    sessionLabel: input.sessionLabel,
+    existingTopics,
+    embeddings: input.embeddings,
+    runtime: input.runtime,
+  });
+
+  const targets = planMerges(routing.routed, routing.segments, existingTopics);
+  const segmentsMerged = new Set(
+    targets.flatMap((target) => target.segments.map((segment) => segment.key)),
+  ).size;
+
+  const ctx: FeedContext = { userId, documentId, courseId };
+  await warnSegmentsNotReached(admin, ctx, segmentsMerged, routing.segments.length);
+  const funnelFinding = await applyFunnelBackstop(admin, ctx, {
+    existingTopicCount: existingTopics.length,
+    segmentsMerged,
+    mergeTargetCount: targets.length,
+  });
+
+  const plan: StoredMergePlan = {
+    version: 1,
+    targets: targets.map((target) => ({
+      topicKey: target.topicKey,
+      topicId: target.topicId,
+      title: target.title,
+      segmentKeys: target.segments.map((segment) => segment.key),
+    })),
+    unaccountedPages: [...routing.unaccountedPages],
+    coverageChecked: routing.coverageChecked,
+    backstopFindings: funnelFinding === null ? [] : [funnelFinding],
+    segments: routing.segments.length,
+    segmentsMerged,
+    topicsTouched: targets.length,
+    coercions: routing.coercions.length,
+    singletonFolds: routing.folds.length,
+  };
+
+  const { error: upsertError } = await admin.from("document_merge_plans").upsert(
+    {
+      user_id: userId,
+      document_id: documentId,
+      extraction_hash: hash,
+      prompt_version: ROUTING_PROMPT_VERSION,
+      plan,
+    },
+    { onConflict: "document_id,extraction_hash,prompt_version" },
+  );
+  if (upsertError) {
+    throw new Error(`Could not persist the merge plan for ${documentId}: ${upsertError.message}`);
+  }
+
+  return { plan, extractionHash: hash };
+}
+
+/**
+ * One `merge-target:<stableKey>` step: finish exactly one target of the frozen plan.
+ *
+ * Self-contained on purpose — it re-derives its segments from the extraction, re-reads its
+ * topic's current page + revision, and re-runs `planMergeWork` as a backstop — so Inngest can
+ * run it in isolation and a retry that lands here touches only this target. A create's
+ * resulting id is written back to the plan so a later run resolves it to a skip.
+ */
+async function runMergeTarget(input: {
+  readonly admin: SupabaseAdminClient;
+  readonly userId: string;
+  readonly documentId: string;
+  readonly courseId: string;
+  readonly courseTitle: string;
+  readonly filename: string;
+  readonly sessionLabel: string | null;
+  readonly planned: PlannedTarget;
+  readonly extractionHash: string;
+  readonly backstopFindings: readonly string[];
+  readonly unaccountedPages: readonly number[];
+  readonly coverageChecked: boolean;
+  readonly embeddings: EmbeddingClient;
+  readonly runtime: ReturnType<typeof createStudyAIRuntime>;
+}): Promise<{ readonly outcome: TopicMergeOutcome; readonly created: boolean }> {
+  const { admin, userId, documentId, courseId, planned } = input;
+
+  const noop = (): { outcome: TopicMergeOutcome; created: boolean } => ({
+    outcome: { topicKey: planned.topicKey, status: "merged", needsReview: false },
+    created: false,
+  });
+
+  // Re-derive this target's segments from the (hash-pinned) extraction.
+  const stored = await readStoredExtraction(admin, userId, documentId);
+  const byKey = new Map(segmentsOf(stored).map((segment) => [segment.key, segment]));
+  const segments = planned.segmentKeys
+    .map((key) => byKey.get(key))
+    .filter((segment): segment is Segment => segment !== undefined)
+    .sort((a, b) => a.fromPage - b.fromPage);
+  // No segments means the extraction changed shape under a matching hash (should not happen);
+  // there is nothing to merge, so this is a clean no-op rather than a failure.
+  if (segments.length === 0) return noop();
+
+  // Cross-run create idempotency: a create completed on a PRIOR run stamped its id into the
+  // plan. Reading it fresh (not from the possibly-stale in-memory plan) makes this step
+  // resolve that create to an assign even when it re-runs without memoization.
+  const frozen = await loadFrozenPlan(admin, userId, documentId, input.extractionHash);
+  const resolvedTopicId =
+    frozen?.targets.find((target) => target.topicKey === planned.topicKey)?.resolvedTopicId ??
+    planned.resolvedTopicId ??
+    null;
+  const effectiveTopicId = resolvedTopicId ?? planned.topicId;
+
+  // Build the concrete MergeTarget with FRESH topic state.
+  let target: MergeTarget;
+  if (effectiveTopicId !== null) {
+    const topic = await loadOneTopic(admin, userId, effectiveTopicId);
+    target =
+      topic === null
+        ? // The topic the plan named is gone. Recreate under the SAME stable key rather than
+          // writing into a vanished id.
+          {
+            topicId: null,
+            topicKey: planned.topicKey,
+            title: planned.title,
+            current: EMPTY_TOPIC_PAGE,
+            currentRevision: 0,
+            segments,
+          }
+        : {
+            topicId: topic.id,
+            topicKey: planned.topicKey,
+            title: topic.title,
+            current: topic.page,
+            currentRevision: topic.revision,
+            segments,
+          };
+  } else {
+    target = {
+      topicId: null,
+      topicKey: planned.topicKey,
+      title: planned.title,
+      current: EMPTY_TOPIC_PAGE,
+      currentRevision: 0,
+      segments,
+    };
+  }
+
+  // Convergence backstop — no longer the PRIMARY resume mechanism (the frozen plan is), but
+  // still the guard that skips a target this document already merged.
+  const priorContributions = await loadPriorContributions(admin, userId, documentId);
+  const { toMerge, skipped } = planMergeWork({ targets: [target], priorContributions });
+
+  const skippedTarget = skipped[0];
+  if (skippedTarget !== undefined) {
+    if (skippedTarget.provenanceMissing) {
+      await repairProvenance({ admin, userId, documentId, skipped: skippedTarget, segments });
+    }
+    await logProcessingEvent(admin, {
+      userId,
+      documentId,
+      courseId,
+      step: `merge:topic:${skippedTarget.topicKey}`,
+      detail: `“${skippedTarget.title}” already includes this file — left as it is.`,
+    });
+    return noop();
+  }
+  if (toMerge.length === 0) return noop();
+
+  // takenSlugs fresh from the DB, so a create lands a slug unique against the topics earlier
+  // targets of THIS document already committed.
+  const { data: slugRows } = await admin
+    .from("topics")
+    .select("slug")
+    .eq("user_id", userId)
+    .eq("course_id", courseId);
+  const takenSlugs = new Set((slugRows ?? []).map((row) => row.slug));
+
+  const { outcomes, created, createdTopicIds } = await mergeTopics({
+    admin,
+    userId,
+    documentId,
+    courseId,
+    courseTitle: input.courseTitle,
+    filename: input.filename,
+    sessionLabel: input.sessionLabel,
+    targets: toMerge,
+    unaccountedPages: input.unaccountedPages,
+    coverageChecked: input.coverageChecked,
+    backstopFindings: input.backstopFindings,
+    takenSlugs,
+    embeddings: input.embeddings,
+    runtime: input.runtime,
+  });
+
+  const newTopicId = createdTopicIds.get(planned.topicKey);
+  if (newTopicId !== undefined) {
+    await recordResolvedCreate(
+      admin,
+      userId,
+      documentId,
+      input.extractionHash,
+      planned.topicKey,
+      newTopicId,
+    );
+  }
+
+  const outcome = outcomes[0] ?? {
+    topicKey: planned.topicKey,
+    status: "failed" as const,
+    error: "merge produced no outcome",
+  };
+  return { outcome, created: created > 0 };
+}
+
+/**
+ * §5 Steps A–C as a RESUMABLE sequence of Inngest steps (Wave 7 §3).
+ *
+ * Replaces the single `step.run("route-and-merge")` that ran routing + every merge as one
+ * step — the exposure that lost 4 topics on the failing production run. Here the routing is
+ * frozen into `document_merge_plans` by `resolve-merge-plan`, and each merge target is its own
+ * `merge-target:<stableKey>` step, so a retry LOADS the plan (zero routing) and Inngest
+ * memoizes the targets that already persisted — a kill inside target 5 of 8 resumes at 5,
+ * never re-routing and never re-running 1–4.
+ *
+ * Isolation (PLAN §7's `partial`) still comes from the per-topic `try` in {@link mergeTopics};
+ * the per-target step boundary adds resumability on top of it.
+ */
+export async function runRouteAndMergeSteps(
+  input: RouteAndMergeInput & { readonly step: StepRunner },
+): Promise<RouteAndMergeSummary> {
+  const { admin, userId, documentId, courseId, step } = input;
+  const startedAt = Date.now();
+  const runtime = createStudyAIRuntime({ userId });
+  const embeddings = createStudyEmbeddingClient({ userId });
+
+  const { plan, extractionHash: hash } = await step.run("resolve-merge-plan", () =>
+    resolveMergePlan({
+      admin,
+      userId,
+      documentId,
+      courseId,
+      courseTitle: input.courseTitle,
+      filename: input.filename,
+      sessionLabel: input.sessionLabel,
+      embeddings,
+      runtime,
+    }),
+  );
+
+  const topicOutcomes: TopicMergeOutcome[] = [];
+  let created = 0;
+  for (const planned of plan.targets) {
+    const result = await step.run(`merge-target:${planned.topicKey}`, () =>
+      runMergeTarget({
+        admin,
+        userId,
+        documentId,
+        courseId,
+        courseTitle: input.courseTitle,
+        filename: input.filename,
+        sessionLabel: input.sessionLabel,
+        planned,
+        extractionHash: hash,
+        backstopFindings: plan.backstopFindings,
+        unaccountedPages: plan.unaccountedPages,
+        coverageChecked: plan.coverageChecked,
+        embeddings,
+        runtime,
+      }),
+    );
+    topicOutcomes.push(result.outcome);
+    if (result.created) created += 1;
+  }
+
+  const outcome = computeDocumentOutcome({ topicOutcomes });
+
+  return {
+    outcome,
+    topicOutcomes,
+    segments: plan.segments,
+    segmentsMerged: plan.segmentsMerged,
+    topicsTouched: plan.topicsTouched,
+    topicsCreated: created,
+    coercions: plan.coercions,
+    singletonFolds: plan.singletonFolds,
+    unaccountedPages: plan.unaccountedPages.length,
     costUsd: await mergeCost(admin, userId, documentId),
     elapsedMs: Date.now() - startedAt,
   };

@@ -1,5 +1,6 @@
 import {
   computeDocumentOutcome,
+  countNewestFlagged,
   MAX_DOCUMENT_BYTES,
   outcomeMessage,
   validateDocument,
@@ -22,7 +23,7 @@ import {
 import { documentUploaded, documentUploadedData } from "@/inngest/events";
 import { runExtract } from "@/inngest/extract";
 import { deriveOwner } from "@/inngest/owner";
-import { runRouteAndMerge } from "@/inngest/route-and-merge";
+import { runRouteAndMergeSteps } from "@/inngest/route-and-merge";
 import { createStudyAIRuntime } from "@/lib/ai/runtime";
 
 /**
@@ -272,20 +273,33 @@ export const processDocument = inngest.createFunction(
     // guard, one Sonnet merge per affected topic, the loss-detector plus a
     // cross-family Gemini critic, and the per-topic persist.
     //
-    // One step rather than one per topic — see the note on `runRouteAndMerge`.
-    // The per-topic isolation PLAN §7 asks for comes from the `try` inside it,
-    // which is what makes `partial` reachable at all.
-    const merge = await step.run("route-and-merge", () =>
-      runRouteAndMerge({
-        admin: adminClient(),
-        userId,
-        documentId,
-        courseId: document.course_id,
-        courseTitle: document.courses?.title ?? "this course",
-        filename: document.filename,
-        sessionLabel: extraction.sessionLabel,
-      }),
-    );
+    // ⚠ Wave 7 §3: this is NO LONGER one step. `runRouteAndMergeSteps` runs a
+    // `resolve-merge-plan` step (which freezes the routing into
+    // `document_merge_plans`, keyed by a hash of the extraction) followed by one
+    // `merge-target:<key>` step per affected topic. A retry therefore LOADS the
+    // frozen plan (zero routing) and Inngest memoizes the targets that already
+    // persisted — a kill inside target 5 of 8 resumes at 5 rather than
+    // re-routing 48 segments into a half-built index and abandoning the 4
+    // targets that never got created (the .local-fixtures/wave7-section3 loss).
+    // The per-topic isolation PLAN §7 asks for still comes from the `try` inside
+    // `mergeTopics`; `step` is threaded so those per-target steps are the ones
+    // Inngest checkpoints.
+    const merge = await runRouteAndMergeSteps({
+      admin: adminClient(),
+      userId,
+      documentId,
+      courseId: document.course_id,
+      courseTitle: document.courses?.title ?? "this course",
+      filename: document.filename,
+      sessionLabel: extraction.sessionLabel,
+      // Adapt Inngest's `step` to the minimal `StepRunner`. The cast bridges Inngest's
+      // `Jsonify<Awaited<T>>` return projection: our step returns are JSON-safe plain objects,
+      // so the runtime value is exactly `T` — Jsonify is a compile-time-only projection here.
+      step: {
+        run: <T>(id: string, fn: () => Promise<T>): Promise<T> =>
+          step.run(id, fn) as unknown as Promise<T>,
+      },
+    });
 
     // ── Money guard checkpoint (§7) ──────────────────────────────────────────
     //
@@ -433,6 +447,34 @@ export const processDocument = inngest.createFunction(
     const outcome = computeDocumentOutcome({
       topicOutcomes: merge.topicOutcomes,
       degraded: indexing === null || indexing.degraded,
+      // §3 fix (2): an untrustworthy coverage map downgrades to `partial`, exactly like an
+      // embedding degradation. The verdict lives in `documents.coverage.trustworthy` (there is
+      // no top-level column); `coverage` is already in scope from the coverage step. On the
+      // wave7-section3 run this was the ONLY honest signal that 4 of 8 topics had evaporated.
+      coverageUntrustworthy: coverage !== null && !coverage.map.trustworthy,
+    });
+
+    // ── The review-flag count, from PERSISTED revisions ──────────────────────
+    //
+    // §3 fix (4): `outcome.needsReviewCount` counts only the in-process merge outcomes, so it
+    // structurally misses the coverage-gap and deep-review `needs_review` revisions written
+    // AFTER the merge step, and the skip path zeroes it. Read it from the newest revision of
+    // each topic this document touched instead, mirroring the course page's newest-per-topic
+    // read. Its own step so the count is checkpointed with the rest of finalize.
+    const flaggedForReview = await step.run("count-flagged", async () => {
+      const admin = adminClient();
+      const { data, error } = await admin
+        .from("topic_revisions")
+        .select("topic_id, revision, needs_review")
+        .eq("user_id", userId)
+        .eq("document_id", documentId);
+      if (error) {
+        console.error(`[process-document] could not count review flags for ${documentId}:`, error);
+        // Fall back to the in-process count rather than under-reporting to zero.
+        return outcome.needsReviewCount;
+      }
+      // Newest revision per topic, over the persisted rows — the pure counter in @study/core.
+      return countNewestFlagged(data ?? []);
     });
 
     await step.run("finalize", async () => {
@@ -464,8 +506,7 @@ export const processDocument = inngest.createFunction(
         processedAt: new Date().toISOString(),
       });
 
-      const reviewNote =
-        outcome.needsReviewCount === 0 ? "" : ` ${outcome.needsReviewCount} flagged for review.`;
+      const reviewNote = flaggedForReview === 0 ? "" : ` ${flaggedForReview} flagged for review.`;
 
       await logProcessingEvent(admin, {
         userId,
