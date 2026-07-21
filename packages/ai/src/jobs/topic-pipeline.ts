@@ -52,7 +52,11 @@ export interface TopicIndexEntry {
  */
 export function renderTopicIndex(topics: readonly TopicIndexEntry[]): string {
   if (topics.length === 0) {
-    return "(This course has no topics yet. Every segment will need a new topic — but still keep them concept-shaped, and do not create two topics for one concept.)";
+    // The mode switch the system prompt keys on. v1's text here ("Every segment will need a
+    // new topic — but … do not create two topics for one concept") pushed the same direction
+    // as the unconditional assign-bias, and the pair funnelled a 47-segment deck into one
+    // topic on 2026-07-21. This text now states the drafting job instead.
+    return "(The index is EMPTY — this is the course's first document, so you are DRAFTING the index. Create one concept-shaped topic per distinct concept this document teaches; a lecture deck typically yields several. The document's own title is not a topic title, and the whole document must not funnel into a single topic unless it genuinely covers one concept.)";
   }
   return [...topics]
     .sort((a, b) => a.title.localeCompare(b.title))

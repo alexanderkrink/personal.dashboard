@@ -25,18 +25,29 @@ import { definePrompt } from "./define";
 /**
  * The routing system prompt.
  *
- * Frozen, and part of the cached prefix. The whole product invariant is in the second
- * paragraph, stated as a rule about what a topic *is* rather than as a preference, because
- * "prefer updating" reads as a tiebreak and loses to a model's instinct that a new document
- * deserves a new page.
+ * Frozen, and part of the cached prefix. Two modes, switched by whether the index has
+ * entries, because v1 taught the expensive way that ONE rule cannot serve both situations:
+ * its assign-bias was unconditional, and on 2026-07-21 a real deck of 47 segments with 29
+ * distinct headings hit an EMPTY index and came back as one create (the deck's own title)
+ * plus 46 title-assigns into it — `topicCount: 1` where the acceptance band requires 4–12,
+ * with grounding otherwise perfect. Proven byte-exact by `input_hash` preimage
+ * reconstruction (the wave6-overmerge corpus).
+ *
+ * The grown-index mode keeps v1's wording verbatim: the invariant is stated as a rule about
+ * what a topic *is* rather than as a preference, because "prefer updating" reads as a
+ * tiebreak and loses to a model's instinct that a new document deserves a new page. The
+ * empty-index mode names the opposite failure — under-splitting — as the worst outcome
+ * there, because a bias with no counter-bias is what funnelled the whole deck.
  */
 export const TOPIC_ROUTING_SYSTEM = `You maintain the topic index for a university course.
 
 A course's topic set is a STABLE, GROWING INDEX. Topics are concepts, not lectures. Documents contribute to topics; they never own them. When session 7's slides cover price elasticity, they expand the existing "Price Elasticity" page — they do not create "Session 7 Notes".
 
-Your bias is decisively toward assigning to an existing topic. A new topic is warranted ONLY when a segment introduces a concept the index cannot host at all. It is NOT warranted because the segment adds new detail, a new example, a new formula, or a deeper treatment of something already in the index — all of those are updates.
+You work in one of two modes, and the index below tells you which.
 
-Before proposing a new topic, ask: "could this live under one of the candidates as an additional section?" If yes, assign it. Creating a near-duplicate topic is the worst outcome available to you; it permanently fragments the student's notes.`;
+WHEN THE INDEX HAS ENTRIES, your bias is decisively toward assigning to an existing topic. A new topic is warranted ONLY when a segment introduces a concept the index cannot host at all. It is NOT warranted because the segment adds new detail, a new example, a new formula, or a deeper treatment of something already in the index — all of those are updates. Before proposing a new topic, ask: "could this live under one of the candidates as an additional section?" If yes, assign it. Creating a near-duplicate topic is the worst outcome available to you; it permanently fragments the student's notes.
+
+WHEN THE INDEX IS EMPTY, that bias does not apply — there is nothing to assign to. Your job is to DRAFT the course's topic index at concept granularity: one topic per distinct concept the document teaches. A lecture deck typically yields several concept-shaped topics. The deck's title, the course's title and the file name are names of containers, not concepts — never use one as a topic title, and never funnel an entire document into a single topic unless it genuinely covers one concept from start to finish. Segments that develop the same concept share one new topic; segments that introduce different concepts get different ones. Under-splitting is the worst outcome here: it buries distinct concepts in one page the student cannot revise from.`;
 
 export const topicRoutingPrompt = definePrompt<{
   courseTitle: string;
@@ -46,7 +57,27 @@ export const topicRoutingPrompt = definePrompt<{
   segments: string;
 }>({
   id: "topic-routing",
-  version: 1,
+  // v5: the assign-bias is scoped to a non-empty index and an explicit empty-index
+  // drafting mode was added (system prompt + the empty-index text in `renderTopicIndex`).
+  // The system prompt is not part of `input_hash`, so this bump is the only durable trace
+  // of the semantic change — do not fold it back.
+  //
+  // Versions 2–4 never shipped; they are burned by the Wave 6 live-replay rows the fixture
+  // tenant minted while this text was tuned (receipts in
+  // `wave6-overmerge/routing-replay-v{2,3,4}.json`), and per the quick-add precedent a
+  // version whose rows a different registered text would orphan is not reused. The
+  // measurements, over the frozen 47-segment over-merge extraction (v1 produced 1 topic):
+  //   v2 — this same drafting wording: 13 targets (11 on the wave-4 deck).
+  //   v3 — plus soft granularity calibration ("four to ten … more than a dozen means
+  //        sections"): 14 targets.
+  //   v4 — plus a hard ten-topic ceiling and consolidation rule: 28 targets (13 on the
+  //        wave-4 deck) — flash-lite ignores numeric ceilings, and stronger drafting
+  //        language pushes it toward titling sections.
+  // v5 therefore registers the v2 wording — the best measured — and the residual gap to
+  // the 4–12 band (13 vs ≤12 on one sample) is a model-choice question, not a wording one:
+  // escalating the wording measurably over-splits. Re-pinning the job's model is the named
+  // fallback and is not made here.
+  version: 5,
   description:
     "Batched update-vs-create routing for one document's segments against the course topic index (PLAN §5 Step A).",
   // The index comes first and the document last: everything above `## This document` is
