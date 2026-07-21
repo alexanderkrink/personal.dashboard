@@ -96,8 +96,21 @@ describe("computeExamWeight — the floor is not the 0.5 default (§9)", () => {
     expect(bare).toBe(EXAM_WEIGHT_FLOOR);
   });
 
-  it("stays within [0, 1] under maximal load", () => {
-    const loud = computeExamWeight({
+  // RED against a blend that clamps its top end flat (terms summing to ≥ 1.0, e.g. the old
+  // {0.5, 0.3, 0.2}): two strongly-supported-but-distinct topics both pin to exactly 1.0 via
+  // clamp01 and become indistinguishable — the ordering the weight exists for is destroyed. The
+  // <1 assertion is the other half: the pre-clamp blend must stay strictly below 1 so no clamp
+  // ever fires and discrimination survives at every level of support.
+  it("keeps two strongly-supported topics DISTINCT rather than clamping both to 1.0", () => {
+    const strong = computeExamWeight({
+      override: null,
+      signalCount: 30,
+      sourceCount: 30,
+      recencyFactor: 1,
+      formulaCount: 30,
+      workedExampleCount: 30,
+    });
+    const stronger = computeExamWeight({
       override: null,
       signalCount: 50,
       sourceCount: 50,
@@ -105,8 +118,10 @@ describe("computeExamWeight — the floor is not the 0.5 default (§9)", () => {
       formulaCount: 50,
       workedExampleCount: 50,
     });
-    expect(loud).toBeGreaterThan(0.9);
-    expect(loud).toBeLessThanOrEqual(1);
+    expect(strong).toBeGreaterThan(0.9);
+    // Both must stay strictly below 1 — no clamp — so they can differ.
+    expect(stronger).toBeLessThan(1);
+    expect(stronger).toBeGreaterThan(strong);
   });
 });
 

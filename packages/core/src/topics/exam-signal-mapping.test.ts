@@ -39,17 +39,17 @@ function signal(overrides: Partial<MappableSignal>): MappableSignal {
 }
 
 describe("mapExamSignal — page match (branch 1)", () => {
-  // RED against removing the document scope from the page match (drop the
-  // `source.documentId === signal.documentId` clause): page 5 then also matches REGRESSION's
-  // page 5 in a DIFFERENT document, and the single-match assertion below breaks.
   it("maps a signal to the topic whose source covers its (document, page)", () => {
     const result = mapExamSignal(signal({ page: 5, documentId: "doc-lecture-3" }), TOPICS);
     expect(result.method).toBe("page");
     expect(result.topicId).toBe("topic-elasticity");
   });
 
+  // RED against removing the document scope from the page match (drop the
+  // `source.documentId === signal.documentId` clause): page 5 exists in BOTH documents, so an
+  // unscoped match would find elasticity (doc-3, p5) as well as regression (doc-9, p5) and pick
+  // the wrong topic — this signal is from lecture 9 and must resolve to regression only.
   it("does not let a page number leak across documents", () => {
-    // Page 5 exists in BOTH documents, but this signal is from lecture 9 → regression only.
     const result = mapExamSignal(signal({ page: 5, documentId: "doc-lecture-9" }), TOPICS);
     expect(result.method).toBe("page");
     expect(result.topicId).toBe("topic-regression");

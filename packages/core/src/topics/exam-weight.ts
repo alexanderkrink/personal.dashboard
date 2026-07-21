@@ -49,14 +49,20 @@ export const EXAM_WEIGHT_MAX = 1;
 export const EXAM_WEIGHT_FLOOR = 0.05;
 
 /**
- * How the three blended terms divide the remaining `1 - FLOOR` of headroom. Signals dominate
- * (§9: "the strongest term"); coverage is next; artifact density is the tie-breaker. They sum
- * to 0.95 so a maximally-supported topic reaches exactly `1.0`.
+ * How the three blended terms divide the headroom above the floor. Signals dominate (§9: "the
+ * strongest term"); coverage is next; artifact density is the tie-breaker.
+ *
+ * They sum to **0.95**, exactly `1 - FLOOR`. This is load-bearing, not cosmetic: each sub-score
+ * is a saturating curve that approaches but never reaches 1, so `FLOOR + 0.95·(subscores)`
+ * approaches but never reaches 1.0 for any finite input. If the terms summed to 1.0 the
+ * pre-clamp blend would asymptote *above* 1.0 and cross it at ~27 symmetric counts, pinning
+ * every strongly-supported topic to exactly 1.0 through `clamp01` — and a weight whose whole
+ * job is to *order* revision priority must not collapse its top end into a flat ceiling.
  */
 export const EXAM_WEIGHT_TERMS = {
-  signal: 0.5,
-  coverage: 0.3,
-  artifact: 0.2,
+  signal: 0.475,
+  coverage: 0.285,
+  artifact: 0.19,
 } as const;
 
 /**
