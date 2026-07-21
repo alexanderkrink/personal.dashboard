@@ -175,3 +175,36 @@ export const courseTopicsChangedData = z.object({
 export const courseTopicsChanged = eventType("course/topics.changed", {
   schema: courseTopicsChangedData,
 });
+
+/**
+ * A student asked for this course's exam review to be (re)generated (PLAN §9's *Regenerate*
+ * button). The trigger for the one on-demand Opus call §9 describes.
+ *
+ * ## Why the payload is `{ courseId }` and nothing else
+ *
+ * Per the ⚠⚠ rule above, the owner is NOT in the payload: `generate-review` calls
+ * `deriveOwner()` on `courseId` and writes the `exam_reviews` row with the database's answer,
+ * exactly as `mark-reviews-stale` does with the same id. A `userId` here would buy no
+ * cross-check — the producer (the Regenerate Server Action) knows the owner only because it
+ * just read the course row under RLS, so comparing it back would be comparing the database
+ * against itself — so it is absent, and the event cannot be made to name a tenant it does not
+ * own.
+ *
+ * `courseId` doubles as the concurrency key: `generate-review` declares
+ * `concurrency: [{ key: "event.data.courseId", limit: 1 }]`, which serializes runs for a
+ * course rather than letting two Opus calls run in parallel.
+ *
+ * `requestId` is the **idempotency token**, and it is a client concern, not a tenant one — a
+ * uuid the Regenerate button mints once per intent and reuses across a double-click. The
+ * function declares `idempotency: "event.data.requestId"`, so two sends of the *same* request
+ * collapse to one run (no double bill), while a genuinely new Regenerate carries a fresh id and
+ * runs. It names no owner and cannot: the handler still derives the tenant from `courseId`.
+ */
+export const courseReviewRequestedData = z.object({
+  courseId: z.uuid(),
+  requestId: z.uuid(),
+});
+
+export const courseReviewRequested = eventType("course/review.requested", {
+  schema: courseReviewRequestedData,
+});

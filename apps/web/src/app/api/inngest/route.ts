@@ -30,6 +30,7 @@
 
 import { serve } from "inngest/next";
 import { inngest } from "@/inngest/client";
+import { generateReview } from "@/inngest/functions/generate-review";
 import { healthCheck } from "@/inngest/functions/health-check";
 import { markReviewsStale } from "@/inngest/functions/mark-reviews-stale";
 import { processDocument } from "@/inngest/functions/process-document";
@@ -75,5 +76,5 @@ export const { GET, POST, PUT } = serve({
   // not yet installed and the deploy did not resync. The auto-resync is what closes
   // that gap; the `maxDuration` export above likewise relies on Vercel reading this
   // file's route-segment config to size the function's execution limit.
-  functions: [healthCheck, processDocument, markReviewsStale],
+  functions: [healthCheck, processDocument, markReviewsStale, generateReview],
 });

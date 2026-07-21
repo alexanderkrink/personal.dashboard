@@ -62,6 +62,20 @@ export {
   storedExtractionSchema,
 } from "./documents";
 export {
+  EXAM_QUESTION_KINDS,
+  EXAM_SECTION_DEPTH,
+  type ExamFormulaEntry,
+  type ExamQuestion,
+  type ExamReview,
+  type ExamTopicSection,
+  type ExamWeakSpot,
+  examFormulaEntrySchema,
+  examQuestionSchema,
+  examReviewSchema,
+  examTopicSectionSchema,
+  examWeakSpotSchema,
+} from "./exam-review";
+export {
   QUICK_ADD_KINDS,
   type QuickAddParse,
   quickAddParseSchema,

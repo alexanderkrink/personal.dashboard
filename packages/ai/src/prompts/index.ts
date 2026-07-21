@@ -22,6 +22,7 @@
 import { coverageChecklistPrompt, deepReviewAuditPrompt } from "./coverage";
 import type { AnyPromptTemplate } from "./define";
 import { docStructuringPrompt, docStructuringSlideTextPrompt } from "./documents";
+import { examReviewPrompt } from "./exam-review";
 import { quickAddPrompt } from "./quick-add";
 import { syllabusComponentsPrompt } from "./syllabus";
 import {
@@ -59,6 +60,7 @@ export const PROMPT_REGISTRY: readonly AnyPromptTemplate[] = [
   mergeCriticPrompt,
   coverageChecklistPrompt,
   deepReviewAuditPrompt,
+  examReviewPrompt,
   quickAddPrompt,
 ];
 
@@ -73,6 +75,7 @@ export {
   docStructuringPrompt,
   docStructuringSlideTextPrompt,
 } from "./documents";
+export { EXAM_REVIEW_SYSTEM, examReviewPrompt } from "./exam-review";
 export { QUICK_ADD_SYSTEM, quickAddPrompt } from "./quick-add";
 export { SYLLABUS_COMPONENTS_SYSTEM, syllabusComponentsPrompt } from "./syllabus";
 export {

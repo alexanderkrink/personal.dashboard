@@ -130,6 +130,7 @@ export {
   DEEP_REVIEW_AUDIT_SYSTEM,
   deepReviewAuditPrompt,
 } from "./prompts/coverage";
+export { EXAM_REVIEW_SYSTEM, examReviewPrompt } from "./prompts/exam-review";
 export {
   type AnyPromptTemplate,
   assertPromptId,
