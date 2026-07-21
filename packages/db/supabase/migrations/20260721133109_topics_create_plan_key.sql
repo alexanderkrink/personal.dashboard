@@ -50,9 +50,16 @@ alter table public.topics
 comment on column public.topics.create_plan_key is
   'Wave 7 §3 durable resume marker: <document_id>:<frozen plan target key> of the create that produced this topic, written atomically with the topic by create_topic_with_first_revision. On a re-entry a create target lacking a resolution is looked up by this key and resolved to a skip instead of a duplicate create. Null for non-pipeline creates (the deep-review audit).';
 
--- Covers the resume lookup: "the topic this document already created for this plan key".
-create index topics_create_plan_key_idx
-  on public.topics (create_plan_key)
+-- UNIQUE, so create-idempotency is a STRUCTURAL invariant rather than resting on the app's
+-- `findCreatedTopic` lookup and the per-course concurrency lane alone: the database itself
+-- refuses a second topic carrying the same marker. A losing race (or a retry that raced its
+-- own prior attempt) hits 23505 instead of duplicating; the app catches it and resolves to the
+-- winner. Two NULL markers do not collide (the partial predicate excludes them), so the
+-- deep-review audit create — which passes no key — is unconstrained. Scoped by
+-- (user_id, course_id) to match `findCreatedTopic`'s filter, which also makes that lookup's
+-- `.maybeSingle()` structurally unable to see more than one row.
+create unique index topics_create_plan_key_idx
+  on public.topics (user_id, course_id, create_plan_key)
   where create_plan_key is not null;
 
 /* ========================================================================== */
