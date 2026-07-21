@@ -240,8 +240,10 @@ describe.skipIf(!enabled)("wave5 — the fixed pipeline over the frozen corpus",
       knownTopicIds: [],
     });
 
-    // Real title vectors — the duplicate guard groups identical titles by cosine, so a
-    // synthetic vector here would be measuring the harness rather than the pipeline.
+    // Real title vectors. Since Wave 6 the SAME-BATCH fold is title-identity and needs no
+    // vector, so these no longer decide any grouping this harness measures — they exist so
+    // the guard's `unguarded` count reads an honest 0 (a null vector would be reported as
+    // `no-title-embedding`, an artifact of the harness rather than of the pipeline).
     const env = localEnv();
     const embeddings = createEmbeddingClient({
       apiKey: env.VOYAGE_API_KEY ?? "",
