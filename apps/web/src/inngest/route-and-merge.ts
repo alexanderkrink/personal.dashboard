@@ -1049,6 +1049,18 @@ async function persistTopicMerge(input: {
     });
 
     if (error !== null || data === null) {
+      // A unique-marker 23505 means another writer already created this topic for this plan
+      // target — a race the per-course concurrency lane normally prevents, or a retry that
+      // raced its own prior attempt. The winner created it from the same plan target with the
+      // same segments, so resolve to the winner and treat this create as a no-op: one topic,
+      // no throw, a clean event feed. `slug: null` keeps it out of the "N new" count. Without
+      // this catch it still self-heals — the throw fails one topic, and the next step retry's
+      // `findCreatedTopic` finds the winner and skips — but the catch makes the losing race
+      // graceful rather than a spurious `partial`.
+      if (error?.code === "23505") {
+        const winner = await findCreatedTopic(admin, userId, courseId, documentId, target.topicKey);
+        if (winner !== null) return { topicId: winner, slug: null };
+      }
       throw new Error(`Could not create topic “${target.title}”: ${error?.message ?? "no row"}`);
     }
     topicId = data;

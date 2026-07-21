@@ -57,6 +57,14 @@ class FakeDb {
     document_merge_plans: [],
   };
 
+  /**
+   * Simulate the TOCTOU race the per-course concurrency lane normally prevents: while > 0, a
+   * `findCreatedTopic` lookup (a topics select filtering on create_plan_key) returns NOTHING,
+   * as if the winner's create had not yet committed when the loser read. Decrements per use.
+   * This is what lets a loser reach the create RPC and hit the unique-marker 23505.
+   */
+  blindCreatePlanKeyLookups = 0;
+
   rows(table: string): Row[] {
     const rows = this.tables[table];
     if (rows === undefined) throw new Error(`fake db has no table ${table}`);
@@ -96,8 +104,33 @@ class FakeDb {
     return null;
   }
 
-  /** `create_topic_with_first_revision`, transcribed from migrations 20260720194417/213410. */
+  /** `create_topic_with_first_revision`, transcribed from migrations 20260720194417/213410
+   *  /20260721133109 (the last adds the atomic create_plan_key marker + its unique index). */
   createTopicWithFirstRevision(args: Row): { data: string | null; error: PgError | null } {
+    const planKey = (args.p_create_plan_key ?? null) as string | null;
+
+    // `unique index topics_create_plan_key_idx (user_id, course_id, create_plan_key) where
+    // create_plan_key is not null`, transcribed. Checked BEFORE any write so the whole RPC is
+    // atomic: on a marker collision neither the topic nor its revision lands, exactly as the
+    // real transaction rolls back. Two null markers never collide (the partial predicate).
+    if (planKey !== null) {
+      const clash = this.rows("topics").some(
+        (candidate) =>
+          candidate.user_id === args.p_user_id &&
+          candidate.course_id === args.p_course_id &&
+          candidate.create_plan_key === planKey,
+      );
+      if (clash) {
+        return {
+          data: null,
+          error: {
+            code: "23505",
+            message: "duplicate key value violates unique index topics_create_plan_key_idx",
+          },
+        };
+      }
+    }
+
     const topicId = `generated-topics-${this.rows("topics").length + 1}`;
     const topic: Row = {
       id: topicId,
@@ -108,10 +141,7 @@ class FakeDb {
       summary: args.p_summary,
       page: args.p_page,
       revision: 1,
-      // The Wave 7 §3 durable resume marker, stamped atomically with the create — exactly as
-      // migration 20260721133109's RPC does. `?? null` mirrors the column default so the
-      // pre-fix code (which passes no key) stores null rather than undefined.
-      create_plan_key: args.p_create_plan_key ?? null,
+      create_plan_key: planKey,
     };
     const revision: Row = {
       user_id: args.p_user_id,
@@ -223,6 +253,16 @@ class Query implements PromiseLike<{ data: Row[] | Row | null; error: PgError | 
         if (matches(row, this.filters)) Object.assign(row, this.payload);
       }
       return { data: null, error: null };
+    }
+    // Race window: blind the loser's `findCreatedTopic` (a topics select on create_plan_key).
+    if (
+      this.op === "select" &&
+      this.table === "topics" &&
+      this.filters.some((filter) => filter.column === "create_plan_key") &&
+      this.db.blindCreatePlanKeyLookups > 0
+    ) {
+      this.db.blindCreatePlanKeyLookups -= 1;
+      return { data: this.one ? null : [], error: null };
     }
     const found = this.db.rows(this.table).filter((row) => matches(row, this.filters));
     if (this.one) {
@@ -803,6 +843,45 @@ describe("§3 BLOCKER: a fresh run must not re-create a topic when the write-bac
     // No second merge was paid for, and the run is clean.
     expect(countOf("topic-merge")).toBe(0);
     expect(summary.outcome.status).toBe("ready");
+  });
+});
+
+describe("§3 the unique marker makes a losing create race a graceful skip", () => {
+  /**
+   * The structural belt: `unique index (user_id, course_id, create_plan_key)` refuses a second
+   * topic carrying the same marker even if `findCreatedTopic` misses. This replays the TOCTOU
+   * the per-course concurrency lane normally prevents — the loser's pre-check reads BEFORE the
+   * winner is visible (blinded once), reaches the create RPC, and hits 23505. The catch in
+   * persistTopicMerge resolves it to the winner: one topic, no throw, a clean `ready`.
+   *
+   * RED by mutation: remove the 23505-catch and the losing create throws, `mergeTopics` fails
+   * that one topic, and the run finalizes `partial` instead of `ready`.
+   */
+  it("a create whose marker already exists resolves to the winner (one topic, no throw)", async () => {
+    db.tables.documents = [{ id: DOCUMENT, user_id: USER, extraction: extractionOf(1) }];
+
+    // Winner: creates the topic (with its marker) and freezes the plan.
+    await runRouteAndMergeSteps({ admin: fakeAdmin(), ...INPUT, step: new FakeStep() });
+    expect(db.rows("topics")).toHaveLength(1);
+    const winnerId = db.rows("topics")[0]?.id;
+
+    // Loser: its findCreatedTopic pre-check is blinded once, so it reaches the create RPC and
+    // collides on the unique marker. The catch resolves it to the winner.
+    llmCalls.length = 0;
+    db.blindCreatePlanKeyLookups = 1;
+    const loser = await runRouteAndMergeSteps({
+      admin: fakeAdmin(),
+      ...INPUT,
+      step: new FakeStep(),
+    });
+
+    // Exactly one topic — the winner. No duplicate, no throw, and a clean (non-partial) run.
+    expect(db.rows("topics")).toHaveLength(1);
+    expect(db.rows("topics")[0]?.id).toBe(winnerId);
+    expect(loser.outcome.status).toBe("ready");
+    expect(loser.outcome.failedTopics).toEqual([]);
+    // The losing create was resolved to a skip, not counted as a new topic.
+    expect(loser.topicsCreated).toBe(0);
   });
 });
 
