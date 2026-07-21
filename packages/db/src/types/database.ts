@@ -557,6 +557,44 @@ export type Database = {
           },
         ]
       }
+      document_merge_plans: {
+        Row: {
+          created_at: string
+          document_id: string
+          extraction_hash: string
+          id: string
+          plan: Json
+          prompt_version: number
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          document_id: string
+          extraction_hash: string
+          id?: string
+          plan: Json
+          prompt_version: number
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          document_id?: string
+          extraction_hash?: string
+          id?: string
+          plan?: Json
+          prompt_version?: number
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "document_merge_plans_document_id_fkey"
+            columns: ["document_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "documents"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
       document_processing_events: {
         Row: {
           course_id: string
