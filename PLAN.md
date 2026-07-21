@@ -1658,6 +1658,33 @@ it; they never own pages.**
    update-vs-create decision, and it is deliberately biased toward *update*: the prompt
    states that a new topic is only warranted when the segment introduces a concept the index
    cannot host, not merely new detail about an existing one.
+
+   > ⚠ **CORRECTED 2026-07-21 (Wave 6 phase 2, branch B) — the update-bias must be scoped
+   > to a NON-EMPTY index, and on an empty one the job is different in kind.** Wave 5 held
+   > the empty-index carve-out (F6) because on the evidence then the router had not
+   > misbehaved — correctly, on that evidence. On 2026-07-21 production disproved it live:
+   > the same deck, re-uploaded with the routing fix in place, put 47 segments with 29
+   > distinct headings in front of an EMPTY index, and v1's unconditional bias ("creating a
+   > near-duplicate topic is the worst outcome") returned **one create named after the deck
+   > plus 46 title-assigns into it** — `topicCount: 1` against a 4–12 acceptance band, with
+   > grounding otherwise perfect (47/47 segments merged, 70/70 citations resolve,
+   > `trustworthy: true`). Proven byte-exact by `input_hash` preimage reconstruction, and
+   > reproduced live by the replay harness (`wave6-routing-replay.test.ts`) before the fix.
+   >
+   > **This also corrects branch B's own predicted mechanism.** The branch was scoped as
+   > duplicate-guard-first; the trace ordered the causes the other way: the routing
+   > prompt's unscoped bias is primary (1 create leaves the guard nothing to over-fold),
+   > and the guard's cosine fold is the secondary cap that keeps even a correct 7-way split
+   > under the band (see Step A.4). `topic-routing` is now v5: two modes keyed on the
+   > index, the grown-index mode verbatim v1, the empty-index mode drafting the index at
+   > concept granularity. Live-measured over the frozen extraction: v1 → 1 topic; v5 →
+   > 13–14 concept-shaped topics (11 and 7 on the Wave 4 deck), every segment merged.
+   > **Residual, named:** 13–14 sits just above the ≤ 12 line on this deck, and the two
+   > permitted wording escalations made it worse, not better (soft calibration → 14; a hard
+   > ten-topic ceiling → 28 — flash-lite ignores numeric ceilings). Receipts:
+   > `wave6-overmerge/routing-replay-v{1..5}.json`. Closing the last 1–2 topics is a
+   > model-selection decision (re-pin the `topic-routing` job), reserved to Alexander —
+   > not a prompt-wording one.
 4. **Deterministic duplicate guard (code, not LLM):** every `createNew` title is embedded
    and compared to existing topic-title embeddings. Cosine similarity ≥ 0.85 → coerced into
    an assignment to the nearest topic (logged as a `warn` processing event). This catches
@@ -1693,6 +1720,31 @@ it; they never own pages.**
    > compare `title + summary` rather than the bare title, and re-measure against this same
    > 48-segment corpus, which is now a repeatable harness
    > (`apps/web/src/test/wave5-routing-replay.test.ts`).
+
+   > ✅ **DECIDED 2026-07-21 (Wave 6 phase 2, branch B) — guard 2 folds only
+   > normalised-IDENTICAL titles; the cosine stays cross-upload-only; the threshold is not
+   > retuned.** The recommendation above (raise to ~0.93) would still fold "Sampling
+   > Distributions of Proportions" (0.958) and "of Variances" (0.936) — sibling concepts a
+   > statistics course examines separately — because short titles from one chapter share
+   > their embedding neighbourhood at any threshold worth having. The rescope reasons from
+   > the situation instead: the router saw every segment in ONE call, so a distinct
+   > same-batch title is a deliberate distinction the guard must not override, while
+   > spelling variants of the SAME title (the batch-local shape) fold vector-free on the
+   > resolver's own `normaliseTitle`. The cross-upload guard keeps 0.85 unchanged — two
+   > calls weeks apart cannot see each other, so drift between them is an accident, which
+   > is that guard's original charter. Red-then-green against the frozen cosines above:
+   > the old fold collapsed the 7 measured creates to 2 (pinned as a transcription test);
+   > all 7 now survive (`duplicate-guard.test.ts`).
+   >
+   > ✅ **DECIDED 2026-07-21 (same branch) — a deterministic single-topic funnel backstop
+   > now sits downstream of routing, and it CAN fire.** Empty index at routing time + ≥ 12
+   > routed segments + exactly 1 merge target ⇒ the created topic's first revision is
+   > `needs_review` with the note "whole document funnelled into a single topic on an empty
+   > index — likely under-split", plus a `warn` event (`detectSingleTopicFunnel`,
+   > `@study/core`). It flags, never blocks. The 2026-07-21 run trips the predicate and
+   > recorded nothing — that red is pinned against the frozen corpus
+   > (`wave6-overmerge-fixture.test.ts`); the prompt fix is probabilistic, this is the
+   > guard no routing output can argue out of firing.
 
 #### Step B — Merge per topic (`topic-merge` · Sonnet 5, one step per topic)
 
