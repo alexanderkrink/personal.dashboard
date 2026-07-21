@@ -18,6 +18,26 @@ export {
   type UnguardedProposal,
 } from "./duplicate-guard";
 export {
+  countSignalsByTopic,
+  FUZZY_MATCH_THRESHOLD,
+  type MappableSignal,
+  type MappableTopic,
+  mapExamSignal,
+  mapExamSignals,
+  type SignalMapping,
+  type SignalMatchMethod,
+  type TopicSourceRange,
+} from "./exam-signal-mapping";
+export {
+  computeExamWeight,
+  EXAM_WEIGHT_FLOOR,
+  EXAM_WEIGHT_HALF,
+  EXAM_WEIGHT_MAX,
+  EXAM_WEIGHT_MIN,
+  EXAM_WEIGHT_TERMS,
+  type ExamWeightInput,
+} from "./exam-weight";
+export {
   detectSingleTopicFunnel,
   FUNNEL_MIN_SEGMENTS,
   type FunnelBackstopInput,
