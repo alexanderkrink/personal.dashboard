@@ -178,6 +178,7 @@ export {
   type GenerationOutcome,
   type PromptFile,
   type StreamProseOptions,
+  schemaHashHex,
   sha256Hex,
   sha256HexBytes,
 } from "./runtime";

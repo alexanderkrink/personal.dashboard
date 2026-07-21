@@ -272,8 +272,11 @@ export async function runExtract(input: ExtractInput): Promise<ExtractSummary> {
     throw new Error(`Could not store the extraction for ${documentId}: ${error.message}`);
   }
 
-  // ── What this cost, from the metering rows the runtime just wrote (§7) ──────
-  const costUsd = await extractionCost(admin, userId, result.stamp.inputHash);
+  // ── What THIS run's extraction cost, from the metering rows the runtime just wrote (§7).
+  // Bounded to this run's start (`startedAt`) so a retry or reprocess of the same document —
+  // identical bytes and prompt, hence the identical input_hash — cannot bill this line for
+  // an earlier run's attempts.
+  const costUsd = await extractionCost(admin, userId, result.stamp.inputHash, startedAt);
 
   const skippedPages = extraction.skipped.reduce(
     (total, range) => total + Math.max(0, range.toPage - range.fromPage + 1),
@@ -309,26 +312,39 @@ export async function runExtract(input: ExtractInput): Promise<ExtractSummary> {
 }
 
 /**
- * Sums what this extraction actually cost, across every ladder rung.
+ * Sums what THIS run's extraction cost, across every ladder rung.
  *
  * Read back from `ai_generations` rather than tracked in-process because that is the row
  * §6 bills against — if the two ever disagree, the table is right and the in-memory number
- * is a story. Keyed on `input_hash`, which is exactly the set of attempts this call made.
+ * is a story.
+ *
+ * ⚠ Scoped by `input_hash` AND by `created_at >= runStartedAt`. `input_hash` alone is the
+ * wrong scope: it is deterministic in (prompt, version, content), so a step retry (the
+ * module docstring above: "a transport failure after a successful `generateObject` re-runs
+ * the call") or a reprocess re-issues the identical extraction and writes FRESH rows under
+ * the SAME hash. Summing by hash alone bills this line for every run the document has ever
+ * had — the whole document's history, not this run's extract step. That contradicts what the
+ * feed line claims to show, and the number silently doubles on the first retry. The run's own
+ * start time is the bound that fixes it: every rung of this attempt is logged after it and
+ * every earlier run's rows before it — the same time-bounding `mergeCost` uses, here made
+ * exact because the extract step is a single hash rather than a spray of them.
  *
  * Returns `null` when nothing could be read or every row is unpriced; the caller renders
  * it as "no cost shown" rather than as "$0.00", because a free call and an unmeasured one
  * are very different things to see on a budget page.
  */
-async function extractionCost(
+export async function extractionCost(
   admin: SupabaseAdminClient,
   userId: string,
   inputHash: string,
+  runStartedAt: number,
 ): Promise<number | null> {
   const { data, error } = await admin
     .from("ai_generations")
     .select("cost_usd")
     .eq("user_id", userId)
-    .eq("input_hash", inputHash);
+    .eq("input_hash", inputHash)
+    .gte("created_at", new Date(runStartedAt).toISOString());
 
   if (error || data === null || data.length === 0) return null;
 

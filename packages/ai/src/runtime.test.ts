@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { AIPausedError, type SpendReading } from "./guard";
 import { definePrompt, type PromptTemplate } from "./prompts/define";
-import { type AIGenerationRecord, createAIRuntime, sha256Hex } from "./runtime";
+import { type AIGenerationRecord, createAIRuntime, schemaHashHex, sha256Hex } from "./runtime";
 
 /**
  * The call wrapper Agent 3's `ai_generations` writer plugs into (M1 item 2c).
@@ -742,5 +742,122 @@ describe("file attachments", () => {
     const retry = generateObject.mock.calls[1]?.[0];
     expect(retry.messages[0].content[1]).toMatchObject({ type: "file" });
     expect(retry.messages[0].content[0].text).toContain("failed validation");
+  });
+});
+
+/**
+ * The §3 SIXTH stamp column (PLAN §3, Wave 5 correction: "the five-column stamp
+ * UNDER-DETERMINES the model contract").
+ *
+ * The five columns record the exact words a model saw. They do NOT record the output
+ * *contract*: two calls can share all five while being held to different Zod schemas — a
+ * schema whose `.describe()` text changed without a `promptVersion` bump. `schema_hash`
+ * closes that gap. Every structured attempt must carry it; every prose attempt must not.
+ */
+describe("the sixth stamp column: schema_hash", () => {
+  /**
+   * 🔴 The exact drift PLAN describes. Two schemas identical in SHAPE but differing only in
+   * a `.describe()` — the topicFormulaSchema.sources example from the Wave 5 note — must
+   * produce DIFFERENT schema hashes, or the column detects nothing it was added to detect.
+   *
+   * RED by mutation: make `canonicalJson`/`schemaHashHex` drop the JSON Schema `description`
+   * keys (e.g. hash only `type`/`properties`) and the two hashes become equal — this fails.
+   */
+  it("🔴 distinguishes two schemas that differ only in .describe() text", async () => {
+    const before = z.object({
+      sources: z.array(z.string()).describe("cite the pages"),
+    });
+    const after = z.object({
+      sources: z
+        .array(z.string())
+        .describe("cite the pages — if no source you were given states it, do not state it"),
+    });
+
+    const hashBefore = await schemaHashHex(before);
+    const hashAfter = await schemaHashHex(after);
+
+    expect(hashBefore).toMatch(/^[0-9a-f]{64}$/);
+    expect(hashBefore).not.toBe(hashAfter);
+  });
+
+  it("is deterministic for one schema and changes when a field's type changes", async () => {
+    const a = z.object({ title: z.string(), page: z.number() });
+    const changedType = z.object({ title: z.number(), page: z.number() });
+
+    expect(await schemaHashHex(a)).toBe(await schemaHashHex(a));
+    // A type change IS a contract change. (Reordering fields also changes the hash, via the
+    // JSON Schema `required` array — over-sensitive, never under-sensitive, which is the safe
+    // direction for a drift detector.)
+    expect(await schemaHashHex(a)).not.toBe(await schemaHashHex(changedType));
+  });
+
+  /**
+   * 🔴 The wire itself. A structured call must LOG the schema_hash, and it must equal the
+   * hash of the schema it was given.
+   *
+   * RED by mutation: remove `schemaHash` from `generateStructured`'s `emit` payload and the
+   * logged value is `undefined` — this fails.
+   */
+  it("🔴 stamps every structured attempt with its schema's hash", async () => {
+    generateObject.mockResolvedValue({ object: { title: "ok" }, usage: usage(1_000, 200) });
+    const { runtime, logged } = runtimeWithLog();
+
+    await runtime.generateStructured({ prompt, vars: { topic: "x" }, schema });
+
+    expect(logged).toHaveLength(1);
+    expect(logged[0]?.schemaHash).toBe(await schemaHashHex(schema));
+  });
+
+  /**
+   * Every rung of one ladder is held to the SAME schema — escalation changes the model, not
+   * the contract — so every attempt row must carry one identical schema_hash, exactly as it
+   * carries one identical input_hash.
+   */
+  it("carries one schema_hash across an escalating ladder", async () => {
+    generateObject
+      .mockRejectedValueOnce(schemaFailure("bad"))
+      .mockRejectedValueOnce(schemaFailure("bad"))
+      .mockResolvedValueOnce({ object: { title: "cleared" }, usage: usage(10, 5) });
+    const { runtime, logged } = runtimeWithLog();
+
+    await runtime.generateStructured({ prompt, vars: { topic: "x" }, schema });
+
+    const expected = await schemaHashHex(schema);
+    expect(logged).toHaveLength(3);
+    expect(logged.every((r) => r.schemaHash === expected)).toBe(true);
+  });
+
+  /**
+   * 🔴 Prose has no schema, so its row's schema_hash must be absent (→ NULL). A prose call
+   * that carried a hash would be claiming a contract it never had.
+   *
+   * RED by mutation: add a `schemaHash` to `streamProse`'s `emit` payload and this fails.
+   */
+  it("🔴 leaves schema_hash undefined on the prose path", async () => {
+    const logged: AIGenerationRecord[] = [];
+    const runtime = createAIRuntime({
+      anthropicApiKey: "a",
+      googleApiKey: "g",
+      guard: openGuard,
+      log: (record) => {
+        logged.push(record);
+      },
+    });
+    streamText.mockImplementation(
+      (options: { onFinish?: (e: { usage: ReturnType<typeof usage> }) => Promise<void> }) => ({
+        settle: async () => {
+          await options.onFinish?.({ usage: usage(1, 1) });
+        },
+      }),
+    );
+
+    const stream = (await runtime.streamProse({
+      prompt: chatPrompt,
+      vars: { q: "hi" },
+    })) as unknown as { settle: () => Promise<void> };
+    await stream.settle();
+
+    expect(logged).toHaveLength(1);
+    expect(logged[0]?.schemaHash).toBeUndefined();
   });
 });
