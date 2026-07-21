@@ -562,9 +562,11 @@ describe("TopicPageBody — LaTeX renders as typeset math", () => {
 /* Round 1 typeset the formula, but wrapped it as `$$${latex}$$` — fences glued */
 /* to the content on one line, which remark-math parses as INLINE math, so a    */
 /* standalone formula rendered in the flow of a `<p>` instead of as a centred    */
-/* block. And a formula carrying a blank line broke the math entirely, leaking   */
-/* raw LaTeX. Display math is `.katex-display`; inline math is a bare `.katex`.  */
-/* Reverting `toDisplayMath` to the round-1 wrap turns the first two red.        */
+/* block. In that inline form a blank line also broke the math entirely (no      */
+/* `.katex`). Own-line fences fix both: display mode, and a `concrete` flow      */
+/* block that absorbs interior blank lines instead of breaking. Display math is  */
+/* `.katex-display`; inline math is a bare `.katex`. Reverting `toDisplayMath`   */
+/* to the round-1 wrap turns the first two red.                                  */
 /* ────────────────────────────────────────────────────────────────────────── */
 
 function formulaView(latex: string): TopicView {
@@ -624,13 +626,15 @@ describe("TopicPageBody — the formula block is display math, not inline", () =
     expect(formulas.querySelector(".katex-display")).not.toBeNull();
   });
 
-  it("renders a formula that contains a blank line as ONE block, with no raw-LaTeX leak", () => {
+  it("renders a formula that contains a blank line as ONE display block, annotation collapsed", () => {
     render(<TopicPageBody view={formulaView("\\bar{X} = \\mu\n\n\\hat{p} = X/n")} />);
     const formulas = screen.getByTestId("formulas");
-    // Round-1 renders no `.katex` at all for this input (the blank line breaks the block);
-    // fence-only, without the collapse, would split it into two. Exactly one is the fix.
+    // The round-1 `$$x$$` inline wrap renders no `.katex` at all for this input (the blank line
+    // breaks inline math). Own-line fences make it a `concrete` flow block that stays ONE block
+    // whether or not we collapse — so this count is a sanity check, not the collapse's guard.
     expect(formulas.querySelectorAll(".katex-display")).toHaveLength(1);
-    // The two lines live in one annotation, not leaked as prose.
+    // The load-bearing assertion: the collapse decides the copy-selectable TeX in the
+    // annotation, which is the single-\n form, not the blank-line form.
     const annotation = formulas.querySelector('annotation[encoding="application/x-tex"]');
     expect(annotation?.textContent).toBe("\\bar{X} = \\mu\n\\hat{p} = X/n");
   });

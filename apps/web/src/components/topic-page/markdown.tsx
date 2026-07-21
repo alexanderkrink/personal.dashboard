@@ -41,24 +41,24 @@ export const REHYPE_PLUGINS: NonNullable<Options["rehypePlugins"]> = [
 /**
  * Wraps a formula's raw LaTeX as a **display-math block** for {@link Markdown}.
  *
- * Two things have to be true for `remark-math` to typeset a standalone formula as centred
- * *display* math rather than *inline* math in the flow of a paragraph:
+ * The one load-bearing move is fencing: each `$$` must sit on its **own line** (`$$\n…\n$$`).
+ * `$$x$$` written on a single line is parsed as inline math-text and renders inside a `<p>`,
+ * exactly like `$x$` — the dollar count does **not** select display mode, the fence being
+ * flow-level does. This is the whole display-vs-inline distinction the formula block turns on,
+ * and the reason the old `` `$$${latex}$$` `` wrap rendered every standalone formula inline.
  *
- * 1. Each `$$` fence must sit on its **own line** (`$$\n…\n$$`). `$$x$$` written on a single
- *    line is parsed as inline math-text and renders inside a `<p>`, exactly like `$x$` — the
- *    dollar count does **not** select display mode, the fence being flow-level does. This is
- *    the whole display-vs-inline distinction the formula block turns on, and the reason the
- *    old `` `$$${latex}$$` `` wrap rendered every standalone formula inline.
- * 2. The LaTeX must carry **no blank line**. A blank line is a paragraph break to the markdown
- *    parser, so `$$…\n\n…$$` closes the math at the blank line: the tail leaks out as raw
- *    source and the one block splits into two. Model-produced LaTeX arrives with stray blank
- *    lines (and leading/trailing ones), so we trim and collapse every run of blank lines to a
- *    single newline before fencing.
+ * Own-line fences also parse as `remark-math`'s flow (display) construct, which is `concrete`
+ * — like a fenced code block, it runs to its closing fence and **absorbs interior blank lines
+ * as content**. So a blank line inside the fences does not split the block or leak raw source;
+ * that failure is specific to the *inline* `$$x$$` form the old wrap produced.
  *
- * Collapsing blank lines is safe for multi-line aligned environments
- * (`\begin{aligned} … \\ … \end{aligned}`): those separate rows with `\\` and a *single*
- * newline, never a blank line, so there is nothing here for the collapse to touch — the TeX
- * survives byte-for-byte in the KaTeX annotation.
+ * The whitespace normalisation (CRLF→LF, trim, collapse runs of blank lines to a single
+ * newline) is therefore **annotation hygiene, not a leak guard**: the display math renders
+ * identically with or without it, but the collapsed form is the TeX that KaTeX copies into the
+ * `<annotation>` (its copy-selectable source), so we keep stray blank lines out of that. It is
+ * safe for multi-line aligned environments (`\begin{aligned} … \\ … \end{aligned}`): those
+ * separate rows with `\\` and a *single* newline, never a blank line, so there is nothing for
+ * the collapse to touch — the TeX survives byte-for-byte in the annotation.
  */
 export function toDisplayMath(latex: string): string {
   const normalised = latex

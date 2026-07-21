@@ -6,10 +6,13 @@ import { Markdown, toDisplayMath } from "@/components/topic-page/markdown";
 /* toDisplayMath — the pure transform                                          */
 /*                                                                            */
 /* remark-math typesets DISPLAY math only when the `$$` fences sit on their    */
-/* own lines; `$$x$$` on a single line is inline math-text. And a blank line   */
-/* inside the LaTeX is a paragraph break that splits the block and leaks the   */
-/* tail as raw source. These unit tests pin both invariants and prove the      */
-/* blank-line collapse leaves a multi-line aligned environment byte-for-byte.  */
+/* own lines; `$$x$$` on a single line is inline math-text. Own-line fences    */
+/* also parse as a `concrete` flow block, so an interior blank line is         */
+/* absorbed as content (it neither splits the block nor leaks) — the blank-    */
+/* line collapse is therefore annotation hygiene, not a leak guard: it only    */
+/* cleans the TeX that lands in KaTeX's copy-selectable `<annotation>`. These  */
+/* unit tests pin the fenced shape and prove the collapse leaves a multi-line  */
+/* aligned environment byte-for-byte.                                          */
 /* ────────────────────────────────────────────────────────────────────────── */
 
 describe("toDisplayMath", () => {
@@ -19,9 +22,9 @@ describe("toDisplayMath", () => {
     expect(toDisplayMath("\\sigma / \\sqrt{n}")).toBe("$$\n\\sigma / \\sqrt{n}\n$$");
   });
 
-  it("collapses an internal blank line so multi-line LaTeX cannot leak as raw source", () => {
-    // A blank line closes the math at the break; collapsing it to a single newline keeps the
-    // whole formula in one block.
+  it("collapses an internal blank line to a single newline (annotation hygiene)", () => {
+    // Own-line fences already keep this one display block regardless; the collapse only keeps
+    // the blank line out of the TeX that survives into KaTeX's `<annotation>`.
     expect(toDisplayMath("\\bar{X} = \\mu\n\n\\hat{p} = X/n")).toBe(
       "$$\n\\bar{X} = \\mu\n\\hat{p} = X/n\n$$",
     );
@@ -59,12 +62,16 @@ describe("Markdown — display vs inline math", () => {
     expect(container.querySelector(".katex-display")).not.toBeNull();
   });
 
-  it("renders a blank-line formula as ONE math block, with the source in the annotation", () => {
+  it("renders a blank-line formula as ONE display block whose annotation is collapsed", () => {
     const { container } = render(
       <Markdown>{toDisplayMath("\\bar{X} = \\mu\n\n\\hat{p} = X/n")}</Markdown>,
     );
-    // Fence-only (no collapse) would split this into TWO blocks and leak the middle as raw
-    // text; the round-1 wrap renders no `.katex` at all. Exactly one clean block is the fix.
+    // Own-line fences make this a `concrete` flow block, so the blank line is absorbed as
+    // content — it stays ONE block whether or not we collapse (this count is a sanity check,
+    // not the guard for the collapse). What the collapse actually changes is the load-bearing
+    // assertion below: the copy-selectable TeX in the annotation is the single-\n form, not the
+    // blank-line form. (The round-1 `$$x$$` inline wrap, by contrast, renders no `.katex` at
+    // all for this input — that is the bug this whole fix replaced.)
     expect(container.querySelectorAll(".katex-display")).toHaveLength(1);
     const annotation = container.querySelector('annotation[encoding="application/x-tex"]');
     expect(annotation?.textContent).toBe("\\bar{X} = \\mu\n\\hat{p} = X/n");

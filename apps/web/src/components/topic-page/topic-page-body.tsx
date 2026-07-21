@@ -73,11 +73,12 @@ export function TopicPageBody({ view }: { view: TopicView }) {
                * The formula is typeset through the same remark-math + KaTeX chain as the
                * inline math in prose (see `markdown.tsx`). `toDisplayMath` fences the LaTeX on
                * its own lines so it renders as centred DISPLAY math (a single-line `$$x$$`
-               * renders inline) and collapses blank lines so multi-line LaTeX cannot leak as
-               * raw source. Empty/whitespace latex renders nothing rather than an empty block —
-               * the stored schema permits an empty string. The `overflow-x-auto` wrapper keeps
-               * a wide equation scrolling inside the 68ch reading column, never widening the
-               * page.
+               * renders inline); those own-line fences are a `concrete` flow block, so a
+               * multi-line formula with a blank line stays one block rather than leaking, and
+               * the blank-line collapse only tidies the LaTeX that lands in KaTeX's annotation.
+               * Empty/whitespace latex renders nothing rather than an empty block — the stored
+               * schema permits an empty string. The `overflow-x-auto` wrapper keeps a wide
+               * equation scrolling inside the 68ch reading column, never widening the page.
                */}
               {latex === "" ? null : (
                 <div className="my-2 overflow-x-auto text-read-body">
