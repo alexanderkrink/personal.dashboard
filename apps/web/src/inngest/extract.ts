@@ -329,6 +329,14 @@ export async function runExtract(input: ExtractInput): Promise<ExtractSummary> {
  * every earlier run's rows before it — the same time-bounding `mergeCost` uses, here made
  * exact because the extract step is a single hash rather than a spray of them.
  *
+ * ⚠ Clock boundary: `runStartedAt` is the app/process clock (`Date.now()`), while `created_at`
+ * is the DB clock (`now()`). If the DB clock lags the app clock by MORE than the gap between
+ * capturing `startedAt` and the row insert, this run's own earliest rows could fall below the
+ * bound and be excluded — under-counting the line. In practice the extract call spends minutes
+ * between the two, an enormous margin against sub-second NTP skew, so this is a theoretical edge,
+ * not a live risk; an exact fix would need a `run_id`/`document_id` on `ai_generations` (there is
+ * none today) rather than a time heuristic.
+ *
  * Returns `null` when nothing could be read or every row is unpriced; the caller renders
  * it as "no cost shown" rather than as "$0.00", because a free call and an unmeasured one
  * are very different things to see on a budget page.
