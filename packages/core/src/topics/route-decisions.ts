@@ -131,12 +131,14 @@ export function isCreateDecision(decision: RoutingDecisionLike): boolean {
  * Case- and whitespace-insensitive, and nothing more.
  *
  * Deliberately not fuzzy. A near-miss title should NOT be resolved here on a guess — it
- * should fall through to a create and meet {@link applyDuplicateGuard}'s cosine threshold,
- * which is the component that owns "these two titles mean the same thing" and reports every
- * coercion it makes. Two layers with two different jobs; this one only recognises a literal
- * back-reference.
+ * falls through to a create, where {@link applyDuplicateGuard} adjudicates it: against the
+ * cosine threshold when the collision is with an EXISTING topic, and against this same
+ * normalisation when it is with another title in this batch (Wave 6 — a distinct title
+ * within one routing call is a deliberate distinction, so only spelling variants of the
+ * SAME title fold there). Exported so the guard and this resolver cannot drift on what
+ * "the same title" means.
  */
-function normaliseTitle(title: string): string {
+export function normaliseTitle(title: string): string {
   return title.trim().toLowerCase().replace(/\s+/g, " ");
 }
 

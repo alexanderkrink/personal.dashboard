@@ -13,24 +13,41 @@
  * anything at or above {@link DUPLICATE_TITLE_THRESHOLD} is coerced into an assignment to
  * the nearest topic. It is exact, free, and runs on every routing decision.
  *
- * ## Two directions of drift, not one
+ * ## Two directions of drift — and only ONE of them gets the cosine (Wave 6)
  *
  * PLAN's sentence "proposed-new titles within the same document are also cross-checked
- * against each other" is a second, separate guard, and it catches a different bug. A single
- * document can propose "Market Segmentation" for slide 4 and "Segmenting Markets" for slide
- * 19 — neither collides with anything that already exists, so the first guard passes both,
- * and the merge step then creates two topics in one run. Cross-checking proposals against
- * each other **as they are accepted** collapses those into one new topic before any of them
- * reaches the database.
+ * against each other" is a second, separate guard, and since Wave 6 it uses a different —
+ * far stricter — notion of "duplicate" than the first, because the two guards see two
+ * different situations:
+ *
+ * - **Cross-upload (guard 1): cosine ≥ {@link DUPLICATE_TITLE_THRESHOLD}.** Two routing
+ *   calls weeks apart cannot see each other's titles, so "Neural Networks" vs "Neural Nets —
+ *   Intro" is an *accident* of phrasing, and semantic similarity is the right test for it.
+ *   Its failure mode — duplicate topics proliferating across uploads — is the exact thing
+ *   the threshold exists to stop. Unchanged.
+ *
+ * - **Same-batch (guard 2): normalised title IDENTITY, cosine-free.** The router saw every
+ *   segment of the document in ONE call. When it still gives two segments different titles,
+ *   that is a *deliberate distinction*, not drift — and overriding it re-merges what the
+ *   model split. Measured on the real Wave 4 deck: the router proposed 7 legitimately
+ *   distinct statistics topics, and the cosine fold collapsed them to 2, because "Chi-Square
+ *   Distribution" is 0.862-similar to "Sampling Distributions" *as a title* while being a
+ *   different concept. Names in one field are similar because the field names them
+ *   similarly. So guard 2 folds only spelling variants of the SAME title (the
+ *   `normaliseTitle` semantics shared with `resolveRoutingDecisions`) — which is also the
+ *   normal batch-local shape, where 40 segments name the topic the batch is creating.
  *
  * The two outcomes are deliberately different and are reported separately:
  * - collision with an **existing** topic → `coerced-to-existing`, the segment is routed to a
  *   real `topicId`, and the create disappears.
- * - collision with an **earlier proposal in the same document** → `merged-into-proposal`,
- *   both segments end up on the *same* new topic, which is still created.
+ * - the same title **earlier in the same document** → `merged-into-proposal`, both segments
+ *   end up on the *same* new topic, which is still created.
  *
- * Nothing here does I/O and nothing here calls a model. The caller supplies the vectors.
+ * Nothing here does I/O and nothing here calls a model. The caller supplies the vectors —
+ * and guard 2 no longer needs one, so identical titles fold even when embedding failed.
  */
+
+import { normaliseTitle } from "./route-decisions";
 
 /**
  * Cosine similarity of two vectors, or `null` when they cannot be compared.
@@ -89,7 +106,10 @@ export type RoutingProposal =
       readonly kind: "create";
       readonly title: string;
       readonly rationale: string;
-      /** The proposed title's embedding. `null` leaves the proposal unguarded — see below. */
+      /**
+       * The proposed title's embedding. `null` leaves guard 1 (the cross-upload cosine)
+       * unable to run — reported, not swallowed. Guard 2 is title-based and runs regardless.
+       */
       readonly titleEmbedding: readonly number[] | null;
     };
 
@@ -107,7 +127,12 @@ export type RoutedSegment =
 
 export type CoercionReason = "coerced-to-existing" | "merged-into-proposal";
 
-/** One thing the guard changed. Every entry becomes a `warn` processing event. */
+/**
+ * One thing the guard changed. Every entry becomes a processing event: `coerced-to-existing`
+ * at `warn` (the guard overrode the router), `merged-into-proposal` at `info` (identical
+ * titles grouping onto one create is the normal batch shape, and 46 warns per upload teach
+ * the reader to ignore the channel).
+ */
 export interface DuplicateCoercion {
   readonly segmentKey: string;
   readonly reason: CoercionReason;
@@ -116,6 +141,7 @@ export interface DuplicateCoercion {
   readonly matchedTitle: string;
   /** Present only for `coerced-to-existing`. */
   readonly topicId?: string;
+  /** The measured cosine for `coerced-to-existing`; exactly 1 for a title-identity fold. */
   readonly similarity: number;
 }
 
@@ -185,8 +211,13 @@ function nearest<T extends { readonly embedding: readonly number[] | null }>(
  *
  * Proposals are processed **in order**, and each accepted `create` immediately joins the
  * pool that later proposals are checked against. That ordering is what makes the
- * intra-document check work at all: it is a running fold, not a pairwise sweep, so three
- * near-identical proposals collapse onto the first one rather than onto each other.
+ * intra-document check work at all: it is a running fold, not a pairwise sweep, so every
+ * later spelling of a title collapses onto the FIRST proposal that used it, and the
+ * canonical title is stable.
+ *
+ * Guard 1 (cosine, against existing topics) runs before guard 2 (title identity, within
+ * the batch): an existing topic must win over a same-batch proposal, because merging into
+ * a proposal when a real topic already carries the concept would create a duplicate of it.
  *
  * `assign` decisions pass through untouched. The guard's job is to stop *creates* it
  * believes are duplicates; an assignment the model made is already the outcome the guard
@@ -208,12 +239,8 @@ export function applyDuplicateGuard(input: {
   const routed: RoutedSegment[] = [];
   const coercions: DuplicateCoercion[] = [];
   const unguarded: UnguardedProposal[] = [];
-  /** Creates accepted so far in THIS document — the intra-document comparison pool. */
-  const accepted: {
-    proposalKey: string;
-    title: string;
-    embedding: readonly number[] | null;
-  }[] = [];
+  /** Creates accepted so far in THIS document, keyed by normalised title. */
+  const acceptedByTitle = new Map<string, { proposalKey: string; title: string }>();
 
   for (const proposal of input.proposals) {
     if (proposal.kind === "assign") {
@@ -221,78 +248,84 @@ export function applyDuplicateGuard(input: {
       continue;
     }
 
-    const vector = proposal.titleEmbedding;
-    if (vector === null || vector.length === 0) {
+    const vector =
+      proposal.titleEmbedding !== null && proposal.titleEmbedding.length > 0
+        ? proposal.titleEmbedding
+        : null;
+
+    // ── Guard 1: does this collide with a topic that already exists? ─────────
+    //
+    // Cosine, cross-upload, unchanged since PLAN §5 Step A.4: routing calls weeks apart
+    // cannot see each other's titles, so near-synonyms between them are accidents and the
+    // 0.85 threshold is what keeps the index from piling them up.
+    if (vector !== null) {
+      const existingHit = nearest(vector, existing, threshold);
+      if (existingHit.status === "hit") {
+        coercions.push({
+          segmentKey: proposal.segmentKey,
+          reason: "coerced-to-existing",
+          proposedTitle: proposal.title,
+          matchedTitle: existingHit.candidate.title,
+          topicId: existingHit.candidate.id,
+          similarity: existingHit.similarity,
+        });
+        routed.push({
+          segmentKey: proposal.segmentKey,
+          kind: "assign",
+          topicId: existingHit.candidate.id,
+        });
+        continue;
+      }
+
+      // The course HAS topics but not one of them had a readable title vector, so guard 1
+      // never actually ran on this proposal. An empty course legitimately reports
+      // `incomparable` too and is not worth a warning — that is the first upload, and there
+      // is genuinely nothing to duplicate.
+      if (existingHit.status === "incomparable" && existing.length > 0) {
+        unguarded.push({
+          segmentKey: proposal.segmentKey,
+          proposedTitle: proposal.title,
+          reason: "no-comparable-existing-vectors",
+        });
+      }
+    } else {
       unguarded.push({
         segmentKey: proposal.segmentKey,
         proposedTitle: proposal.title,
         reason: "no-title-embedding",
       });
-      const proposalKey = `new:${proposal.segmentKey}`;
-      accepted.push({ proposalKey, title: proposal.title, embedding: null });
-      routed.push({
-        segmentKey: proposal.segmentKey,
-        kind: "create",
-        proposalKey,
-        title: proposal.title,
-        rationale: proposal.rationale,
-      });
-      continue;
     }
 
-    // ── Guard 1: does this collide with a topic that already exists? ─────────
-    const existingHit = nearest(vector, existing, threshold);
-    if (existingHit.status === "hit") {
-      coercions.push({
-        segmentKey: proposal.segmentKey,
-        reason: "coerced-to-existing",
-        proposedTitle: proposal.title,
-        matchedTitle: existingHit.candidate.title,
-        topicId: existingHit.candidate.id,
-        similarity: existingHit.similarity,
-      });
-      routed.push({
-        segmentKey: proposal.segmentKey,
-        kind: "assign",
-        topicId: existingHit.candidate.id,
-      });
-      continue;
-    }
-
-    // ── Guard 2: does it collide with something this document already proposed? ──
-    const proposalHit = nearest(vector, accepted, threshold);
-    if (proposalHit.status === "hit") {
+    // ── Guard 2: the SAME title, earlier in this same document? ──────────────
+    //
+    // Title identity, deliberately cosine-free (Wave 6). The router saw every segment in
+    // one call: a distinct title is a deliberate distinction it is not this guard's place
+    // to override — the measured cost of overriding was 7 legitimately distinct statistics
+    // topics folded to 2 (Chi-Square → Sampling Distributions at 0.862, and siblings). The
+    // fold that remains is the batch-local shape: many segments naming the one topic this
+    // batch creates, in whatever capitalisation, grouped onto the first spelling.
+    const titleKey = normaliseTitle(proposal.title);
+    const prior = acceptedByTitle.get(titleKey);
+    if (prior !== undefined) {
       coercions.push({
         segmentKey: proposal.segmentKey,
         reason: "merged-into-proposal",
         proposedTitle: proposal.title,
-        matchedTitle: proposalHit.candidate.title,
-        similarity: proposalHit.similarity,
+        matchedTitle: prior.title,
+        similarity: 1,
       });
       routed.push({
         segmentKey: proposal.segmentKey,
         kind: "create",
-        proposalKey: proposalHit.candidate.proposalKey,
-        title: proposalHit.candidate.title,
+        proposalKey: prior.proposalKey,
+        title: prior.title,
         rationale: proposal.rationale,
       });
       continue;
     }
 
-    // The course HAS topics but not one of them had a readable title vector, so guard 1
-    // never actually ran on this proposal. An empty course legitimately reports
-    // `incomparable` too and is not worth a warning — that is the first upload, and there
-    // is genuinely nothing to duplicate.
-    if (existingHit.status === "incomparable" && existing.length > 0) {
-      unguarded.push({
-        segmentKey: proposal.segmentKey,
-        proposedTitle: proposal.title,
-        reason: "no-comparable-existing-vectors",
-      });
-    }
-
     const proposalKey = `new:${proposal.segmentKey}`;
-    accepted.push({ proposalKey, title: proposal.title, embedding: vector });
+    acceptedByTitle.set(titleKey, { proposalKey, title: proposal.title });
     routed.push({
       segmentKey: proposal.segmentKey,
       kind: "create",

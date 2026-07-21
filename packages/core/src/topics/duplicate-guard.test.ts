@@ -140,15 +140,17 @@ describe("applyDuplicateGuard — the 0.85 coercion", () => {
 
 describe("applyDuplicateGuard — intra-document cross-checking", () => {
   /**
-   * PLAN §5 Step A.4's second sentence. Neither proposal collides with anything that
-   * already exists, so guard 1 clears both — and without guard 2 one document creates two
-   * topics for one concept in a single run.
+   * PLAN §5 Step A.4's second sentence — guard 2 — as Wave 6 rescoped it. A single routing
+   * call sees every segment of the document at once, so two proposals sharing one TITLE are
+   * one deliberate topic named twice (the batch-local reference shape), and two proposals
+   * with DIFFERENT titles are a deliberate distinction that the guard must not override.
+   * The cosine fold lives only on the cross-upload side, where calls cannot see each other.
    */
-  it("collapses two near-identical proposals in the same document onto one new topic", () => {
+  it("collapses two identically-titled proposals in the same document onto one new topic", () => {
     const result = applyDuplicateGuard({
       proposals: [
         createProposal("seg-1", "Market Segmentation", BASE),
-        createProposal("seg-9", "Segmenting Markets", vectorWithSimilarity(0.93)),
+        createProposal("seg-9", "Market Segmentation", vectorWithSimilarity(0.93)),
       ],
       existingTopics: [],
     });
@@ -172,31 +174,32 @@ describe("applyDuplicateGuard — intra-document cross-checking", () => {
     });
   });
 
-  it("keeps genuinely distinct proposals in the same document apart", () => {
+  it("keeps distinct same-batch titles apart even at 0.93 cosine similarity", () => {
     const result = applyDuplicateGuard({
       proposals: [
         createProposal("seg-1", "Market Segmentation", BASE),
-        createProposal("seg-2", "Distribution Channels", vectorAt(Math.PI / 2)),
+        createProposal("seg-9", "Segmenting Markets", vectorWithSimilarity(0.93)),
+        createProposal("seg-12", "Distribution Channels", vectorAt(Math.PI / 2)),
       ],
       existingTopics: [],
     });
 
     const keys = result.routed.map((entry) => (entry.kind === "create" ? entry.proposalKey : null));
-    expect(new Set(keys).size).toBe(2);
+    expect(new Set(keys).size).toBe(3);
     expect(result.coercions).toEqual([]);
   });
 
   /**
-   * The running-fold property. Three proposals that are each close to the first must all
-   * land on the first — not chain onto each other, which would let drift accumulate
-   * (a→b→c where a and c are unrelated).
+   * The running-fold property. Every later spelling of the first title must land on the
+   * FIRST proposal — not chain onto each other — so the canonical title is stable however
+   * many times the router restates it.
    */
-  it("collapses a run of similar proposals onto the FIRST one", () => {
+  it("collapses a run of identically-titled proposals onto the FIRST one", () => {
     const result = applyDuplicateGuard({
       proposals: [
         createProposal("seg-1", "Elasticity", BASE),
-        createProposal("seg-2", "Price Elasticity", vectorWithSimilarity(0.95)),
-        createProposal("seg-3", "Elasticity of Demand", vectorWithSimilarity(0.9)),
+        createProposal("seg-2", "elasticity", vectorWithSimilarity(0.95)),
+        createProposal("seg-3", " ELASTICITY ", vectorWithSimilarity(0.9)),
       ],
       existingTopics: [],
     });
@@ -221,6 +224,143 @@ describe("applyDuplicateGuard — intra-document cross-checking", () => {
     // BOTH, and the existing topic must win — merging into a proposal would create a
     // duplicate of a topic that already exists.
     expect(result.routed[1]).toMatchObject({ kind: "assign", topicId: "topic-elastic" });
+  });
+});
+
+/**
+ * Wave 6 — the same-batch fold, measured against the real over-merge corpus.
+ *
+ * The seven titles below are the seven creates the Wave 4 deck's live routing replay
+ * actually returned (frozen in `apps/web/.local-fixtures/wave4-failure/
+ * wave5-routing-replay.json`, in decision order), and the cosines are the voyage-3.5-lite
+ * similarities the Wave 5 pipeline measurement recorded against "Sampling Distributions"
+ * (frozen in `wave5-pipeline-measurement.json`). They are all legitimately distinct
+ * statistics concepts — and five of the six non-anchor titles sit ABOVE the 0.85 threshold,
+ * so the cosine fold collapsed 7 proposals into 2 topics (40 + 8 segments) and the document
+ * failed the 4–12 topic gate even when routing itself split correctly.
+ *
+ * The Central Limit Theorem cosine was never measured — the frozen run only proves it
+ * survived the fold, i.e. that it sat below 0.85. Any sub-threshold value reproduces the
+ * recorded outcome; 0.80 is used here.
+ *
+ * Vectors are constructed to those cosines rather than fetched: each title takes its
+ * measured cosine in dimension 0 and the orthogonal remainder in a dimension of its own, so
+ * cosine(title, anchor) is exactly the frozen number. Unit tests never call the embedding
+ * API.
+ */
+const WAVE5_MEASURED_CREATES = [
+  { segmentKey: "seg-1", title: "Sampling Distributions", cosine: 1 },
+  { segmentKey: "seg-2", title: "Statistical Inference", cosine: 0.899 },
+  { segmentKey: "seg-5", title: "Populations and Samples", cosine: 0.898 },
+  { segmentKey: "seg-25", title: "Central Limit Theorem", cosine: 0.8 },
+  { segmentKey: "seg-33", title: "Sampling Distributions of Proportions", cosine: 0.958 },
+  { segmentKey: "seg-39", title: "Sampling Distributions of Variances", cosine: 0.936 },
+  { segmentKey: "seg-42", title: "Chi-Square Distribution", cosine: 0.862 },
+] as const;
+
+/** Cosine `cosine` against the anchor (dim 0), remainder in this entry's own dimension. */
+function measuredVector(cosine: number, index: number): number[] {
+  const vector = new Array<number>(WAVE5_MEASURED_CREATES.length + 1).fill(0);
+  vector[0] = cosine;
+  vector[index + 1] = Math.sqrt(1 - cosine ** 2);
+  return vector;
+}
+
+const wave5Proposals = (): RoutingProposal[] =>
+  WAVE5_MEASURED_CREATES.map((entry, index) =>
+    createProposal(entry.segmentKey, entry.title, measuredVector(entry.cosine, index)),
+  );
+
+describe("applyDuplicateGuard — wave 6: same-batch distinctions are deliberate", () => {
+  /**
+   * RED, pinned: what guard 2 did until Wave 6, transcribed. The router saw every segment
+   * of the document in ONE call and still chose seven different titles — a deliberate
+   * distinction — and the cosine fold overrode it, collapsing statistics siblings whose
+   * *names* are similar because the *field* names them similarly.
+   */
+  it("RED, pinned: the retired cosine fold collapsed the seven measured creates to two", () => {
+    const accepted: { title: string; vector: readonly number[] }[] = [];
+    for (const [index, entry] of WAVE5_MEASURED_CREATES.entries()) {
+      const vector = measuredVector(entry.cosine, index);
+      const hit = accepted.some((candidate) => {
+        const similarity = cosineSimilarity(vector, candidate.vector);
+        return similarity !== null && similarity >= DUPLICATE_TITLE_THRESHOLD;
+      });
+      if (!hit) accepted.push({ title: entry.title, vector });
+    }
+
+    expect(accepted.map((candidate) => candidate.title)).toEqual([
+      "Sampling Distributions",
+      "Central Limit Theorem",
+    ]);
+  });
+
+  it("lets all seven measured distinct titles survive as seven topics", () => {
+    const result = applyDuplicateGuard({ proposals: wave5Proposals(), existingTopics: [] });
+
+    const keys = result.routed.map((entry) => (entry.kind === "create" ? entry.proposalKey : null));
+    expect(new Set(keys).size).toBe(7);
+    expect(result.coercions).toEqual([]);
+    const titles = result.routed.map((entry) => (entry.kind === "create" ? entry.title : null));
+    expect(titles).toEqual(WAVE5_MEASURED_CREATES.map((entry) => entry.title));
+  });
+
+  it("still folds byte-identical titles, without needing a vector at all", () => {
+    const result = applyDuplicateGuard({
+      proposals: [
+        createProposal("seg-1", "Sampling Distributions", null),
+        createProposal("seg-3", "Sampling Distributions", null),
+      ],
+      existingTopics: [],
+    });
+
+    const keys = result.routed.map((entry) => (entry.kind === "create" ? entry.proposalKey : null));
+    expect(new Set(keys).size).toBe(1);
+    expect(result.coercions).toHaveLength(1);
+    expect(result.coercions[0]).toMatchObject({
+      segmentKey: "seg-3",
+      reason: "merged-into-proposal",
+      matchedTitle: "Sampling Distributions",
+      similarity: 1,
+    });
+  });
+
+  it("folds identical titles under normalisation — case and whitespace do not distinguish", () => {
+    const result = applyDuplicateGuard({
+      proposals: [
+        createProposal("seg-25", "Central Limit Theorem", null),
+        createProposal("seg-30", "  central   limit theorem ", null),
+      ],
+      existingTopics: [],
+    });
+
+    const routedCreates = result.routed.filter((entry) => entry.kind === "create");
+    expect(new Set(routedCreates.map((entry) => entry.proposalKey)).size).toBe(1);
+    // The first spelling is canonical, exactly as `resolveRoutingDecisions` treats it.
+    expect(routedCreates.map((entry) => entry.title)).toEqual([
+      "Central Limit Theorem",
+      "Central Limit Theorem",
+    ]);
+  });
+
+  /**
+   * The asymmetry, stated from both sides: the CROSS-UPLOAD guard keeps its cosine, because
+   * two routing calls weeks apart cannot see each other's titles — drift between them is an
+   * accident. "Chi-Square Distribution" at the measured 0.862 against an EXISTING "Sampling
+   * Distributions" topic is still coerced.
+   */
+  it("keeps the 0.85 cosine coercion against EXISTING topics unchanged", () => {
+    const anchor = measuredVector(1, 0);
+    const result = applyDuplicateGuard({
+      proposals: [createProposal("seg-42", "Chi-Square Distribution", measuredVector(0.862, 6))],
+      existingTopics: [{ id: "topic-sd", title: "Sampling Distributions", titleEmbedding: anchor }],
+    });
+
+    expect(result.routed).toEqual([{ segmentKey: "seg-42", kind: "assign", topicId: "topic-sd" }]);
+    expect(result.coercions[0]).toMatchObject({
+      reason: "coerced-to-existing",
+      matchedTitle: "Sampling Distributions",
+    });
   });
 });
 
