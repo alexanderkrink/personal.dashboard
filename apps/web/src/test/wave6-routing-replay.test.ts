@@ -25,7 +25,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -227,9 +227,28 @@ async function replayRouting(input: {
   };
 }
 
+/**
+ * Write-once, deliberately. The receipt name is keyed by prompt version alone, so a
+ * same-version re-run would land on the FROZEN receipt — and since phase 2 it would land
+ * with different semantics: the harness now records the COALESCED `targetCount`, while the
+ * frozen v5 receipts hold the pre-coalesce count that
+ * `wave6-singleton-coalesce.test.ts`'s pinned red asserts against. Silently replacing
+ * frozen evidence with a same-named file that means something else is exactly the failure
+ * mode the corpus discipline exists to prevent, so a re-run at an already-measured version
+ * must fail HERE, before the overwrite, not later in a confusing pinned-red failure.
+ * Re-measuring on purpose means deleting the receipt first — an explicit act.
+ */
 function writeReceipt(name: string, measurement: ReplayMeasurement): void {
+  const path = join(FIXTURE_DIR, name);
+  if (existsSync(path)) {
+    throw new Error(
+      `Receipt ${name} already exists — it is frozen evidence and this harness will not ` +
+        `overwrite it. If you mean to re-measure prompt v${topicRoutingPrompt.version}, ` +
+        `delete the file first.`,
+    );
+  }
   writeFileSync(
-    join(FIXTURE_DIR, name),
+    path,
     JSON.stringify(
       {
         promptVersion: topicRoutingPrompt.version,
