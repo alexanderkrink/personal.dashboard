@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { NeedsReviewChip } from "@/components/topic-page/grounding-banner";
+import { READING_COLUMN_CLASS } from "@/components/topic-page/reading-layout";
 import { TopicPageBody } from "@/components/topic-page/topic-page-body";
 import {
   buildTopicView,
@@ -487,5 +488,88 @@ describe("FidelityNotes — text-only branch", () => {
     const notes = screen.getByTestId("fidelity");
     expect(notes.textContent).toContain("read from its text only");
     expect(notes.textContent).toContain("not in these notes");
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/* Wave 7 — LaTeX is typeset, not shown as source                             */
+/*                                                                            */
+/* Both fixes are presentation-only. `wellGroundedView` already carries the    */
+/* three math shapes these assert against: a formula block (display math), an  */
+/* inline `$n > 30$` in a note, and inline math in a worked example. Every     */
+/* assertion below is RED against the pre-KaTeX renderer — the formula source  */
+/* sat in a `<pre>` and inline `$…$` stayed literal — so deleting the plugin    */
+/* chain in `markdown.tsx` (or the `$$…$$` wrap in the formula block) turns     */
+/* these red again. That is the property that makes them a guard.              */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+describe("TopicPageBody — LaTeX renders as typeset math", () => {
+  // The `\sigma_{\bar X} = \sigma / \sqrt n` carried by `wellGroundedView().page.formulas[0]`.
+  const FORMULA_LATEX = "\\sigma_{\\bar{X}} = \\sigma / \\sqrt{n}";
+
+  it("typesets the formula block and keeps the TeX source in the MathML annotation", () => {
+    render(<TopicPageBody view={wellGroundedView()} />);
+    const formulas = screen.getByTestId("formulas");
+
+    const katex = formulas.querySelector(".katex");
+    expect(katex).not.toBeNull();
+
+    // The source survives, copy-selectable, in the MathML annotation — equal to the input.
+    const annotation = formulas.querySelector('.katex annotation[encoding="application/x-tex"]');
+    expect(annotation?.textContent?.trim()).toBe(FORMULA_LATEX);
+
+    // …and no longer sits raw in a <pre>.
+    expect(formulas.querySelector("pre")).toBeNull();
+  });
+
+  it("typesets inline math in prose and drops the literal dollar-delimited source", () => {
+    const { container } = render(<TopicPageBody view={wellGroundedView()} />);
+    const notes = screen.getByTestId("notes");
+
+    expect(notes.querySelector(".katex")).not.toBeNull();
+    // The delimiters are consumed by the renderer — the literal `$n > 30$` must be gone.
+    expect(container.textContent).not.toContain("$n > 30$");
+  });
+
+  it("typesets under both reading themes with no per-theme colour pinned on KaTeX", () => {
+    // `page.tsx` mounts the body under `.reading`, itself nested in `.dark` or the light
+    // default. jsdom can't compute OKLCH, so assert STRUCTURE + inheritance, not pixels:
+    // a `.katex` node exists in both registers, and its root pins no colour of its own, so
+    // glyphs inherit the register's `--foreground`/currentColor rather than burning in one
+    // theme's ink under the other.
+    for (const wrapper of ["reading", "dark reading"]) {
+      const { container, unmount } = render(
+        <div className={wrapper}>
+          <TopicPageBody view={wellGroundedView()} />
+        </div>,
+      );
+
+      const katex = container.querySelector(".katex");
+      expect(katex, `.katex under "${wrapper}"`).not.toBeNull();
+      expect(katex?.getAttribute("style") ?? "").not.toContain("color");
+      expect(
+        container.querySelector('.katex annotation[encoding="application/x-tex"]'),
+      ).not.toBeNull();
+
+      unmount();
+    }
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/* Wave 7 — the reading column is anchored, not centred                       */
+/*                                                                            */
+/* `page.tsx` is an async RSC and cannot mount in jsdom, so the column's       */
+/* className is an exported constant and asserted directly. RED while the      */
+/* constant still carries `mx-auto`.                                          */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+describe("READING_COLUMN_CLASS — anchored to the content-start gutter", () => {
+  it("keeps the 68ch reading measure", () => {
+    expect(READING_COLUMN_CLASS).toContain("max-w-[68ch]");
+  });
+
+  it("does not auto-centre the column in a wide viewport", () => {
+    expect(READING_COLUMN_CLASS).not.toContain("mx-auto");
   });
 });

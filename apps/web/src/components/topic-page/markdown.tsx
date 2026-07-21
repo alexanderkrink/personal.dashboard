@@ -1,5 +1,7 @@
 import ReactMarkdown, { type Options } from "react-markdown";
+import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 
 /**
  * The reading register's markdown renderer, and the remark plugin chain that is this
@@ -14,11 +16,27 @@ import remarkGfm from "remark-gfm";
  * putting the behaviour somewhere a plugin cannot see it. Naming the list and pointing at
  * it from here makes the intended seam the obvious one.
  *
- * Nothing beyond GFM is installed yet. `remark-math` + KaTeX is the known next addition
- * (formulas currently render as their LaTeX source, see `FormulaList`), and it belongs
- * *here* when it lands, not in a component.
+ * ## The math chain lives here, once
+ *
+ * `remark-math` parses `$…$` / `$$…$$`, and `rehype-katex` typesets the resulting nodes to
+ * HTML + MathML at render time — so inline math in prose (notes, definitions, examples) AND
+ * the formula block (which wraps its LaTeX in `$$…$$`, see `TopicPageBody`) all go through
+ * this single chain. Item 7's exam review reuses this renderer, so KaTeX belongs *here* and
+ * in the one global `katex.min.css` import in `layout.tsx`, never inline in a component.
+ *
+ * The KaTeX CSS/woff2 are self-hosted through the bundler (no CDN → CSP-clean); glyphs
+ * inherit `currentColor`, so both reading themes typeset with no per-theme override.
  */
-export const REMARK_PLUGINS: NonNullable<Options["remarkPlugins"]> = [remarkGfm];
+export const REMARK_PLUGINS: NonNullable<Options["remarkPlugins"]> = [remarkGfm, remarkMath];
+
+/**
+ * The rehype half of the chain. `throwOnError: false` makes model-produced LaTeX that is
+ * malformed render as an inline KaTeX error node instead of crashing SSR; `trust: false`
+ * blocks `\href` / `\includegraphics` injection from the same untrusted source.
+ */
+export const REHYPE_PLUGINS: NonNullable<Options["rehypePlugins"]> = [
+  [rehypeKatex, { throwOnError: false, trust: false }],
+];
 
 /**
  * Renders study prose.
@@ -34,6 +52,7 @@ export function Markdown({ children }: { children: string }) {
   return (
     <ReactMarkdown
       remarkPlugins={REMARK_PLUGINS}
+      rehypePlugins={REHYPE_PLUGINS}
       components={{
         // Blocks inside a topic page sit under the block's own heading, so the model's
         // markdown headings step down rather than competing with it.

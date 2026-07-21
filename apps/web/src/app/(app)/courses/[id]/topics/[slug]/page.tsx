@@ -5,6 +5,7 @@ import { notFound } from "next/navigation";
 import { ExamWeightSlider } from "@/components/topic-page/exam-weight-slider";
 import { NeedsReviewChip } from "@/components/topic-page/grounding-banner";
 import { HistoryDrawer } from "@/components/topic-page/history-drawer";
+import { READING_COLUMN_CLASS } from "@/components/topic-page/reading-layout";
 import { TopicPageBody } from "@/components/topic-page/topic-page-body";
 import { createClient } from "@/lib/supabase/server";
 import {
@@ -100,7 +101,7 @@ export default async function TopicPage({ params }: { params: Params }) {
 
   return (
     <div className="reading -m-4 min-h-full p-4 sm:-m-6 sm:p-6">
-      <div className="mx-auto max-w-[68ch]">
+      <div className={READING_COLUMN_CLASS}>
         <header className="mb-8 space-y-3 font-sans">
           <Link
             className="inline-flex items-center gap-1 text-muted-foreground text-ui-sm hover:text-foreground"

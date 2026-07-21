@@ -65,17 +65,21 @@ export function TopicPageBody({ view }: { view: TopicView }) {
       >
         {(formula, index) => {
           const block = findBlock(blocks, "formula", index);
+          const latex = formula.latex.trim();
           return (
             <ProvenanceBlockShell block={block} key={`${formula.name}:${formula.latex}`}>
               <p className="font-semibold text-read-body">{formula.name}</p>
               {/*
-               * LaTeX renders as its source until `remark-math` + KaTeX joins the plugin
-               * chain in `markdown.tsx`. Mono and boxed so it reads as an unrendered
-               * artifact rather than as prose that happens to contain backslashes.
+               * The formula is typeset through the same remark-math + KaTeX chain as the
+               * inline math in prose (see `markdown.tsx`): wrapping the LaTeX in `$$…$$`
+               * selects DISPLAY math. Empty/whitespace latex renders nothing rather than an
+               * empty `$$$$` — the stored schema permits an empty string.
                */}
-              <pre className="my-2 overflow-x-auto rounded-md bg-muted px-3 py-2 font-mono text-mono-code">
-                {formula.latex}
-              </pre>
+              {latex === "" ? null : (
+                <div className="my-2 overflow-x-auto text-read-body">
+                  <Markdown>{`$$${latex}$$`}</Markdown>
+                </div>
+              )}
               <div className="text-read-body">
                 <Markdown>{formula.explanation}</Markdown>
               </div>

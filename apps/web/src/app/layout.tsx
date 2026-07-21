@@ -1,5 +1,9 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, JetBrains_Mono, Newsreader } from "next/font/google";
+// Self-hosts KaTeX's stylesheet + woff2 through the bundler (no CDN request → CSP-clean).
+// Global on purpose: the topic page and item 7's exam-review page both typeset math through
+// the shared reading renderer, and math is unstyled without this.
+import "katex/dist/katex.min.css";
 import { ThemeProvider } from "@/components/theme-provider";
 import "./globals.css";
 
