@@ -1041,6 +1041,11 @@ async function persistTopicMerge(input: {
       p_provider: stamp.provider,
       p_model: stamp.model,
       p_input_hash: stamp.inputHash,
+      // The Wave 7 §3 durable resume marker, stamped atomically with the topic+revision so a
+      // fresh run resolves this create to a skip instead of a duplicate even if every later
+      // write (provenance, plan write-back) is lost. `target.topicKey` is the frozen plan's
+      // stable key for this create.
+      p_create_plan_key: createPlanMarker(documentId, target.topicKey),
     });
 
     if (error !== null || data === null) {
@@ -1159,16 +1164,8 @@ async function mergeTopics(input: {
   readonly takenSlugs: Set<string>;
   readonly embeddings: EmbeddingClient;
   readonly runtime: ReturnType<typeof createStudyAIRuntime>;
-}): Promise<{
-  readonly outcomes: readonly TopicMergeOutcome[];
-  readonly created: number;
-  /** topicKey → the id of the topic a create produced. Empty for pure updates. Used by the
-   *  resumable path to write a create's id back into the frozen plan so a later run resolves
-   *  it to a skip rather than a duplicate. */
-  readonly createdTopicIds: ReadonlyMap<string, string>;
-}> {
+}): Promise<{ readonly outcomes: readonly TopicMergeOutcome[]; readonly created: number }> {
   const outcomes: TopicMergeOutcome[] = [];
-  const createdTopicIds = new Map<string, string>();
   let created = 0;
 
   for (const target of input.targets) {
@@ -1256,7 +1253,7 @@ async function mergeTopics(input: {
         console.error(`[route-and-merge] summary embedding failed for ${target.topicKey}:`, error);
       }
 
-      const { topicId, slug } = await persistTopicMerge({
+      const { slug } = await persistTopicMerge({
         admin: input.admin,
         userId: input.userId,
         documentId: input.documentId,
@@ -1276,7 +1273,6 @@ async function mergeTopics(input: {
 
       if (slug !== null) {
         input.takenSlugs.add(slug);
-        createdTopicIds.set(target.topicKey, topicId);
         created += 1;
       }
 
@@ -1319,7 +1315,7 @@ async function mergeTopics(input: {
     }
   }
 
-  return { outcomes, created, createdTopicIds };
+  return { outcomes, created };
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */
@@ -1602,8 +1598,6 @@ const plannedTargetSchema = z.object({
   title: z.string(),
   /** Which segments feed this target — the join keys back into `segmentExtraction`. */
   segmentKeys: z.array(z.string()),
-  /** Written back after a create persists, so a later run resolves it to a skip. */
-  resolvedTopicId: z.string().optional(),
 });
 
 /** The frozen plan, `safeParse`d on the way out of `document_merge_plans.plan` (boundary
@@ -1709,43 +1703,48 @@ async function loadFrozenPlan(
 }
 
 /**
- * Records the topic id a create produced back into the frozen plan.
+ * The DURABLE cross-run create-idempotency link: `topics.create_plan_key`.
  *
- * This is the cross-run create-idempotency link. A create target carries no `topicId` in the
- * plan, so `planMergeWork` can never skip it — on a *new* run (the "Retry the rest" button, a
- * fresh Inngest run where step memoization does not carry over) a create would run again and
- * duplicate the topic. Stamping the resulting id here turns that create into an assign the
- * next run resolves to a skip. Safe as a read-modify-write because `process-document` is
- * serialized per course.
+ * A create target carries no `topicId` in the frozen plan, so `planMergeWork` can never skip
+ * it. On a *new* Inngest run (the "Retry the rest" button, where step memoization does not
+ * carry over) a create would run a second time and duplicate the topic — and because the
+ * resumable path loads the plan and routes zero times, the duplicate guard that used to
+ * collapse this never runs. The fix stamps this document-qualified plan key onto the created
+ * topic ATOMICALLY inside `create_topic_with_first_revision` (migration `20260721133109`), so
+ * the marker is present iff the topic exists. {@link findCreatedTopic} reads it back to resolve
+ * an unresolved create to a skip. Deliberately a text marker, not a uuid reference: it is
+ * derived state whose only reader is this lookup, scoped by the topic's own user/course.
  */
-async function recordResolvedCreate(
+function createPlanMarker(documentId: string, topicKey: string): string {
+  return `${documentId}:${topicKey}`;
+}
+
+/**
+ * Did this document already create the topic for this plan target key? Returns its id, or null.
+ *
+ * The self-healing resume: deterministic (an exact key match, never a title or page-overlap
+ * heuristic) and DURABLE (the marker is written with the create, so it survives a lost plan
+ * write-back and a worker death anywhere after the committed create). This is what makes a
+ * create idempotent across a fresh run, not the old best-effort write-back.
+ */
+async function findCreatedTopic(
   admin: SupabaseAdminClient,
   userId: string,
+  courseId: string,
   documentId: string,
-  hash: string,
   topicKey: string,
-  topicId: string,
-): Promise<void> {
-  const plan = await loadFrozenPlan(admin, userId, documentId, hash);
-  if (plan === null) return;
-  const patched: StoredMergePlan = {
-    ...plan,
-    targets: plan.targets.map((target) =>
-      target.topicKey === topicKey ? { ...target, resolvedTopicId: topicId } : target,
-    ),
-  };
-  const { error } = await admin
-    .from("document_merge_plans")
-    .update({ plan: patched })
+): Promise<string | null> {
+  const { data, error } = await admin
+    .from("topics")
+    .select("id")
     .eq("user_id", userId)
-    .eq("document_id", documentId)
-    .eq("extraction_hash", hash)
-    .eq("prompt_version", ROUTING_PROMPT_VERSION);
+    .eq("course_id", courseId)
+    .eq("create_plan_key", createPlanMarker(documentId, topicKey))
+    .maybeSingle();
   if (error) {
-    // The write-back is a convergence optimisation, not a correctness invariant (the DB
-    // trigger is), so a failure here is logged rather than allowed to fail the topic.
-    console.error(`[route-and-merge] could not record resolved create for ${topicKey}:`, error);
+    throw new Error(`Could not look up a prior create for ${topicKey}: ${error.message}`);
   }
+  return data === null ? null : (data.id as string);
 }
 
 /**
@@ -1768,7 +1767,7 @@ async function resolveMergePlan(input: {
   readonly sessionLabel: string | null;
   readonly embeddings: EmbeddingClient;
   readonly runtime: ReturnType<typeof createStudyAIRuntime>;
-}): Promise<{ readonly plan: StoredMergePlan; readonly extractionHash: string }> {
+}): Promise<StoredMergePlan> {
   const { admin, userId, documentId, courseId } = input;
 
   await setDocumentStatus(admin, documentId, userId, { status: "merging" });
@@ -1793,7 +1792,7 @@ async function resolveMergePlan(input: {
       step: "route",
       detail: "Re-using the plan worked out on an earlier attempt — picking up where it stopped.",
     });
-    return { plan: existingPlan, extractionHash: hash };
+    return existingPlan;
   }
 
   // ── Compute: route + guard + coalesce, then freeze ────────────────────────
@@ -1867,7 +1866,7 @@ async function resolveMergePlan(input: {
     throw new Error(`Could not persist the merge plan for ${documentId}: ${upsertError.message}`);
   }
 
-  return { plan, extractionHash: hash };
+  return plan;
 }
 
 /**
@@ -1887,7 +1886,6 @@ async function runMergeTarget(input: {
   readonly filename: string;
   readonly sessionLabel: string | null;
   readonly planned: PlannedTarget;
-  readonly extractionHash: string;
   readonly backstopFindings: readonly string[];
   readonly unaccountedPages: readonly number[];
   readonly coverageChecked: boolean;
@@ -1912,15 +1910,14 @@ async function runMergeTarget(input: {
   // there is nothing to merge, so this is a clean no-op rather than a failure.
   if (segments.length === 0) return noop();
 
-  // Cross-run create idempotency: a create completed on a PRIOR run stamped its id into the
-  // plan. Reading it fresh (not from the possibly-stale in-memory plan) makes this step
-  // resolve that create to an assign even when it re-runs without memoization.
-  const frozen = await loadFrozenPlan(admin, userId, documentId, input.extractionHash);
-  const resolvedTopicId =
-    frozen?.targets.find((target) => target.topicKey === planned.topicKey)?.resolvedTopicId ??
-    planned.resolvedTopicId ??
-    null;
-  const effectiveTopicId = resolvedTopicId ?? planned.topicId;
+  // Cross-run create idempotency, durably. An assign carries its topicId in the plan; a create
+  // does not, so a create target lacking a topicId is resolved by the DURABLE marker a prior
+  // create stamped onto the topic (`create_plan_key`, written atomically with the create). This
+  // survives a lost plan write-back and a worker death anywhere after the committed create,
+  // which the old best-effort write-back did not — the §3 blocker.
+  const effectiveTopicId =
+    planned.topicId ??
+    (await findCreatedTopic(admin, userId, courseId, documentId, planned.topicKey));
 
   // Build the concrete MergeTarget with FRESH topic state.
   let target: MergeTarget;
@@ -1987,7 +1984,7 @@ async function runMergeTarget(input: {
     .eq("course_id", courseId);
   const takenSlugs = new Set((slugRows ?? []).map((row) => row.slug));
 
-  const { outcomes, created, createdTopicIds } = await mergeTopics({
+  const { outcomes, created } = await mergeTopics({
     admin,
     userId,
     documentId,
@@ -2003,18 +2000,6 @@ async function runMergeTarget(input: {
     embeddings: input.embeddings,
     runtime: input.runtime,
   });
-
-  const newTopicId = createdTopicIds.get(planned.topicKey);
-  if (newTopicId !== undefined) {
-    await recordResolvedCreate(
-      admin,
-      userId,
-      documentId,
-      input.extractionHash,
-      planned.topicKey,
-      newTopicId,
-    );
-  }
 
   const outcome = outcomes[0] ?? {
     topicKey: planned.topicKey,
@@ -2045,7 +2030,7 @@ export async function runRouteAndMergeSteps(
   const runtime = createStudyAIRuntime({ userId });
   const embeddings = createStudyEmbeddingClient({ userId });
 
-  const { plan, extractionHash: hash } = await step.run("resolve-merge-plan", () =>
+  const plan = await step.run("resolve-merge-plan", () =>
     resolveMergePlan({
       admin,
       userId,
@@ -2072,7 +2057,6 @@ export async function runRouteAndMergeSteps(
         filename: input.filename,
         sessionLabel: input.sessionLabel,
         planned,
-        extractionHash: hash,
         backstopFindings: plan.backstopFindings,
         unaccountedPages: plan.unaccountedPages,
         coverageChecked: plan.coverageChecked,

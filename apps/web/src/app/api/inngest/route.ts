@@ -62,17 +62,18 @@ export const { GET, POST, PUT } = serve({
   // would emit that event into nothing, which is exactly the half-wired state
   // the event was added to avoid.
   //
-  // ⚠⚠ EDITING THIS ARRAY IS NOT ENOUGH. Inngest only learns what this app serves
-  // when something calls `PUT /api/inngest`, and NOTHING here does that on deploy:
-  // the Inngest app shows `Vercel project: -`, so the Vercel↔Inngest integration is
-  // not installed and a deploy does not resync. Until it is, run `pnpm inngest:sync`
-  // after deploying any change to this list, then `pnpm inngest:verify` — the sync
-  // proves the endpoint answered; the verify proves what the platform recorded,
-  // by diffing its registry against the functions derived from THIS array.
+  // A function not in this array does not run, however correctly it is written.
+  // The Vercel↔Inngest integration is now installed, so a deploy auto-resyncs this
+  // registry (a `PUT /api/inngest` on Vercel's side) — the manual `pnpm inngest:sync`
+  // / `pnpm inngest:verify` dance is no longer required on every deploy, though
+  // `inngest:verify` still diffs the platform's registry against the functions
+  // derived from THIS array when you want to confirm a sync landed.
   //
-  // The cost of forgetting is silent and total. Wave 4 shipped `processDocument`
-  // against a registry eight hours older than the function: `Events received: 1`,
-  // `Executions ran: 0`, a document parked at `queued`, and no error anywhere —
-  // because as far as Inngest knew, the function did not exist.
+  // ⚠ It was NOT always so. Wave 4 shipped `processDocument` against a registry
+  // eight hours older than the function — `Events received: 1`, `Executions ran: 0`,
+  // a document parked at `queued`, no error anywhere — because the integration was
+  // not yet installed and the deploy did not resync. The auto-resync is what closes
+  // that gap; the `maxDuration` export above likewise relies on Vercel reading this
+  // file's route-segment config to size the function's execution limit.
   functions: [healthCheck, processDocument, markReviewsStale],
 });

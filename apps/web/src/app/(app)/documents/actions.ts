@@ -548,9 +548,12 @@ export async function deleteDocument(input: unknown): Promise<{ ok: boolean; mes
  *
  * ## ⚠ This is a RETRY, not PLAN §5's "Reprocess"
  *
- * A retry converges: `runRouteAndMerge` now recognises the topics this document
- * already merged into and skips them, so the re-run finishes the topics that did
- * not persist and leaves the rest exactly as they are. Before 2026-07-20 it
+ * A retry converges: the resumable merge (`runRouteAndMergeSteps` — `runRouteAndMerge`
+ * is now the test-only reference it shares internals with) LOADS the frozen plan
+ * from `document_merge_plans` instead of re-routing, recognises the topics this
+ * document already merged into (and the ones it created, via the durable
+ * `create_plan_key` marker), and skips them — so the re-run finishes the topics
+ * that did not persist and leaves the rest exactly as they are. Before 2026-07-20 it
  * compounded — another `topic_revisions` row and another `revision` bump per
  * already-merged topic, at ~$0.06 of re-billed merge + critic each.
  *

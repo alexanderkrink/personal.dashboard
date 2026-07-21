@@ -108,6 +108,10 @@ class FakeDb {
       summary: args.p_summary,
       page: args.p_page,
       revision: 1,
+      // The Wave 7 §3 durable resume marker, stamped atomically with the create — exactly as
+      // migration 20260721133109's RPC does. `?? null` mirrors the column default so the
+      // pre-fix code (which passes no key) stores null rather than undefined.
+      create_plan_key: args.p_create_plan_key ?? null,
     };
     const revision: Row = {
       user_id: args.p_user_id,
@@ -327,6 +331,32 @@ function extractionOf(pageCount: number): Row {
   };
 }
 
+/** A deck with the given headings, one page each — for scripted-routing scenarios. */
+function extractionWithHeadings(headings: readonly string[]): Row {
+  const pages = headings.map((title, index) => ({
+    page: index + 1,
+    title,
+    markdown: `Distinct material under ${title}.`,
+  }));
+  return {
+    route: "pdf-native",
+    fidelity: "visual",
+    sourceUnits: headings.length,
+    wordsPerSlide: null,
+    extraction: {
+      sessionLabel: null,
+      summary: "A mixed deck.",
+      pages,
+      headings: pages.map((page) => ({ text: page.title, level: 1, page: page.page })),
+      definitions: [],
+      formulas: [],
+      workedExamples: [],
+      examSignals: [],
+      skipped: [],
+    },
+  };
+}
+
 const EMPTY_PAGE = {
   summary: "",
   keyTerms: [],
@@ -342,8 +372,8 @@ function embedText(text: string): number[] {
     hash ^= text.charCodeAt(index);
     hash = Math.imul(hash, 16777619);
   }
-  return [1, 2, 3].map((offset) => {
-    const value = Math.sin(hash + offset) * 10000;
+  return Array.from({ length: 16 }, (_, offset) => {
+    const value = Math.sin(hash + offset + 1) * 10000;
     return (value - Math.floor(value)) * 2 - 1;
   });
 }
@@ -354,6 +384,8 @@ let failMergeFor = new Set<string>();
 let omitLastDecision = false;
 /** When true, the critic rejects every merge with a multi-line, >400-char chain-of-thought. */
 let criticCot = false;
+/** Optional scripted routing: heading → assign to a topic id, or create a titled topic. */
+let scriptedRouting: Record<string, { assign?: string; create?: string }> | null = null;
 let db: FakeDb;
 
 const BASE_ENV = {
@@ -406,14 +438,25 @@ vi.mock("@/lib/ai/runtime", () => ({
         const all = [...rendered.matchAll(/### segmentKey: (\S+)\nHeading: (.+)/g)];
         // Drop the last segment's decision to model a lost segment (no routing decision).
         const seen = omitLastDecision ? all.slice(0, -1) : all;
-        // The over-assign funnel: on a NON-empty index every segment is dumped into the first
-        // existing topic (the §3 pass-2 behaviour). On an empty index each heading creates its
-        // own topic.
+        // A scripted routing (heading → assign-to-id | create-with-title) drives a realistic
+        // mix — assigns into existing topics, multi-segment creates (same title twice),
+        // singleton coalesce (a lone create adjacent to a multi-segment one).
         const existing = db.rows("topics").filter((row) => row.course_id === COURSE);
         const firstExisting = existing[0]?.id as string | undefined;
         const decisions = seen.map((match) => {
           const segmentKey = match[1] ?? "";
           const heading = (match[2] ?? "").trim();
+          const script = scriptedRouting?.[heading];
+          if (script !== undefined) {
+            return {
+              segmentKey,
+              assignToTopicId: script.assign ?? null,
+              createNewTitle: script.create ?? null,
+              rationale: `scripted ${heading}`,
+            };
+          }
+          // Default: on an empty index each heading creates its own topic; on a non-empty index
+          // every segment is dumped into the first existing topic (the §3 pass-2 over-assign).
           return firstExisting === undefined
             ? {
                 segmentKey,
@@ -512,6 +555,7 @@ beforeEach(() => {
   failMergeFor = new Set();
   omitLastDecision = false;
   criticCot = false;
+  scriptedRouting = null;
   vi.mocked(logProcessingEvent).mockClear();
   db = new FakeDb();
   db.rows("documents").push({
@@ -651,7 +695,7 @@ describe("§3 GREEN: runRouteAndMergeSteps resumes at target 5 after a mid-loop 
     expect(db.rows("topics")).toHaveLength(8);
 
     // A brand-new run (fresh step, no memoization) still loads the frozen plan from Postgres
-    // and, via the resolved-create write-back, resolves every create to a skip — no dupes.
+    // and, via the durable create_plan_key marker, resolves every create to a skip — no dupes.
     llmCalls.length = 0;
     const fresh = new FakeStep();
     const third = await runRouteAndMergeSteps({ admin: fakeAdmin(), ...INPUT, step: fresh });
@@ -660,6 +704,280 @@ describe("§3 GREEN: runRouteAndMergeSteps resumes at target 5 after a mid-loop 
     expect(countOf("topic-merge")).toBe(0);
     expect(db.rows("topics")).toHaveLength(8);
     expect(third.outcome.status).toBe("ready");
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/* BLOCKER — create-duplication across a fresh run when the write-back is lost  */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+const ROUTING_PROMPT_VERSION = 5;
+
+/** Seed the post-create state with the plan write-back LOST: the topic is committed (with its
+ *  durable marker, as the fixed create does), but the frozen plan's target is still an
+ *  unresolved create (topicId=null, no resolvedTopicId) — the state a swallowed write-back or
+ *  a worker death between the committed create and the write-back leaves behind. */
+async function seedLostWriteBack(): Promise<void> {
+  const CREATED = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+  db.tables.documents = [{ id: DOCUMENT, user_id: USER, extraction: extractionOf(1) }];
+  const hash = await extractionHash(extractionOf(1));
+
+  db.rows("topics").push({
+    id: CREATED,
+    user_id: USER,
+    course_id: COURSE,
+    title: "Concept 1",
+    slug: "concept-1",
+    summary: "Concept 1 merged from deck.pdf",
+    page: EMPTY_PAGE,
+    revision: 1,
+    create_plan_key: `${DOCUMENT}:new:seg-1`,
+  });
+  db.rows("topic_sources").push({
+    user_id: USER,
+    topic_id: CREATED,
+    document_id: DOCUMENT,
+    locators: [{ page: 1 }],
+    merged_at_revision: 1,
+  });
+  db.rows("topic_revisions").push({
+    user_id: USER,
+    topic_id: CREATED,
+    revision: 0,
+    source: "merge",
+    needs_review: false,
+    document_id: DOCUMENT,
+  });
+  db.rows("document_merge_plans").push({
+    user_id: USER,
+    document_id: DOCUMENT,
+    extraction_hash: hash,
+    prompt_version: ROUTING_PROMPT_VERSION,
+    plan: {
+      version: 1,
+      // The write-back never landed: still a create, no resolvedTopicId.
+      targets: [
+        { topicKey: "new:seg-1", topicId: null, title: "Concept 1", segmentKeys: ["seg-1"] },
+      ],
+      unaccountedPages: [],
+      coverageChecked: true,
+      backstopFindings: [],
+      segments: 1,
+      segmentsMerged: 1,
+      topicsTouched: 1,
+      coercions: 0,
+      singletonFolds: 0,
+    },
+  });
+}
+
+describe("§3 BLOCKER: a fresh run must not re-create a topic when the write-back was lost", () => {
+  /**
+   * The guard-that-cannot-fire the review found: cross-run create idempotency depended ENTIRELY
+   * on the best-effort `resolvedTopicId` write-back. Lose it, and a fresh Inngest run (no step
+   * memoization) loads the frozen plan with an unresolved create, `planMergeWork` pushes any
+   * null-topicId target to `toMerge`, and `create_topic_with_first_revision` runs again —
+   * `slugFor` uniquifies the slug and the (topic_id, document_id) trigger sees a new topic_id,
+   * so nothing objects. Because the plan is loaded (zero routing) the duplicate guard never
+   * runs. Two topic pages, same content.
+   *
+   * RED against the code as it stands: with only the write-back, the fresh run CREATES A
+   * SECOND topic. GREEN: the durable `create_plan_key` marker (written atomically with the
+   * create) is looked up and the create resolves to a skip.
+   */
+  it("resolves the create to a skip (exactly one topic), never a duplicate", async () => {
+    await seedLostWriteBack();
+
+    // Fresh run: new FakeStep, empty memo — the "Retry the rest" button.
+    const summary = await runRouteAndMergeSteps({
+      admin: fakeAdmin(),
+      ...INPUT,
+      step: new FakeStep(),
+    });
+
+    // Loaded the frozen plan, so no re-route could collapse the duplicate.
+    expect(countOf("topic-routing")).toBe(0);
+    // The property: EXACTLY ONE topic. The pre-fix code produces two here.
+    expect(db.rows("topics")).toHaveLength(1);
+    expect(db.rows("topics")[0]?.id).toBe("cccccccc-cccc-4ccc-8ccc-cccccccccccc");
+    // No second merge was paid for, and the run is clean.
+    expect(countOf("topic-merge")).toBe(0);
+    expect(summary.outcome.status).toBe("ready");
+  });
+});
+
+describe("§3 fresh-run resume actually LOADS the frozen plan from the DB", () => {
+  /**
+   * The headline "resumes at target 5" test above passes on FakeStep in-memory memoization of
+   * the resolve-merge-plan step, which is NOT the production mechanism for a genuinely new
+   * Inngest run re-entering a half-built index. This one uses a FRESH FakeStep (empty memo) so
+   * the ONLY way routing stays at zero and the half-built 4-of-8 index is not re-routed into a
+   * funnel is the DB frozen-plan LOAD + durable-marker skip. Null out `loadFrozenPlan` and this
+   * goes red (routing re-runs; the 4-topic index over-assigns).
+   */
+  it("resumes a persisted 4-of-8 state on a fresh run without re-routing or duplicating", async () => {
+    // Pass 1: kill after 4 → 4 topics committed (with markers) + the frozen plan persisted.
+    const killed = new FakeStep();
+    killed.killTargetOrdinal = 5;
+    await expect(
+      runRouteAndMergeSteps({ admin: fakeAdmin(), ...INPUT, step: killed }),
+    ).rejects.toThrow(/simulated worker kill/);
+    expect(db.rows("topics")).toHaveLength(4);
+    expect(db.rows("document_merge_plans")).toHaveLength(1);
+
+    // A genuinely NEW run — fresh step, no memoized resolve-merge-plan or targets.
+    llmCalls.length = 0;
+    const summary = await runRouteAndMergeSteps({
+      admin: fakeAdmin(),
+      ...INPUT,
+      step: new FakeStep(),
+    });
+
+    // Zero routing is only possible via the DB frozen-plan load (nothing is memoized here).
+    expect(countOf("topic-routing")).toBe(0);
+    // Targets 1–4 resolve to skip via their durable markers; 5–8 are created. No funnel, no dupes.
+    expect(db.rows("topics")).toHaveLength(8);
+    expect(new Set(db.rows("topics").map((row) => row.id)).size).toBe(8);
+    expect(db.rows("topic_sources")).toHaveLength(8);
+    expect(countOf("topic-merge")).toBe(4);
+    expect(summary.outcome.status).toBe("ready");
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/* MAJOR — a realistic steps-path run: assign + multi-segment + coalesce + kill */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+describe("§3 steps-path handles a realistic mix, resumed on a fresh run", () => {
+  const EXIST = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+
+  /** One existing topic + a deck that assigns into it, builds two multi-segment creates, and
+   *  drops a singleton the coalesce folds into a deck-adjacent create. */
+  function seedMixedDeck(): void {
+    db.tables.documents = [
+      {
+        id: DOCUMENT,
+        user_id: USER,
+        extraction: extractionWithHeadings(["Alpha", "Beta", "Beta2", "Gamma", "Gamma2", "Solo"]),
+      },
+    ];
+    db.rows("topics").push({
+      id: EXIST,
+      user_id: USER,
+      course_id: COURSE,
+      title: "Existing",
+      slug: "existing",
+      summary: "Existing so far",
+      page: EMPTY_PAGE,
+      revision: 1,
+      title_embedding: embedText("Existing"),
+      summary_embedding: embedText("Existing so far"),
+    });
+    scriptedRouting = {
+      Alpha: { assign: EXIST }, // assign into the existing topic
+      Beta: { create: "Beta Topic" }, // multi-segment create (Beta + Beta2)
+      Beta2: { create: "Beta Topic" },
+      Gamma: { create: "Gamma Topic" }, // multi-segment create (Gamma + Gamma2)
+      Gamma2: { create: "Gamma Topic" },
+      Solo: { create: "Solo Topic" }, // singleton → coalesces into deck-adjacent Gamma Topic
+    };
+  }
+
+  it("assigns, coalesces, survives a kill, and resumes fresh with no loss and no duplicate", async () => {
+    seedMixedDeck();
+
+    // Pass 1: kill the 3rd target (the Gamma create) after the EXIST assign and the Beta create.
+    const killed = new FakeStep();
+    killed.killTargetOrdinal = 3;
+    await expect(
+      runRouteAndMergeSteps({ admin: fakeAdmin(), ...INPUT, step: killed }),
+    ).rejects.toThrow(/simulated worker kill/);
+
+    // A genuinely fresh run resumes from the persisted state — no memoization.
+    llmCalls.length = 0;
+    const summary = await runRouteAndMergeSteps({
+      admin: fakeAdmin(),
+      ...INPUT,
+      step: new FakeStep(),
+    });
+    expect(countOf("topic-routing")).toBe(0); // frozen plan loaded
+
+    const titles = db.rows("topics").map((row) => row.title);
+    // Three topics: the existing one (updated) + the two creates. The singleton never siloed.
+    expect(db.rows("topics")).toHaveLength(3);
+    expect(new Set(db.rows("topics").map((row) => row.id)).size).toBe(3); // no duplicate
+    expect(titles).toContain("Existing");
+    expect(titles).toContain("Beta Topic");
+    expect(titles).toContain("Gamma Topic");
+    expect(titles).not.toContain("Solo Topic");
+
+    // The existing topic really was merged into (assign path), reaching revision 2.
+    expect(db.rows("topics").find((row) => row.id === EXIST)?.revision).toBe(2);
+
+    // The coalesce folded Solo (page 6) into Gamma Topic's provenance.
+    const gamma = db.rows("topics").find((row) => row.title === "Gamma Topic");
+    const gammaSource = db.rows("topic_sources").find((row) => row.topic_id === gamma?.id);
+    const gammaPages = ((gammaSource?.locators ?? []) as { page: number }[]).map((l) => l.page);
+    expect(gammaPages).toEqual([4, 5, 6]);
+
+    // Every segment reached a topic; the document is complete.
+    expect(summary.segmentsMerged).toBe(summary.segments);
+    expect(summary.outcome.status).toBe("ready");
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/* MAJOR — the reference and the production path cannot silently diverge       */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+describe("§3 runRouteAndMerge (reference) and runRouteAndMergeSteps agree on a clean run", () => {
+  /**
+   * `runRouteAndMerge` is now production-dead — it survives only as the single-invocation
+   * reference the rich merge-internals suite drives. This differential guard fails if the
+   * steps path ever diverges from it on the shared internals (segmentation, routing, guard,
+   * coalesce, merge, verify, persist), which no other test would catch.
+   */
+  function snapshot(): { titles: string[]; sources: number; revisions: number } {
+    return {
+      titles: db
+        .rows("topics")
+        .map((row) => String(row.title))
+        .sort(),
+      sources: db.rows("topic_sources").length,
+      revisions: db.rows("topic_revisions").length,
+    };
+  }
+
+  it("produce the same topics, provenance and history from the same document", async () => {
+    // Reference path on its own db.
+    db = new FakeDb();
+    db.rows("documents").push({
+      id: DOCUMENT,
+      user_id: USER,
+      extraction: extractionOf(TARGET_COUNT),
+    });
+    const reference = await runRouteAndMerge({ admin: fakeAdmin(), ...INPUT });
+    const referenceSnapshot = snapshot();
+
+    // Steps path on a fresh db.
+    db = new FakeDb();
+    db.rows("documents").push({
+      id: DOCUMENT,
+      user_id: USER,
+      extraction: extractionOf(TARGET_COUNT),
+    });
+    const steps = await runRouteAndMergeSteps({
+      admin: fakeAdmin(),
+      ...INPUT,
+      step: new FakeStep(),
+    });
+    const stepsSnapshot = snapshot();
+
+    expect(stepsSnapshot).toEqual(referenceSnapshot);
+    expect(steps.outcome.status).toBe(reference.outcome.status);
+    expect(steps.topicsCreated).toBe(reference.topicsCreated);
+    expect(steps.topicsTouched).toBe(reference.topicsTouched);
+    expect(steps.segmentsMerged).toBe(reference.segmentsMerged);
   });
 });
 
